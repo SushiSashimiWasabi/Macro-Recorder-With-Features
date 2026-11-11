@@ -1,0 +1,10 @@
+# built apps: made by build.bat / build_mac.sh / GitHub, not kept in the code history
+Complete build version/
+Mac build version/
+dist/
+build/
+*.spec.bak
+__pycache__/
+*.pyc
+# Kong's own macros stay on this PC
+saved macro file/

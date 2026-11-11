@@ -1,0 +1,54 @@
+# Builds the app for Windows and Mac on GitHub's computers, every time code is pushed
+# (or by hand: Actions > Build > Run workflow). The results are on the run's page, under
+# "Artifacts": MacroRecorder-Windows, MacroRecorder-Mac-AppleSilicon, MacroRecorder-Mac-Intel.
+name: Build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Build MacroRecorder.exe
+        shell: cmd
+        run: |
+          py -m pip install --upgrade pyinstaller -r "Source code\requirements.txt" || exit /b 1
+          py -m PyInstaller --noconfirm --clean --onefile --windowed --name MacroRecorder ^
+            --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32 ^
+            --add-data "Source code\retry_default.png;." ^
+            "Source code\macro_recorder.py"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MacroRecorder-Windows
+          path: dist/MacroRecorder.exe
+
+  mac:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest     # Apple Silicon (M1 and newer)
+            label: AppleSilicon
+          - runner: macos-15-intel   # older Intel Macs
+            label: Intel
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Build MacroRecorder.app
+        run: bash build_mac.sh
+      - name: Zip it (keeps the app bundle intact)
+        run: ditto -c -k --keepParent "Mac build version/MacroRecorder.app" MacroRecorder-Mac.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MacroRecorder-Mac-${{ matrix.label }}
+          path: MacroRecorder-Mac.zip
