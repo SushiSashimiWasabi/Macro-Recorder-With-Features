@@ -1,6 +1,6 @@
 """Macro Recorder: record mouse and keyboard actions, then replay them.
 
-Hotkeys (work even when the window is not focused; change them with "Hotkeys..."):
+Hotkeys (work even when the window is not focused; change them in Settings > General):
     F9   start / stop recording
     F10  pause / resume recording
     F11  play the current macro
@@ -1310,7 +1310,7 @@ class MacroRecorder:
                     total = "" if loop else f" of {repeats}"
                     watching = ", watching for the picture" if watch else ""
                     self._set_note(f"Playing run {count + 1}{total}{watching}...")
-                start = time.perf_counter()
+                start = self._play_clock()
                 for ev in events:
                     target = start + ev["t"] / speed
                     # wait in small steps so Stop (F12) and the picture are noticed quickly
@@ -1319,7 +1319,7 @@ class MacroRecorder:
                             return
                         if seen.is_set():
                             break
-                        remaining = target - time.perf_counter()
+                        remaining = target - self._play_clock()
                         if remaining <= 0:
                             break
                         time.sleep(min(remaining, 0.02))
@@ -1413,6 +1413,10 @@ class MacroRecorder:
                 return
             bg.key(vk, ev["pressed"])
             (held_vks.add if ev["pressed"] else held_vks.discard)(vk)
+
+    def _play_clock(self):
+        """The clock playback follows (the new window stops it while playback is paused)."""
+        return time.perf_counter()
 
     def _playback_done(self):
         self.playing = False
@@ -1603,4 +1607,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # the window people use is the dark one in modern_ui.py (it builds on the class above);
+    # main() above still opens the old plain window, if ever needed
+    import modern_ui
+
+    modern_ui.main()

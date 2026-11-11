@@ -8,3 +8,5 @@ __pycache__/
 *.pyc
 # Kong's own macros stay on this PC
 saved macro file/
+
+Preview build/

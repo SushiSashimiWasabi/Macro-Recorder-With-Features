@@ -1,0 +1,1191 @@
+"""The dark Macro Recorder window (started from macro_recorder.py).
+
+It reuses everything from macro_recorder.py (recording, playback, hotkeys, speed, countdown,
+picture watch, screen size scaling, imports) and only changes the window around it:
+
+  - a dark main window: status line, big Record / Pause / Play / Stop cards with their hotkeys,
+    a "Repeat continuously" switch, the macro's name with Edit... / Open... / Save..., status bar
+  - a Settings window with tabs: General, Recording, Playback, Picture watch, About
+  - an Edit... window to look through a macro's actions and remove some
+  - small sounds when recording or playback starts and stops
+  - recording options: record mouse movement or not, and how detailed
+
+Works on Windows and Mac (plain Tk, no extra packages).
+"""
+
+import datetime
+import io
+import math
+import os
+import shutil
+import struct
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import tkinter as tk
+import wave
+from tkinter import filedialog, messagebox, ttk
+
+import macro_recorder as core
+import platform_keys
+from macro_recorder import (HOTKEY_ACTIONS, IS_MAC, IS_WIN, SCREEN_TARGET, SPEED_PRESETS, background,
+                            format_speed, hotkey_name, image_watch, parse_speed)
+
+APP_VERSION = "2.0"
+
+# ---------------------------------------------------------------- look
+
+if IS_WIN:
+    FAMILY = "Segoe UI"
+elif IS_MAC:
+    FAMILY = "Helvetica Neue"
+else:
+    FAMILY = "Helvetica"
+
+BG = "#111114"        # window
+PANEL = "#18181c"     # main panel
+CARD = "#1f1f25"      # cards and buttons
+CARD_HOVER = "#2a2a33"
+FIELD = "#16161a"     # text boxes
+BORDER = "#33333d"
+BADGE = "#2b2b33"
+TEXT = "#f1f1f4"
+MUTED = "#9b9ba6"
+DIM = "#5a5a64"
+ACCENT = "#4f7cff"    # blue
+ACCENT_DARK = "#1c2648"
+RED = "#ff4757"
+RED_DARK = "#3a1a20"
+GREEN = "#2ecc71"
+AMBER = "#ffb238"
+
+F_BASE = (FAMILY, 10)
+F_SMALL = (FAMILY, 9)
+F_BOLD = (FAMILY, 10, "bold")
+F_CARD = (FAMILY, 12, "bold")
+F_STATUS = (FAMILY, 13, "bold")
+F_TITLE = (FAMILY, 18, "bold")
+F_SECTION = (FAMILY, 9, "bold")
+F_LINK = (FAMILY, 9, "underline")
+
+
+def apply_theme(root):
+    """Dark colours for every ttk widget (the boxes and buttons the old window used)."""
+    root.configure(bg=BG)
+    style = ttk.Style(root)
+    style.theme_use("clam")
+    style.configure(".", background=BG, foreground=TEXT, fieldbackground=FIELD, bordercolor=BORDER,
+                    lightcolor=BORDER, darkcolor=BORDER, troughcolor=PANEL, selectbackground=ACCENT,
+                    selectforeground="white", insertcolor=TEXT, arrowcolor=MUTED, font=F_BASE,
+                    focuscolor=BORDER)
+    style.map(".", foreground=[("disabled", DIM)], fieldbackground=[("disabled", BG)])
+    style.configure("TFrame", background=BG)
+    style.configure("TLabel", background=BG, foreground=TEXT)
+    style.configure("TLabelframe", background=BG, bordercolor=BORDER, relief="solid")
+    style.configure("TLabelframe.Label", background=BG, foreground=MUTED, font=F_SECTION)
+    style.configure("TButton", background=CARD, foreground=TEXT, padding=(12, 5), relief="flat",
+                    bordercolor=BORDER)
+    style.map("TButton", background=[("disabled", BG), ("active", CARD_HOVER)],
+              bordercolor=[("active", "#4a4a56")])
+    style.configure("Accent.TButton", background=ACCENT, foreground="white", bordercolor=ACCENT)
+    style.map("Accent.TButton", background=[("active", "#6a90ff")])
+    style.configure("Danger.TButton", background=RED_DARK, foreground=RED, bordercolor="#5a2630")
+    style.map("Danger.TButton", background=[("active", "#4a2028")])
+    style.configure("TCheckbutton", background=BG, foreground=TEXT, indicatorbackground=FIELD,
+                    indicatorforeground="white", indicatorcolor=FIELD)
+    style.map("TCheckbutton", background=[("active", BG)],
+              indicatorcolor=[("selected", ACCENT), ("disabled", BG)])
+    for name in ("TSpinbox", "TCombobox", "TEntry"):
+        style.configure(name, fieldbackground=FIELD, background=CARD, foreground=TEXT, padding=3,
+                        arrowsize=12)
+        style.map(name, fieldbackground=[("readonly", FIELD), ("disabled", BG)],
+                  foreground=[("disabled", DIM)], bordercolor=[("focus", ACCENT)])
+    style.configure("TNotebook", background=BG, borderwidth=0, tabmargins=(12, 6, 12, 0))
+    style.configure("TNotebook.Tab", background=BG, foreground=MUTED, padding=(14, 6), borderwidth=0,
+                    font=(FAMILY, 10))
+    style.map("TNotebook.Tab", background=[("selected", BG)], foreground=[("selected", TEXT)],
+              font=[("selected", (FAMILY, 10, "bold"))], lightcolor=[("selected", ACCENT)])
+    style.configure("Treeview", background=FIELD, fieldbackground=FIELD, foreground=TEXT, rowheight=22,
+                    bordercolor=BORDER)
+    style.configure("Treeview.Heading", background=CARD, foreground=MUTED, relief="flat", font=F_SMALL)
+    style.map("Treeview", background=[("selected", ACCENT_DARK)])
+    style.configure("Vertical.TScrollbar", background=CARD, troughcolor=FIELD, bordercolor=FIELD,
+                    arrowcolor=MUTED)
+    # the drop-down lists of combo boxes are plain Tk lists
+    root.option_add("*TCombobox*Listbox.background", FIELD)
+    root.option_add("*TCombobox*Listbox.foreground", TEXT)
+    root.option_add("*TCombobox*Listbox.selectBackground", ACCENT)
+    root.option_add("*TCombobox*Listbox.selectForeground", "white")
+    root.option_add("*TCombobox*Listbox.font", F_BASE)
+
+
+def dark_title_bar(win):
+    """Windows 10/11: a dark title bar to match the window (no effect elsewhere)."""
+    if not IS_WIN:
+        return
+    try:
+        import ctypes
+
+        win.update_idletasks()
+        hwnd = ctypes.windll.user32.GetParent(win.winfo_id())
+        on = ctypes.c_int(1)
+        for attr in (20, 19):  # DWMWA_USE_IMMERSIVE_DARK_MODE (newer, older Windows 10)
+            if ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(on), 4) == 0:
+                break
+    except Exception:
+        pass
+
+
+def app_icon(size=32):
+    """The window icon: a blue rounded square with a white dot (drawn here, no picture file)."""
+    img = tk.PhotoImage(width=size, height=size)
+    r, c = size * 0.25, size / 2
+    rows = []
+    for y in range(size):
+        row = []
+        for x in range(size):
+            dx = max(r - x, 0, x - (size - 1 - r))
+            dy = max(r - y, 0, y - (size - 1 - r))
+            if dx * dx + dy * dy > r * r:
+                row.append("{}")  # transparent corner
+                continue
+            row.append("#ffffff" if (x - c + 0.5) ** 2 + (y - c + 0.5) ** 2 <= (size * 0.2) ** 2 else ACCENT)
+        rows.append("{" + " ".join(row) + "}")
+    try:
+        img.put(" ".join(rows))
+    except tk.TclError:
+        img.put(ACCENT, to=(0, 0, size, size))
+    return img
+
+
+def rounded_rect(canvas, x0, y0, x1, y1, r, **kw):
+    pts = [x0 + r, y0, x1 - r, y0, x1, y0, x1, y0 + r, x1, y1 - r, x1, y1, x1 - r, y1, x0 + r, y1,
+           x0, y1, x0, y1 - r, x0, y0 + r, x0, y0]
+    return canvas.create_polygon(pts, smooth=True, **kw)
+
+
+def link(parent, text, command, bg=BG, fg=MUTED, font=F_LINK):
+    lab = tk.Label(parent, text=text, bg=bg, fg=fg, font=font, cursor="hand2")
+    lab.bind("<Button-1>", lambda e: command())
+    lab.bind("<Enter>", lambda e: lab.config(fg=TEXT))
+    lab.bind("<Leave>", lambda e: lab.config(fg=fg))
+    return lab
+
+
+class Switch(tk.Canvas):
+    """An on/off switch tied to a BooleanVar."""
+
+    W, H = 42, 22
+
+    def __init__(self, parent, variable, command=None, bg=BG):
+        super().__init__(parent, width=self.W, height=self.H, bg=bg, highlightthickness=0, cursor="hand2")
+        self.var = variable
+        self.command = command
+        self.enabled = True
+        self.bind("<Button-1>", self._click)
+        variable.trace_add("write", lambda *a: self.draw())
+        self.draw()
+
+    def _click(self, _e):
+        if not self.enabled:
+            return
+        self.var.set(not self.var.get())
+        if self.command:
+            self.command()
+
+    def set_enabled(self, enabled):
+        self.enabled = enabled
+        self.config(cursor="hand2" if enabled else "arrow")
+        self.draw()
+
+    def draw(self):
+        self.delete("all")
+        on = bool(self.var.get())
+        w, h = self.W, self.H
+        if on:
+            fill, knob, outline = (ACCENT if self.enabled else ACCENT_DARK), "white", ""
+        else:
+            fill, knob, outline = "#26262d", (MUTED if self.enabled else DIM), BORDER
+        rounded_rect(self, 1, 1, w - 2, h - 2, (h - 2) // 2, fill=fill, outline=outline)
+        x = w - h + 3 if on else 4
+        self.create_oval(x, 4, x + h - 8, h - 4, fill=knob, outline="")
+
+
+class Card(tk.Frame):
+    """A big action button: icon, name and its hotkey."""
+
+    def __init__(self, parent, kind, title, color, command):
+        super().__init__(parent, bg=BORDER, cursor="hand2")
+        self.kind, self.color, self.command = kind, color, command
+        self.enabled, self.active, self.hover = True, False, False
+        self.inner = tk.Frame(self, bg=CARD)
+        self.inner.pack(fill="both", expand=True, padx=1, pady=1)
+        self.icon = tk.Canvas(self.inner, width=24, height=24, bg=CARD, highlightthickness=0)
+        self.icon.grid(row=0, column=0, sticky="nw", padx=(12, 0), pady=(12, 0))
+        self.badge = tk.Label(self.inner, bg=BADGE, fg=MUTED, font=(FAMILY, 8, "bold"), padx=5, pady=1)
+        self.badge.grid(row=0, column=1, sticky="ne", padx=(4, 9), pady=(10, 0))
+        self.label = tk.Label(self.inner, text=title, bg=CARD, fg=TEXT, font=F_CARD, anchor="w")
+        self.label.grid(row=1, column=0, columnspan=2, sticky="w", padx=12, pady=(10, 12))
+        self.inner.columnconfigure(1, weight=1)
+        for w in (self, self.inner, self.icon, self.badge, self.label):
+            w.bind("<Button-1>", self._click)
+            w.bind("<Enter>", lambda e: self._hover(True))
+            w.bind("<Leave>", lambda e: self._hover(False))
+        self._draw()
+
+    def _click(self, _e):
+        if self.enabled:
+            self.command()
+
+    def _hover(self, on):
+        self.hover = on
+        self._draw()
+
+    def update_card(self, title=None, key=None, enabled=True, active=False):
+        if title is not None:
+            self.label.config(text=title)
+        if key is not None:
+            self.badge.config(text=key)
+        self.enabled, self.active = enabled, active
+        self._draw()
+
+    def _draw(self):
+        if self.active:
+            bg, border = (RED_DARK if self.color == RED else ACCENT_DARK), self.color
+        elif self.enabled and self.hover:
+            bg, border = CARD_HOVER, "#4a4a56"
+        else:
+            bg, border = (CARD if self.enabled else PANEL), BORDER
+        fg = TEXT if self.enabled else DIM
+        self.config(bg=border, cursor="hand2" if self.enabled else "arrow")
+        for w in (self.inner, self.icon, self.label):
+            w.config(bg=bg)
+        self.label.config(fg=fg)
+        self.badge.config(fg=MUTED if self.enabled else DIM, bg=BADGE if self.enabled else CARD)
+        c = self.icon
+        c.delete("all")
+        col = self.color if self.enabled else DIM
+        if self.kind == "record":
+            c.create_oval(2, 2, 22, 22, outline=fg, width=2)
+            c.create_oval(7, 7, 17, 17, fill=col, outline="")
+        elif self.kind == "pause":
+            c.create_rectangle(5, 4, 10, 20, fill=col, outline="")
+            c.create_rectangle(14, 4, 19, 20, fill=col, outline="")
+        elif self.kind == "play":
+            c.create_polygon(6, 3, 21, 12, 6, 21, fill=col, outline="")
+        elif self.kind == "stop":
+            rounded_rect(c, 4, 4, 20, 20, 4, fill=col, outline="")
+
+
+# ---------------------------------------------------------------- sounds
+
+def _tone_wav(notes, volume):
+    """A short WAV (bytes) playing the notes [(frequency, ms), ...], softly faded in and out."""
+    rate = 22050
+    frames = bytearray()
+    for freq, ms in notes:
+        n = int(rate * ms / 1000)
+        fade = max(1, int(rate * 0.008))
+        for i in range(n):
+            env = min(1.0, i / fade, (n - i) / fade)
+            frames += struct.pack("<h", int(volume * env * 32767 * math.sin(2 * math.pi * freq * i / rate)))
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(bytes(frames))
+    return buf.getvalue()
+
+
+SOUNDS = {
+    "record_start": [(660, 70), (880, 90)],
+    "record_stop": [(880, 70), (660, 90)],
+    "play_start": [(784, 60), (1046, 80)],
+    "play_end": [(1046, 60), (784, 60), (587, 90)],
+}
+VOLUMES = {"Quiet": 0.12, "Normal": 0.3, "Loud": 0.6}
+
+
+def play_sound(name, volume_name):
+    """Play one of SOUNDS without waiting for it (Windows: winsound, Mac: afplay)."""
+    volume = VOLUMES.get(volume_name, VOLUMES["Normal"])
+    data = _tone_wav(SOUNDS[name], volume)
+
+    def run():
+        try:
+            if IS_WIN:
+                import winsound
+
+                winsound.PlaySound(data, winsound.SND_MEMORY)
+            elif IS_MAC:
+                path = os.path.join(tempfile.gettempdir(), f"macrorecorder_{name}_{volume_name}.wav")
+                if not os.path.exists(path):
+                    with open(path, "wb") as f:
+                        f.write(data)
+                subprocess.run(["afplay", path], check=False)
+        except Exception:
+            pass  # no sound is fine
+
+    threading.Thread(target=run, daemon=True).start()
+
+
+# ---------------------------------------------------------------- describing actions (Edit window)
+
+def key_label(data):
+    if "special" in data:
+        return hotkey_name(data["special"])
+    if "vk" in data:
+        return platform_keys.win_vk_name(data["vk"]) or data.get("char") or f"Key {data['vk']}"
+    if data.get("char"):
+        return data["char"].upper()
+    return "?"
+
+
+def describe(ev):
+    kind = ev.get("type")
+    if kind == "move":
+        return "Mouse move", f"{ev['x']}, {ev['y']}"
+    if kind == "move_rel":
+        return "Camera turn", f"{ev['dx']:+}, {ev['dy']:+}"
+    if kind == "click":
+        where = f"at {ev['x']}, {ev['y']}" if "x" in ev else ""
+        return f"{ev['button'].title()} button {'down' if ev['pressed'] else 'up'}", where
+    if kind == "scroll":
+        return "Scroll", f"{'up' if ev['dy'] > 0 else 'down'} {abs(ev['dy'])}"
+    if kind == "key":
+        return f"Key {'down' if ev['pressed'] else 'up'}", key_label(ev["key"])
+    return kind or "?", ""
+
+
+MOUSE_DETAIL = {"Smooth": 0.01, "Normal": 0.025, "Light": 0.05}  # seconds between recorded moves
+VOLUME_NAMES = list(VOLUMES)
+
+
+# ---------------------------------------------------------------- the app
+
+class PlayOverlay:
+    """A small always-on-top box at the top middle of the main screen: the countdown before playing,
+    then how long it has been playing. It stays there the whole time the macro runs, so you can
+    see it's still going while the app is minimized. Mouse clicks go straight through it."""
+
+    def __init__(self, root, screen_w):
+        self.win = win = tk.Toplevel(root, bg=BORDER)
+        win.withdraw()
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        try:
+            win.attributes("-alpha", 0.93)
+        except tk.TclError:
+            pass
+        inner = tk.Frame(win, bg=PANEL)
+        inner.pack(padx=1, pady=1)
+        top = tk.Frame(inner, bg=PANEL)
+        top.pack(padx=14, pady=(7, 0))
+        self.dot = tk.Canvas(top, width=12, height=12, bg=PANEL, highlightthickness=0)
+        self.dot.pack(side="left")
+        self.state = tk.Label(top, bg=PANEL, fg=TEXT, font=(FAMILY, 11, "bold"))
+        self.state.pack(side="left", padx=(7, 0))
+        self.clock = tk.Label(top, bg=PANEL, fg=TEXT, font=(FAMILY, 15, "bold"))
+        self.clock.pack(side="left", padx=(12, 0))
+        self.note = tk.Label(inner, bg=PANEL, fg=MUTED, font=F_SMALL)
+        self.note.pack(padx=14, pady=(0, 2))
+        keys = tk.Frame(inner, bg=PANEL)
+        keys.pack(padx=14, pady=(2, 8))
+        self.key_labels = {}
+        for action, word in (("pause", "Pause"), ("stop", "Stop")):
+            badge = tk.Label(keys, bg=BADGE, fg=TEXT, font=(FAMILY, 8, "bold"), padx=5)
+            badge.pack(side="left", padx=(10 if action == "stop" else 0, 4))
+            text = tk.Label(keys, text=word, bg=PANEL, fg=MUTED, font=F_SMALL)
+            text.pack(side="left")
+            self.key_labels[action] = (badge, text)
+        self.keys_row = keys
+        self.screen_w = screen_w
+        self.made_click_through = False
+
+    def _click_through(self):
+        """Windows: let clicks pass through and keep it off the taskbar and out of Alt-Tab."""
+        if self.made_click_through or not IS_WIN:
+            return
+        try:
+            import ctypes
+
+            u = ctypes.windll.user32
+            hwnd = u.GetParent(self.win.winfo_id()) or self.win.winfo_id()
+            style = u.GetWindowLongW(hwnd, -20)  # GWL_EXSTYLE
+            # LAYERED | TRANSPARENT | TOOLWINDOW | NOACTIVATE
+            u.SetWindowLongW(hwnd, -20, style | 0x80000 | 0x20 | 0x80 | 0x8000000)
+            self.made_click_through = True
+        except Exception:
+            pass
+
+    def show(self, state, clock, note, color, keys=None):
+        """keys: {"pause": "F10", "stop": "F12"} shows which keys pause and stop; None hides them."""
+        self.state.config(text=state)
+        self.clock.config(text=clock)
+        self.note.config(text=note)
+        if keys:
+            for action, (badge, text) in self.key_labels.items():
+                badge.config(text=keys[action])
+                if action == "pause":
+                    text.config(text="Resume" if state == "Paused" else "Pause")
+            self.keys_row.pack(padx=14, pady=(2, 8))
+        else:
+            self.keys_row.pack_forget()
+        self.dot.delete("all")
+        self.dot.create_oval(1, 1, 11, 11, fill=color, outline="")
+        w = self.win
+        w.update_idletasks()
+        width, height = max(w.winfo_reqwidth(), 210), w.winfo_reqheight()  # same size, so it doesn't jump
+        w.geometry(f"{width}x{height}+{max(0, (self.screen_w - width) // 2)}+12")
+        if w.state() == "withdrawn":
+            w.deiconify()
+            self._click_through()
+        w.lift()
+        w.attributes("-topmost", True)
+
+    def hide(self):
+        self.win.withdraw()
+
+
+def format_clock(seconds):
+    seconds = int(seconds)
+    h, rest = divmod(seconds, 3600)
+    m, s = divmod(rest, 60)
+    return f"{h}:{m:02}:{s:02}" if h else f"{m:02}:{s:02}"
+
+
+class ModernMacroRecorder(core.MacroRecorder):
+    def __init__(self, root, preview=False):
+        self.preview = preview
+        self.sub_note = "Record something, or open a macro"
+        self.settings_win = None
+        self.edit_win = None
+        super().__init__(root)
+
+    # ------------------------------------------------------------ main window
+
+    def _build_ui(self):
+        root = self.root
+        s = self.settings
+        root.title("Macro Recorder (preview)" if self.preview else "Macro Recorder")
+        root.resizable(False, False)
+        root.attributes("-topmost", bool(s.get("always_on_top", True)))
+        apply_theme(root)
+        try:
+            self.icon_img = app_icon()
+            root.iconphoto(True, self.icon_img)
+        except Exception:
+            pass
+        dark_title_bar(root)
+
+        # settings that the old window kept on its main screen (used by playback)
+        self.repeat_var = tk.IntVar(value=core.int_setting(s, "repeat_count", 1, 1, 9999))
+        self.loop_var = tk.BooleanVar(value=bool(s.get("loop", True)))
+        self.speed_var = tk.StringVar(value=format_speed(parse_speed(s.get("speed", 1)) or 1.0))
+        self.ready_var = tk.IntVar(value=core.int_setting(s, "ready_seconds", 3, 0, 600))
+        self.target_windows = []
+        self.target_var = tk.StringVar(value=SCREEN_TARGET)
+        self.name_var = tk.StringVar(value="Untitled macro")
+        self.sounds_var = tk.BooleanVar(value=bool(s.get("sounds", True)))
+        self.volume_var = tk.StringVar(value=s.get("sound_volume", "Normal")
+                                       if s.get("sound_volume") in VOLUMES else "Normal")
+        self.statusbar_var = tk.BooleanVar(value=bool(s.get("status_bar", True)))
+        self.ontop_var = tk.BooleanVar(value=bool(s.get("always_on_top", True)))
+        self.overlay_var = tk.BooleanVar(value=bool(s.get("play_overlay", True)))
+        self.overlay = None
+        self.overlay_job = None
+        self.play_began = None
+        self.play_paused_at = None  # when playback was paused (None = not paused)
+        self.play_pause_total = 0.0
+        self.held_now = None  # the keys and buttons the macro is holding down right now
+        self.rec_moves_var = tk.BooleanVar(value=bool(s.get("record_mouse_moves", True)))
+        self.detail_var = tk.StringVar(value=s.get("mouse_detail", "Smooth")
+                                       if s.get("mouse_detail") in MOUSE_DETAIL else "Smooth")
+
+        outer = tk.Frame(root, bg=BG)
+        outer.pack(fill="both", expand=True)
+
+        # header: name of the app + settings
+        head = tk.Frame(outer, bg=BG)
+        head.pack(fill="x", padx=18, pady=(14, 10))
+        mark = tk.Canvas(head, width=30, height=30, bg=BG, highlightthickness=0)
+        rounded_rect(mark, 1, 1, 29, 29, 8, fill=ACCENT, outline="")
+        mark.create_oval(9, 9, 21, 21, fill="white", outline="")
+        mark.pack(side="left")
+        tk.Label(head, text="Macro Recorder", bg=BG, fg=TEXT, font=F_TITLE).pack(side="left", padx=(10, 0))
+        if self.preview:
+            tk.Label(head, text="PREVIEW", bg=AMBER, fg="#111", font=(FAMILY, 7, "bold"),
+                     padx=4).pack(side="left", padx=(8, 0), pady=(4, 0))
+        gear = link(head, "⚙  Settings", self.open_settings, fg=MUTED, font=(FAMILY, 10))
+        gear.pack(side="right")
+
+        panel = tk.Frame(outer, bg=PANEL, highlightthickness=1, highlightbackground=BORDER)
+        panel.pack(fill="both", expand=True, padx=12)
+        body = tk.Frame(panel, bg=PANEL)
+        body.pack(fill="both", expand=True, padx=16, pady=14)
+
+        # status
+        st = tk.Frame(body, bg=PANEL)
+        st.pack(fill="x")
+        self.status_dot = tk.Canvas(st, width=16, height=16, bg=PANEL, highlightthickness=0)
+        self.status_dot.pack(side="left")
+        self.status_var = tk.StringVar()
+        tk.Label(st, textvariable=self.status_var, bg=PANEL, fg=TEXT, font=F_STATUS).pack(side="left", padx=(8, 0))
+        self.sub_var = tk.StringVar()
+        tk.Label(body, textvariable=self.sub_var, bg=PANEL, fg=MUTED, font=F_BASE, anchor="w").pack(
+            fill="x", pady=(4, 14))
+
+        # the four big buttons
+        cards = tk.Frame(body, bg=PANEL)
+        cards.pack(fill="x")
+        self.card_record = Card(cards, "record", "Record", RED, self.toggle_record)
+        self.card_pause = Card(cards, "pause", "Pause", AMBER, self.toggle_pause)
+        self.card_play = Card(cards, "play", "Play", ACCENT, self.play)
+        self.card_stop = Card(cards, "stop", "Stop", MUTED, self.stop_playback)
+        for i, c in enumerate((self.card_record, self.card_pause, self.card_play, self.card_stop)):
+            c.grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 8, 0))
+            cards.columnconfigure(i, weight=1, uniform="cards", minsize=118)
+
+        # repeat + speed
+        rep = tk.Frame(body, bg=PANEL)
+        rep.pack(fill="x", pady=(14, 0))
+        self.loop_switch = Switch(rep, self.loop_var, command=self._loop_changed, bg=PANEL)
+        self.loop_switch.pack(side="left")
+        tk.Label(rep, text="Repeat continuously", bg=PANEL, fg=TEXT, font=F_BASE).pack(side="left", padx=(10, 0))
+        self.times_frame = tk.Frame(rep, bg=PANEL)
+        tk.Label(self.times_frame, text="   or play", bg=PANEL, fg=MUTED, font=F_BASE).pack(side="left")
+        self.repeat_box = ttk.Spinbox(self.times_frame, from_=1, to=9999, width=5, textvariable=self.repeat_var,
+                                      command=self._save_settings)
+        self.repeat_box.pack(side="left", padx=4)
+        tk.Label(self.times_frame, text="times", bg=PANEL, fg=MUTED, font=F_BASE).pack(side="left")
+        self.speed_box = ttk.Combobox(rep, width=6, textvariable=self.speed_var, values=SPEED_PRESETS)
+        self.speed_box.pack(side="right")
+        tk.Label(rep, text="Speed", bg=PANEL, fg=MUTED, font=F_BASE).pack(side="right", padx=(0, 6))
+        for ev in ("<FocusOut>", "<Return>", "<<ComboboxSelected>>"):
+            self.speed_box.bind(ev, lambda e: self._check_speed(quiet=True))
+        self._loop_changed(save=False)
+
+        tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=14)
+
+        # the macro: its name, size and file buttons
+        mac = tk.Frame(body, bg=PANEL)
+        mac.pack(fill="x")
+        self.name_entry = tk.Entry(mac, textvariable=self.name_var, bg=PANEL, fg=TEXT, font=(FAMILY, 11, "bold"),
+                                   relief="flat", insertbackground=TEXT, highlightthickness=0, width=22)
+        self.name_entry.pack(side="left", fill="x", expand=True)
+        self.name_entry.bind("<Return>", lambda e: self.root.focus_set())
+        self.btn_save = ttk.Button(mac, text="Save…", command=self.save)
+        self.btn_load = ttk.Button(mac, text="Open…", command=self.load)
+        self.btn_edit = ttk.Button(mac, text="Edit…", command=self.open_editor)
+        for b in (self.btn_save, self.btn_load, self.btn_edit):
+            b.pack(side="right", padx=(6, 0))
+        self.info_var = tk.StringVar()
+        tk.Label(body, textvariable=self.info_var, bg=PANEL, fg=MUTED, font=F_SMALL, anchor="w").pack(
+            fill="x", pady=(2, 0))
+
+        # footer: status bar + version
+        foot = tk.Frame(outer, bg=BG)
+        foot.pack(fill="x", padx=18, pady=(8, 10))
+        self.statusbar_label = tk.Label(foot, bg=BG, fg=DIM, font=F_SMALL, anchor="w")
+        self.statusbar_label.pack(side="left")
+        link(foot, "About", lambda: self.open_settings("About"), fg=MUTED).pack(side="right")
+        tk.Label(foot, text=f"v{APP_VERSION}", bg=BG, fg=DIM, font=F_SMALL).pack(side="right", padx=(0, 8))
+
+        self._build_settings_window()
+
+    def _loop_changed(self, save=True):
+        if self.loop_var.get():
+            self.times_frame.pack_forget()
+        else:
+            self.times_frame.pack(side="left")
+        if save:
+            self._save_settings()
+
+    # ------------------------------------------------------------ settings window
+
+    def _build_settings_window(self):
+        win = tk.Toplevel(self.root, bg=BG)
+        win.withdraw()
+        self.settings_win = win
+        win.title("Settings - Macro Recorder")
+        win.resizable(False, False)
+        win.attributes("-topmost", True)
+        win.protocol("WM_DELETE_WINDOW", self.close_settings)
+        self.tabs = ttk.Notebook(win)
+        self.tabs.pack(fill="both", expand=True, padx=8, pady=(8, 0))
+        self.tab_frames = {}
+        for name in ("General", "Recording", "Playback", "Picture watch", "About"):
+            f = ttk.Frame(self.tabs, padding=(18, 14))
+            self.tabs.add(f, text=name)
+            self.tab_frames[name] = f
+        self._build_general_tab(self.tab_frames["General"])
+        self._build_recording_tab(self.tab_frames["Recording"])
+        self._build_playback_tab(self.tab_frames["Playback"])
+        watch = self.tab_frames["Picture watch"]
+        self._build_watch_ui(watch)
+        self._build_about_tab(self.tab_frames["About"])
+        self._recolor_notes(win)
+        bottom = tk.Frame(win, bg=BG)
+        bottom.pack(fill="x", padx=18, pady=12)
+        ttk.Button(bottom, text="Done", style="Accent.TButton", command=self.close_settings).pack(side="right")
+
+    def _recolor_notes(self, widget):
+        """The old option boxes used dark-red and grey notes made for a white window."""
+        for child in widget.winfo_children():
+            if isinstance(child, ttk.Label):
+                fg = str(child.cget("foreground"))
+                if fg == "#b00000":
+                    child.config(foreground=RED)
+                elif fg == "gray":
+                    child.config(foreground=MUTED)
+            self._recolor_notes(child)
+
+    def _section(self, parent, text, first=False):
+        if not first:
+            ttk.Separator(parent).pack(fill="x", pady=(12, 10))
+        tk.Label(parent, text=text, bg=BG, fg=MUTED, font=F_SECTION, anchor="w").pack(fill="x", pady=(0, 6))
+
+    def _row(self, parent, text, tip=None):
+        row = tk.Frame(parent, bg=BG)
+        row.pack(fill="x", pady=4)
+        tk.Label(row, text=text, bg=BG, fg=TEXT, font=F_BASE).pack(side="left")
+        if tip:
+            tk.Label(row, text=tip, bg=BG, fg=DIM, font=F_SMALL).pack(side="left", padx=(8, 0))
+        return row
+
+    def _switch_row(self, parent, text, var, tip=None, command=None):
+        row = self._row(parent, text, tip)
+        sw = Switch(row, var, command=command or self._save_settings)
+        sw.pack(side="right")
+        return sw
+
+    def _build_general_tab(self, f):
+        self._section(f, "SHORTCUTS", first=True)
+        self.key_badges = {}
+        self.change_links = {}
+        for action in HOTKEY_ACTIONS:
+            row = self._row(f, core.HOTKEY_LABELS[action])
+            ch = link(row, "Change", lambda a=action: self._capture_hotkey(a))
+            ch.pack(side="right")
+            badge = tk.Label(row, bg=BADGE, fg=TEXT, font=(FAMILY, 9, "bold"), padx=8, pady=2, width=10)
+            badge.pack(side="right", padx=(0, 10))
+            self.key_badges[action] = badge
+            self.change_links[action] = ch
+        r = tk.Frame(f, bg=BG)
+        r.pack(fill="x")
+        link(r, "Reset to F9 - F12", self._reset_hotkeys).pack(side="right")
+        tk.Label(f, text="Pick keys you don't use in the game: a shortcut is never recorded or sent.",
+                 bg=BG, fg=DIM, font=F_SMALL, anchor="w").pack(fill="x", pady=(4, 0))
+
+        self._section(f, "INTERFACE")
+        self._switch_row(f, "Sounds", self.sounds_var, "beep when recording or playing starts and stops")
+        row = self._row(f, "Volume")
+        vol = ttk.Combobox(row, width=9, state="readonly", textvariable=self.volume_var, values=VOLUME_NAMES)
+        vol.pack(side="right")
+        vol.bind("<<ComboboxSelected>>", lambda e: (self._save_settings(), self._sound("play_start", force=True)))
+        self._switch_row(f, "Status bar", self.statusbar_var, "shortcuts and options at the bottom",
+                         command=lambda: (self._save_settings(), self._refresh()))
+        self._switch_row(f, "Keep window on top", self.ontop_var,
+                         command=lambda: (self._save_settings(),
+                                          self.root.attributes("-topmost", bool(self.ontop_var.get()))))
+        if IS_WIN:
+            self._section(f, "FILES")
+            row = self._row(f, "Open .macro files with a double-click")
+            b = ttk.Button(row, text="Link .macro files", command=self.link_file_type)
+            b.pack(side="right")
+            if self.preview:
+                b.config(state="disabled")  # the preview must not take over your real app's files
+                tk.Label(f, text="Turned off in the preview, so your .macro files keep opening your real app.",
+                         bg=BG, fg=DIM, font=F_SMALL, anchor="w").pack(fill="x")
+
+    def _build_recording_tab(self, f):
+        self._section(f, "MOUSE", first=True)
+        self._switch_row(f, "Record mouse movement", self.rec_moves_var,
+                         "off = only clicks, scrolls and keys")
+        row = self._row(f, "Mouse detail")
+        box = ttk.Combobox(row, width=9, state="readonly", textvariable=self.detail_var, values=list(MOUSE_DETAIL))
+        box.pack(side="right")
+        box.bind("<<ComboboxSelected>>", lambda e: self._save_settings())
+        tk.Label(f, text="Smooth keeps every small movement (bigger files). Light keeps fewer points.",
+                 bg=BG, fg=DIM, font=F_SMALL, anchor="w").pack(fill="x")
+        self._section(f, "GOOD TO KNOW")
+        tk.Label(f, justify="left", bg=BG, fg=MUTED, font=F_BASE, anchor="w", text=(
+            "Your shortcut keys are never recorded.\n"
+            "Clicks on this app's window are not recorded.\n"
+            "Pause stops recording for a moment without making a gap in the macro.")).pack(fill="x")
+        self._section(f, "THIS RECORDING")
+        row = self._row(f, "Start over with an empty macro")
+        self.btn_clear = ttk.Button(row, text="Clear", style="Danger.TButton", command=self.clear)
+        self.btn_clear.pack(side="right")
+
+    def _build_playback_tab(self, f):
+        self._section(f, "BEFORE PLAYING", first=True)
+        row = self._row(f, "Countdown", "seconds to switch to the game (0 = start at once)")
+        ttk.Spinbox(row, from_=0, to=600, width=5, textvariable=self.ready_var,
+                    command=self._save_settings).pack(side="right")
+        self._switch_row(f, "Timer at the top of the screen", self.overlay_var,
+                         "countdown, then how long it's been playing")
+        self._section(f, "HOW TO PLAY")
+        row = self._row(f, "Play into")
+        self.target_box = ttk.Combobox(row, width=30, state="readonly", textvariable=self.target_var,
+                                       postcommand=self._refresh_windows)
+        self.target_box.pack(side="right")
+        if background is None:
+            self.target_box.config(state="disabled")
+        self._refresh_windows()
+        tk.Label(f, text="Background playback is experimental and can't turn a game's camera.",
+                 bg=BG, fg=DIM, font=F_SMALL, anchor="w").pack(fill="x")
+        holder = ttk.Frame(f)
+        holder.pack(fill="x", pady=(12, 0))
+        self._build_resolution_ui(holder)
+
+    def _build_about_tab(self, f):
+        tk.Label(f, text="Macro Recorder", bg=BG, fg=TEXT, font=(FAMILY, 14, "bold"), anchor="w").pack(fill="x")
+        tk.Label(f, text=f"Version {APP_VERSION}" + (" (preview)" if self.preview else ""), bg=BG, fg=MUTED,
+                 font=F_BASE, anchor="w").pack(fill="x", pady=(2, 10))
+        tk.Label(f, justify="left", bg=BG, fg=MUTED, font=F_BASE, anchor="w", text=(
+            "Records your mouse and keyboard and plays them back.\n\n"
+            "Opens .macro files, and also .luvmacro, TinyTask .rec, Jitbit .mcr\n"
+            "and simple AutoHotkey .ahk files.\n\n"
+            "Settings are kept in:")).pack(fill="x")
+        tk.Label(f, text=os.path.dirname(core.settings_path()), bg=BG, fg=TEXT, font=F_SMALL, anchor="w",
+                 wraplength=420, justify="left").pack(fill="x", pady=(2, 0))
+
+    def open_settings(self, tab=None):
+        if self.recording or self.playing:
+            return
+        win = self.settings_win
+        win.deiconify()
+        dark_title_bar(win)
+        win.lift()
+        if tab in self.tab_frames:
+            self.tabs.select(self.tab_frames[tab])
+        self._refresh()
+
+    def close_settings(self):
+        self.capture_callback = None
+        self._read_play_on(quiet=True)
+        self._read_made_for(quiet=True)
+        self._save_settings()
+        self.settings_win.withdraw()
+        self._refresh()
+
+    def open_hotkeys(self):  # the old "Hotkeys..." window is now Settings > General
+        self.open_settings("General")
+
+    def _capture_hotkey(self, action):
+        if self.capture_callback is not None:
+            return
+        self.key_badges[action].config(text="Press a key…", fg=AMBER)
+
+        def got_key(key_id):  # runs on the Tk thread
+            self.capture_callback = None
+            if key_id and key_id != "esc":
+                for other in HOTKEY_ACTIONS:
+                    if other != action and self.hotkeys[other] == key_id:
+                        self.hotkeys[other] = self.hotkeys[action]  # swap: two actions never share a key
+                self.hotkeys[action] = key_id
+                self._save_settings()
+            self._refresh()
+
+        self.capture_callback = got_key
+
+    def _reset_hotkeys(self):
+        self.capture_callback = None
+        self.hotkeys = dict(core.DEFAULT_HOTKEYS)
+        self._save_settings()
+        self._refresh()
+
+    # ------------------------------------------------------------ Edit window
+
+    def open_editor(self):
+        if self.recording or self.playing:
+            return
+        if not self.events:
+            messagebox.showinfo("Macro Recorder", "There's nothing to edit yet. Record or open a macro first.")
+            return
+        if self.edit_win is not None and self.edit_win.winfo_exists():
+            self.edit_win.lift()
+            return
+        events = [dict(ev) for ev in self.events]
+        win = tk.Toplevel(self.root, bg=BG)
+        self.edit_win = win
+        win.title(f"Edit - {self.name_var.get()}")
+        win.attributes("-topmost", True)
+        win.geometry("560x520")
+        win.minsize(460, 360)
+        dark_title_bar(win)
+
+        top = tk.Frame(win, bg=BG)
+        top.pack(fill="x", padx=14, pady=(12, 6))
+        summary = tk.StringVar()
+        tk.Label(top, textvariable=summary, bg=BG, fg=MUTED, font=F_BASE, anchor="w").pack(side="left")
+
+        table = tk.Frame(win, bg=BG)
+        table.pack(fill="both", expand=True, padx=14)
+        tree = ttk.Treeview(table, columns=("time", "action", "detail"), show="headings", selectmode="extended")
+        for col, text, width in (("time", "Time", 80), ("action", "Action", 160), ("detail", "Details", 220)):
+            tree.heading(col, text=text, anchor="w")
+            tree.column(col, width=width, anchor="w", stretch=col == "detail")
+        bar = ttk.Scrollbar(table, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=bar.set)
+        tree.pack(side="left", fill="both", expand=True)
+        bar.pack(side="right", fill="y")
+        tree.tag_configure("move", foreground=MUTED)
+
+        def fill():
+            tree.delete(*tree.get_children())
+            for i, ev in enumerate(events):
+                action, detail = describe(ev)
+                tags = ("move",) if ev.get("type") in ("move", "move_rel") else ()
+                tree.insert("", "end", iid=str(i), values=(f"{ev['t']:.2f} s", action, detail), tags=tags)
+            length = events[-1]["t"] if events else 0
+            summary.set(f"{len(events)} actions, {length:.1f} s. Select rows (Ctrl/Shift for more) to remove them.")
+
+        def remove_selected():
+            picked = {int(i) for i in tree.selection()}
+            if not picked:
+                return
+            events[:] = [ev for i, ev in enumerate(events) if i not in picked]
+            fill()
+
+        def remove_moves():
+            n = sum(1 for ev in events if ev.get("type") == "move")
+            if not n:
+                messagebox.showinfo("Macro Recorder", "There are no mouse moves to remove.", parent=win)
+                return
+            if messagebox.askyesno("Macro Recorder", f"Remove all {n} mouse moves? Clicks keep their position, "
+                                   "and camera turns are kept.", parent=win):
+                events[:] = [ev for ev in events if ev.get("type") != "move"]
+                fill()
+
+        def trim_start():
+            if not events or events[0]["t"] <= 0:
+                return
+            gap = events[0]["t"]
+            for ev in events:
+                ev["t"] = round(ev["t"] - gap, 4)
+            fill()
+
+        def apply():
+            if not events:
+                messagebox.showinfo("Macro Recorder", "That would leave the macro empty. Use Clear in "
+                                    "Settings > Recording for that.", parent=win)
+                return
+            self.events = events
+            self.sub_note = "Macro edited (Save… to keep the changes in the file)"
+            win.destroy()
+            self._refresh()
+
+        tools = tk.Frame(win, bg=BG)
+        tools.pack(fill="x", padx=14, pady=(8, 0))
+        ttk.Button(tools, text="Remove selected", command=remove_selected).pack(side="left")
+        ttk.Button(tools, text="Remove all mouse moves", command=remove_moves).pack(side="left", padx=6)
+        ttk.Button(tools, text="Cut the wait at the start", command=trim_start).pack(side="left")
+        tree.bind("<Delete>", lambda e: remove_selected())
+
+        bottom = tk.Frame(win, bg=BG)
+        bottom.pack(fill="x", padx=14, pady=12)
+        ttk.Button(bottom, text="Apply", style="Accent.TButton", command=apply).pack(side="right")
+        ttk.Button(bottom, text="Cancel", command=win.destroy).pack(side="right", padx=6)
+        fill()
+
+    # ------------------------------------------------------------ state shown on screen
+
+    def _refresh(self):
+        if not hasattr(self, "card_play") or not hasattr(self, "key_badges"):
+            return  # still building the window
+        if self.recording:
+            state, color = ("Recording paused", AMBER) if self.paused else ("Recording", RED)
+            sub = "Press Record again when you're done" if not self.paused else "Press Pause again to go on"
+        elif self.playing and self.countdown_left > 0:
+            state, color = f"Starting in {self.countdown_left}…", AMBER
+            sub = "Switch to the game window now"
+        elif self.playing and self.play_paused_at is not None:
+            state, color = "Paused", AMBER
+            sub = "Press " + hotkey_name(self.hotkeys["pause"]) + " or Resume to go on"
+        elif self.playing:
+            state, color = "Playing", ACCENT
+            sub = self.play_note or "Playing the macro"
+        else:
+            state, color = "Ready", GREEN if self.events else MUTED
+            sub = self.sub_note
+        self.status_var.set(state)
+        self.sub_var.set(sub)
+        d = self.status_dot
+        d.delete("all")
+        d.create_oval(1, 1, 15, 15, outline=color, width=2)
+        d.create_oval(5, 5, 11, 11, fill=color, outline="")
+
+        k = {action: hotkey_name(self.hotkeys[action]) for action in HOTKEY_ACTIONS}
+        busy = self.recording or self.playing
+        self.card_record.update_card("Stop rec." if self.recording else "Record", k["record"],
+                                     enabled=not self.playing, active=self.recording)
+        play_paused = self.playing and self.play_paused_at is not None
+        self.card_pause.update_card("Resume" if self.paused or play_paused else "Pause", k["pause"],
+                                    enabled=self.recording or (self.playing and self.countdown_left == 0),
+                                    active=self.paused or play_paused)
+        self.card_play.update_card("Play", k["play"], enabled=not busy and bool(self.events),
+                                   active=self.playing)
+        self.card_stop.update_card("Stop", k["stop"], enabled=self.playing)
+
+        length = self.events[-1]["t"] if self.events else 0.0
+        parts = [f"{len(self.events)} actions", f"{length:.1f} s"]
+        if self.macro_screen:
+            parts.append(f"made for {core.format_resolution(self.macro_screen)}")
+        if self.current_file and os.path.splitext(os.path.basename(self.current_file))[0] != self.name_var.get():
+            parts.append(os.path.basename(self.current_file))
+        self.info_var.set("  ·  ".join(parts))
+
+        for b in (self.btn_save, self.btn_load, self.btn_edit, self.btn_clear):
+            b.config(state="disabled" if busy else "normal")
+        self.speed_box.config(state="disabled" if busy else "normal")
+        self.repeat_box.config(state="disabled" if busy else "normal")
+        self.loop_switch.set_enabled(not busy)
+        self.name_entry.config(state="disabled" if busy else "normal", disabledbackground=PANEL,
+                               disabledforeground=MUTED)
+        for b in (self.made_for_box, self.play_on_box):
+            b.config(state="disabled" if busy else "normal")
+        for b in self.watch_widgets + self.watch_remove_buttons:
+            b.config(state="disabled" if busy or image_watch is None else "normal")
+
+        for action, badge in self.key_badges.items():
+            if self.capture_callback is None or badge.cget("text") != "Press a key…":
+                badge.config(text=k[action], fg=TEXT)
+
+        if self.statusbar_var.get():
+            bits = [f"{k['record']} record", f"{k['play']} play", f"{k['stop']} stop",
+                    f"speed {self.speed_var.get()}"]
+            if image_watch is not None and self.watch_var.get():
+                n = len(self.watch_pictures)
+                bits.append(f"watching {n} picture{'s' if n != 1 else ''}")
+            self.statusbar_label.config(text="   ·   ".join(bits))
+        else:
+            self.statusbar_label.config(text="")
+
+    # ------------------------------------------------------------ settings
+
+    def _save_settings(self):
+        if hasattr(self, "sounds_var"):
+            s = self.settings
+            s["sounds"] = bool(self.sounds_var.get())
+            s["sound_volume"] = self.volume_var.get()
+            s["status_bar"] = bool(self.statusbar_var.get())
+            s["always_on_top"] = bool(self.ontop_var.get())
+            s["record_mouse_moves"] = bool(self.rec_moves_var.get())
+            s["mouse_detail"] = self.detail_var.get()
+            s["play_overlay"] = bool(self.overlay_var.get())
+            try:
+                s["repeat_count"] = max(1, min(9999, int(self.repeat_var.get())))
+            except (tk.TclError, ValueError):
+                pass
+        super()._save_settings()
+
+    def _sound(self, name, force=False):
+        if force or self.sounds_var.get():
+            play_sound(name, self.volume_var.get())
+
+    # ------------------------------------------------------------ actions with sounds and notes
+
+    def toggle_record(self):
+        was = self.recording
+        super().toggle_record()
+        if self.recording and not was:
+            self.name_var.set("Recording " + datetime.datetime.now().strftime("%Y-%m-%d %H.%M"))
+            self._sound("record_start")
+        elif was and not self.recording:
+            self.sub_note = f"Recorded {len(self.events)} actions"
+            self._sound("record_stop")
+            self._refresh()
+
+    def _on_move(self, x, y):
+        if not self._capturing() or not self.settings.get("record_mouse_moves", True):
+            return
+        now = time.perf_counter()
+        if now - self.last_move < MOUSE_DETAIL.get(self.settings.get("mouse_detail"), 0.01):
+            return
+        self.last_move = now
+        self._add({"type": "move", "x": x, "y": y})
+
+    def play(self):
+        super().play()
+        if self.playing:
+            if self.settings_win is not None:
+                self.close_settings()  # its picture list must not be seen as the picture on screen
+            if self.edit_win is not None and self.edit_win.winfo_exists():
+                self.edit_win.destroy()
+            self.stopped_by_user = False
+            self.play_began = None
+            self.play_paused_at = None
+            self.play_pause_total = 0.0
+            self.held_now = None
+            self._tick_overlay()
+            self._sound("play_start")
+
+    def stop_playback(self):
+        if self.playing:
+            self.stopped_by_user = True
+        super().stop_playback()
+
+    def _play_clock(self):
+        """Playback's clock: it stands still while playback is paused."""
+        now = self.play_paused_at if self.play_paused_at is not None else time.perf_counter()
+        return now - self.play_pause_total
+
+    def _replay_event(self, ev, held_keys, held_buttons):
+        self.held_now = (held_keys, held_buttons)
+        super()._replay_event(ev, held_keys, held_buttons)
+
+    def toggle_pause(self):
+        """While recording: pause the recording. While playing: pause playback, or go on."""
+        if not self.playing:
+            super().toggle_pause()
+            return
+        if self.countdown_left > 0:
+            return
+        if self.play_paused_at is None:
+            self.play_paused_at = time.perf_counter()
+            if self.held_now is not None:
+                # let go of everything, so the character doesn't keep walking while paused
+                self._release_held(None, *self.held_now)
+            self._sound("record_stop")
+        else:
+            self.play_pause_total += time.perf_counter() - self.play_paused_at
+            self.play_paused_at = None
+            self._sound("record_start")
+        self._refresh()
+
+    def _tick_overlay(self):
+        """Keep the top-of-screen timer up to date while playing (every quarter second)."""
+        self.overlay_job = None
+        if not self.playing:
+            return
+        if not self.overlay_var.get():
+            if self.overlay is not None:
+                self.overlay.hide()
+        else:
+            if self.overlay is None:
+                self.overlay = PlayOverlay(self.root, self.screen_w)
+            name = self.name_var.get()
+            keys = {a: hotkey_name(self.hotkeys[a]) for a in ("pause", "stop")}
+            if self.countdown_left > 0:
+                self.overlay.show("Starting in", str(self.countdown_left), name, AMBER, keys)
+            else:
+                if self.play_began is None:
+                    self.play_began = self._play_clock()
+                note = self.play_note.rstrip(".").replace("…", "").replace("Playing run", "Run") or name
+                clock = format_clock(self._play_clock() - self.play_began)
+                if self.play_paused_at is not None:
+                    self.overlay.show("Paused", clock, note, AMBER, keys)
+                else:
+                    self.overlay.show("Playing", clock, note, ACCENT, keys)
+        self.overlay_job = self.root.after(250, self._tick_overlay)
+
+    def _finish_overlay(self):
+        if self.overlay is None or not self.overlay_var.get() or self.play_began is None:
+            if self.overlay is not None:
+                self.overlay.hide()
+            return
+        took = format_clock(self._play_clock() - self.play_began)
+        word = "Stopped" if getattr(self, "stopped_by_user", False) else "Finished"
+        self.overlay.show(word, took, self.name_var.get(), MUTED if word == "Stopped" else GREEN)
+        self.root.after(4000, lambda: None if self.playing else self.overlay.hide())
+
+    def _playback_done(self):
+        if self.play_paused_at is not None:  # stopped while paused
+            self.play_pause_total += time.perf_counter() - self.play_paused_at
+            self.play_paused_at = None
+        super()._playback_done()
+        if self.overlay_job is not None:
+            self.root.after_cancel(self.overlay_job)
+            self.overlay_job = None
+        self._finish_overlay()
+        self.sub_note = "Stopped" if getattr(self, "stopped_by_user", False) else "Finished playing"
+        self._sound("play_end")
+        self._refresh()
+
+    def load(self, path=None):
+        before = (self.current_file, len(self.events), id(self.events))
+        super().load(path)
+        if (self.current_file, len(self.events), id(self.events)) != before and self.current_file:
+            self.name_var.set(os.path.splitext(os.path.basename(self.current_file))[0])
+            self.sub_note = "Macro opened"
+            self._refresh()
+
+    def clear(self):
+        had = bool(self.events)
+        super().clear()
+        if had and not self.events:
+            self.name_var.set("Untitled macro")
+            self.sub_note = "Record something, or open a macro"
+            self._refresh()
+
+    def save(self):
+        if not self.events:
+            messagebox.showinfo("Macro Recorder", "Nothing to save yet. Record something first.")
+            return
+        name = "".join(c for c in self.name_var.get().strip() if c not in '\\/:*?"<>|') or "my_macro"
+        path = filedialog.asksaveasfilename(defaultextension=core.FILE_EXT, filetypes=core.FILE_TYPES,
+                                            initialfile=name + core.FILE_EXT)
+        if not path:
+            return
+        self._read_made_for(quiet=True)
+        data = {"app": "macro_recorder", "version": core.FILE_VERSION, "name": self.name_var.get().strip(),
+                "events": self.events}
+        if self.macro_screen:
+            data["screen"] = {"width": self.macro_screen[0], "height": self.macro_screen[1]}
+        import json
+
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=1)
+        self.current_file = path
+        self.name_var.set(os.path.splitext(os.path.basename(path))[0])
+        self.sub_note = "Saved"
+        self._refresh()
+
+
+# ---------------------------------------------------------------- start
+
+def use_preview_settings():
+    """The preview keeps its own settings folder (a copy of the real one on first start), so trying
+    it never changes the real app's hotkeys or pictures."""
+    real_dir = os.path.dirname(core.settings_path())
+    preview_dir = real_dir + " Preview"
+    if not os.path.exists(os.path.join(preview_dir, "settings.json")) and os.path.isdir(real_dir):
+        try:
+            shutil.copytree(real_dir, preview_dir, dirs_exist_ok=True)
+        except Exception:
+            pass
+    core.settings_path = lambda: os.path.join(preview_dir, "settings.json")
+
+
+def main(preview=False):
+    if preview:
+        use_preview_settings()
+    core.make_dpi_aware()
+    if IS_MAC:
+        try:
+            core.mac_prepare_pynput()
+        except Exception:
+            pass
+    root = tk.Tk()
+    app = ModernMacroRecorder(root, preview=preview)
+    if len(sys.argv) > 1 and os.path.isfile(sys.argv[1]):
+        root.after(100, lambda: app.load(sys.argv[1]))
+    if IS_MAC:
+        def open_documents(*paths):
+            if paths:
+                app.load(paths[0])
+        root.createcommand("::tk::mac::OpenDocument", open_documents)
+        missing = core.mac_missing_permissions()
+        if missing:
+            root.after(300, lambda: messagebox.showwarning(
+                "Macro Recorder", core.MAC_PERMISSION_HELP.format(missing=", ".join(missing))))
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()

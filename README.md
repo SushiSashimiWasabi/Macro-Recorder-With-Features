@@ -44,13 +44,16 @@ working files go to your Temp folder, so they don't clutter this one.
 
 ## Use it
 
-A small window stays on top of your other windows. The hotkeys work even when it isn't focused.
-These are the starting keys; click **Hotkeys...** to change any of them.
+A small dark window stays on top of your other windows (turn that off in Settings). It shows what
+the app is doing, big **Record / Pause / Play / Stop** buttons with their keys, a **Repeat
+continuously** switch, the speed, and your macro's name with **Edit... / Open... / Save...**.
+The hotkeys work even when the window isn't focused. These are the starting keys; change them in
+**Settings > General**.
 
 | Key | What it does |
 | --- | --- |
 | F9  | Start recording, or stop recording |
-| F10 | Pause or resume recording (time spent paused is skipped) |
+| F10 | Pause or resume recording (time spent paused is skipped), or pause / go on with playback |
 | F11 | Play the recording |
 | F12 | Stop playback |
 
@@ -59,17 +62,36 @@ shortcuts like Ctrl+C, with the timing between them. The hotkeys above and click
 own window aren't recorded.
 
 Before playing you can set:
-- **Repeat:** how many times to play it.
-- **Loop forever:** keep playing until you press the stop key.
+- **Repeat continuously:** keep playing until you press the stop key. Turn it off to type how
+  many times to play it.
 - **Speed:** pick a preset or type any speed from 0.01 to 100, like `1.3` or `2.5x`.
-- **Get ready:** how many seconds to wait after you press play before the macro starts, so you can
-  switch to the game. The window shows the countdown, and the stop key cancels it. 0 starts at once.
+- **Countdown** (Settings > Playback): how many seconds to wait after you press play before the
+  macro starts, so you can switch to the game. The stop key cancels it. 0 starts at once.
+
+**Timer at the top of the screen:** while a macro plays, a small box at the top middle of your main
+screen shows the countdown, then "Playing" with how long it's been going, the run number, and the
+keys that pause and stop it. It stays there even when the app is minimized, and clicks go straight
+through it (on Windows). Turn it off in Settings > Playback.
+
+**Pausing playback:** press the pause key while a macro plays. It lets go of any keys and buttons
+it's holding and waits; press it again to carry on from the same spot.
+
+**Settings** (top right) has tabs:
+- **General:** hotkeys, sounds and their volume, status bar, keep the window on top, link .macro files.
+- **Recording:** record mouse movement or not (clicks keep their position either way), and how
+  detailed (Smooth, Normal, Light), and Clear.
+- **Playback:** countdown, top-of-screen timer, Play into, Screen size.
+- **Picture watch:** see below.
+
+**Edit...** lists every action of the macro with its time. Select rows and **Remove selected**
+(or press Delete), **Remove all mouse moves**, or **Cut the wait at the start**, then **Apply**.
+Save afterwards to keep the changes in the file.
 
 ## Screen size (play a macro on a different resolution)
 
 **Only works in fullscreen.** Play the game fullscreen, on the main screen.
 
-The **Screen size** box has two choices:
+The **Screen size** box (Settings > Playback) has two choices:
 - **Macro recorded at:** the screen size the macro was recorded on. It's filled in by itself for
   macros recorded in this app and for `.luvmacro` files (which store it). For files that don't say,
   like TinyTask or AutoHotkey ones, it shows "Same as your screen" (nothing is changed); pick the size
@@ -98,11 +120,11 @@ keys, waits a few seconds, and starts the macro again from the beginning. It onl
 ordinary screenshots; it doesn't read or change the game.
 
 **Ready for AOT:R out of the box:** the first time someone runs the app it already watches for the
-game's RETRY button (a picture built into the .exe), with Loop forever on. A friend only has to open
+game's RETRY button (a picture built into the .exe), with Repeat continuously on. A friend only has to open
 their own macro and press Play. If they remove the picture, **Add built-in RETRY** puts it back.
 It was taken on a 1080p screen; on other screen sizes it's resized to match.
 
-To use your own pictures instead:
+These options are in **Settings > Picture watch**. To use your own pictures instead:
 
 1. Get the picture on screen (for example finish a mission so the banner shows).
 2. Click **Add from screen...**. The screen freezes; drag a box around the picture. For a banner,
@@ -130,11 +152,11 @@ smaller (about 15% either way, more if the screen size changed).
 
 ## Change the hotkeys
 
-Click **Hotkeys...**, then **Change** next to an action and press the key you want (Esc cancels).
+Open **Settings > General**, then click **Change** next to an action and press the key you want (Esc cancels).
 If that key already belongs to another action, the two swap. **Reset to F9-F12** goes back to the
 starting keys. Pick keys you don't use in the game: a hotkey is never recorded or played back.
 
-Your hotkeys, speed and get-ready time are remembered for next time in
+Your hotkeys, speed, countdown and other settings are remembered for next time in
 `%APPDATA%\MacroRecorder\settings.json`. Each person who runs the app has their own.
 
 ## Save and share
@@ -198,7 +220,7 @@ Windows plays on a Mac and the other way round. Keys are translated between the 
 4. If it's rebuilt later, macOS may ask for the permissions again: switch them off and on.
 
 **On a MacBook:** F9-F12 are volume/brightness keys unless you hold **fn**, and F11 shows the desktop.
-Click **Hotkeys...** and pick other keys you don't use in the game.
+In **Settings > General**, pick other keys you don't use in the game.
 
 **Unknown until someone tries it:**
 - Camera turning (the mouse moves `.luvmacro` files use) in Roblox on a Mac. It's sent the way a real
