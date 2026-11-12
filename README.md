@@ -9,7 +9,7 @@ file and send it to friends.
 | --- | --- |
 | `Complete build version\MacroRecorder.exe` | The finished app, always the newest build. This is the one to use and send to friends. |
 | `saved macro file\` | Your own macros. |
-| `Source code\` | The Python code (`macro_recorder.py`, `background.py`, `importers.py`, `image_watch.py`), `requirements.txt`, and `bg_test.py` for testing background playback. |
+| `Source code\` | The Python code (`macro_recorder.py`, `modern_ui.py` (the window), `backdrop.py` (background pictures), `background.py`, `importers.py`, `image_watch.py`), `requirements.txt`, and `bg_test.py` for testing background playback. |
 | `build.bat` | Builds a new `MacroRecorder.exe` from the source code. |
 | `run.bat` | Runs the app straight from the source code, without building. |
 | `build_mac.sh`, `run_mac.sh` | The same two for a Mac (they only work on a Mac). |
@@ -82,6 +82,13 @@ it's holding and waits; press it again to carry on from the same spot.
   detailed (Smooth, Normal, Light), and Clear.
 - **Playback:** countdown, top-of-screen timer, Play into, Screen size.
 - **Picture watch:** see below.
+- **Background:** put your own picture behind the window. **Add...** saves a picture (up to 5),
+  and the **◀ ▶** arrows switch between your saved pictures (or none, the plain dark window).
+  **Darkness** keeps text readable, **Fit** fills the window or shows the whole picture, and
+  **Show which part** slides the picture (drag it or scroll the mouse wheel over it). The Settings
+  window can use the same as the main window, its own picture and options, or a different one for
+  each page. Pictures are kept in your settings folder, not inside the app, so the .exe you share
+  doesn't include them.
 
 **Edit...** lists every action of the macro with its time. Select rows and **Remove selected**
 (or press Delete), **Remove all mouse moves**, or **Cut the wait at the start**, then **Apply**.

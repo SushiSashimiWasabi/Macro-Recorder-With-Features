@@ -28,6 +28,7 @@ import tkinter as tk
 import wave
 from tkinter import filedialog, messagebox, ttk
 
+import backdrop
 import macro_recorder as core
 import platform_keys
 from macro_recorder import (HOTKEY_ACTIONS, IS_MAC, IS_WIN, SCREEN_TARGET, SPEED_PRESETS, background,
@@ -111,6 +112,9 @@ def apply_theme(root):
                     bordercolor=BORDER)
     style.configure("Treeview.Heading", background=CARD, foreground=MUTED, relief="flat", font=F_SMALL)
     style.map("Treeview", background=[("selected", ACCENT_DARK)])
+    style.map("Horizontal.TScale", troughcolor=[("disabled", BG)], background=[("disabled", BADGE)],
+              lightcolor=[("disabled", BADGE)], darkcolor=[("disabled", BADGE)],
+              bordercolor=[("disabled", BORDER)])
     style.configure("Vertical.TScrollbar", background=CARD, troughcolor=FIELD, bordercolor=FIELD,
                     arrowcolor=MUTED)
     # the drop-down lists of combo boxes are plain Tk lists
@@ -201,7 +205,7 @@ class Switch(tk.Canvas):
         self.draw()
 
     def draw(self):
-        self.delete("all")
+        self.delete("!bdimg")  # keeps the background picture's piece, if there is one
         on = bool(self.var.get())
         w, h = self.W, self.H
         if on:
@@ -457,6 +461,225 @@ def format_clock(seconds):
     return f"{h}:{m:02}:{s:02}" if h else f"{m:02}:{s:02}"
 
 
+MAX_BACKGROUNDS = 5  # saved background pictures
+SETTINGS_PAGES = ("General", "Recording", "Playback", "Picture watch", "Background", "About")
+
+
+class BackgroundControls:
+    """The background picture options for one window (Settings > Background): the picture,
+    Darkness, Fit and which part shows. Saved in settings as <prefix>_picture, <prefix>_darkness...
+
+    same_as: the main window's controls; this window can use the same picture as that one."""
+
+    def __init__(self, app, prefix, get_backdrop, window, same_as=None):
+        """get_backdrop: the Backdrop to paint (None = not shown right now); window: its window."""
+        self.app, self.prefix, self.get_backdrop, self.same_as = app, prefix, get_backdrop, same_as
+        self.window = window
+        s = app.settings
+        self.dark_var = tk.IntVar(value=core.int_setting(s, prefix + "_darkness", 40, 0, 90))
+        fit = s.get(prefix + "_fit")
+        self.fit_var = tk.StringVar(value=fit if fit in backdrop.FITS else "Fill the window")
+        pos = s.get(prefix + "_position", 0)
+        pos = backdrop.POSITIONS.get(pos, 0) if isinstance(pos, str) else pos  # older "Top"/"Middle"/"Bottom"
+        self.pos_var = tk.DoubleVar(value=max(0, min(100, pos if isinstance(pos, (int, float)) else 0)))
+        self.same_var = tk.BooleanVar(value=bool(s.get(prefix + "_same", True))) if same_as else None
+        self.job = None
+        self.built = False
+
+    def file(self):
+        """The picture file to show ("" = none)."""
+        if self.same_var is not None and self.same_var.get():
+            return self.same_as.file()
+        name = self.picture()
+        return os.path.join(os.path.dirname(core.settings_path()), name) if name else ""
+
+    def picture(self):
+        """This window's own pick from the saved pictures (file name, "" = none)."""
+        name = self.app.settings.get(self.prefix + "_picture") or ""
+        return name if any(e["file"] == name for e in self.app.bg_library()) else ""
+
+    def picture_name(self):
+        if self.same_var is not None and self.same_var.get():
+            return self.same_as.picture_name()
+        for e in self.app.bg_library():
+            if e["file"] == self.picture():
+                return e.get("name") or e["file"]
+        return ""
+
+    def save(self, s):
+        s[self.prefix + "_darkness"] = int(float(self.dark_var.get()))
+        s[self.prefix + "_fit"] = self.fit_var.get()
+        s[self.prefix + "_position"] = int(round(float(self.pos_var.get())))
+        if self.same_var is not None:
+            s[self.prefix + "_same"] = bool(self.same_var.get())
+
+    def build(self, f):
+        app = self.app
+        if self.same_var is not None:
+            app._switch_row(f, "Same as the main window", self.same_var, "picture and all options",
+                            command=lambda: (app._save_settings(), self.apply()))
+        row = app._row(f, "Picture")
+        # arrows go through the saved pictures (and "none")
+        self.prev = link(row, "◀", lambda: self.step(-1), fg=TEXT, font=(FAMILY, 11))
+        self.prev.pack(side="left", padx=(12, 0))
+        self.name_label = tk.Label(row, bg=BG, fg=MUTED, font=F_SMALL, width=30)
+        self.name_label.pack(side="left", padx=4)
+        self.next = link(row, "▶", lambda: self.step(1), fg=TEXT, font=(FAMILY, 11))
+        self.next.pack(side="left")
+        self.remove = link(row, "Remove", self.remove_picture)
+        self.remove.pack(side="right")
+        self.choose = ttk.Button(row, text="Add…", width=6, command=self.add_picture)
+        self.choose.pack(side="right", padx=(0, 10))
+        row = app._row(f, "Darkness")
+        self.dark_label = tk.Label(row, bg=BG, fg=TEXT, font=F_SMALL, width=4, anchor="e")
+        self.dark_label.pack(side="right")
+        self.dark_scale = ttk.Scale(row, from_=0, to=90, length=150, variable=self.dark_var,
+                                    command=lambda v: self.changed())
+        self.dark_scale.pack(side="right", padx=(0, 6))
+        row = app._row(f, "Fit")
+        self.fit_box = ttk.Combobox(row, width=22, state="readonly", textvariable=self.fit_var,
+                                    values=list(backdrop.FITS))
+        self.fit_box.pack(side="right")
+        self.fit_box.bind("<<ComboboxSelected>>", lambda e: self.changed(now=True))
+        row = app._row(f, "Show which part", "slide or scroll")
+        self.pos_end = tk.Label(row, bg=BG, fg=MUTED, font=F_SMALL, width=8, anchor="w")
+        self.pos_end.pack(side="right")
+        self.pos_scale = ttk.Scale(row, from_=0, to=100, length=150, variable=self.pos_var,
+                                   command=lambda v: self.changed(delay=40))
+        self.pos_scale.pack(side="right", padx=6)
+        self.pos_start = tk.Label(row, bg=BG, fg=MUTED, font=F_SMALL, width=4, anchor="e")
+        self.pos_start.pack(side="right")
+
+        def wheel(event):
+            if "disabled" in self.pos_scale.state():
+                return
+            step = -1 if (event.delta > 0 or event.num == 4) else 1  # wheel down = further down
+            self.pos_var.set(max(0, min(100, int(float(self.pos_var.get())) + step * 5)))
+            self.changed(delay=40)
+        for ev in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            self.pos_scale.bind(ev, wheel)
+        if not backdrop.AVAILABLE:
+            self.choose.config(state="disabled")
+        self.built = True
+        self.show_state()
+
+    def show_state(self):
+        if not self.built:
+            return
+        path = self.file()
+        on = bool(path) and backdrop.AVAILABLE and os.path.isfile(path)
+        same = self.same_var is not None and self.same_var.get()
+        lib = self.app.bg_library()
+        if same:
+            text = "same as main window" + (f": {short(self.picture_name())}" if self.same_as.file() else "")
+        elif on:
+            n = [e["file"] for e in lib].index(self.picture()) + 1
+            text = f"{n} of {len(lib)}:  {short(self.picture_name())}"
+        else:
+            text = "none (plain dark window)" + (f"  ·  {len(lib)} saved" if lib else "")
+        self.name_label.config(text=text)
+        arrows = not same and bool(lib)
+        for a, sym in ((self.prev, "◀"), (self.next, "▶")):
+            a.config(text=sym if arrows else "", cursor="hand2" if arrows else "arrow")
+        self.choose.config(state="disabled" if same or not backdrop.AVAILABLE else "normal")
+        self.remove.config(text="Remove" if on and not same else "",
+                           cursor="hand2" if on and not same else "arrow")
+        own = on and not same  # with "Same as the main window" the main window's options are used
+        self.fit_box.config(state="readonly" if own else "disabled")
+        self.dark_scale.state(["!disabled"] if own else ["disabled"])
+        # the slider moves the picture along the side that gets cut off (none: it all fits)
+        win = self.window()
+        axis = backdrop.cut_axis_for(path, backdrop.FITS.get(self.fit_var.get(), "cover"),
+                                     win.winfo_width(), win.winfo_height()) if own else None
+        self.pos_scale.state(["!disabled"] if axis else ["disabled"])
+        ends = {"y": ("Top", "Bottom"), "x": ("Left", "Right")}.get(axis, ("", "all shown" if own else ""))
+        self.pos_start.config(text=ends[0])
+        self.pos_end.config(text=ends[1])
+        self.dark_label.config(text=f"{int(float(self.dark_var.get()))}%" if not same else "")
+
+    def apply(self):
+        self.job = None
+        b = self.get_backdrop()
+        if b is None:
+            self.show_state()
+            return
+        src = self.same_as if (self.same_var is not None and self.same_var.get()) else self
+        b.set_picture(self.file(), darkness=int(float(src.dark_var.get())),
+                      fit=backdrop.FITS.get(src.fit_var.get(), "cover"),
+                      position=float(src.pos_var.get()) / 100)
+        self.show_state()
+
+    def changed(self, now=False, delay=150):
+        if self.built:
+            self.dark_label.config(text=f"{int(float(self.dark_var.get()))}%")
+        self.app._save_settings()
+        if self.job is not None:
+            self.app.root.after_cancel(self.job)
+        # both windows, as the settings window may follow the main window's options
+        self.job = self.app.root.after(0 if now else delay, self.app._apply_background)
+
+    def step(self, d):
+        """◀ / ▶: the previous or next saved picture (going past the ends gives "none")."""
+        if self.same_var is not None and self.same_var.get():
+            return
+        files = [""] + [e["file"] for e in self.app.bg_library()]
+        if len(files) < 2:
+            return
+        i = files.index(self.picture()) if self.picture() in files else 0
+        self.app.settings[self.prefix + "_picture"] = files[(i + d) % len(files)]
+        self.app._save_settings()
+        self.app._apply_background()
+
+    def add_picture(self):
+        app = self.app
+        lib = app.bg_library()
+        if len(lib) >= MAX_BACKGROUNDS:
+            messagebox.showinfo("Macro Recorder", f"You can save up to {MAX_BACKGROUNDS} pictures.\n"
+                                "Pick one you don't need with the arrows and click Remove first.",
+                                parent=app.settings_win)
+            return
+        path = filedialog.askopenfilename(parent=app.settings_win, title="Add a background picture",
+                                          filetypes=backdrop.PICTURE_TYPES)
+        if not path:
+            return
+        folder = os.path.dirname(core.settings_path())
+        used = {e["file"] for e in lib}
+        fname = next(f"background_{i}.png" for i in range(1, 100) if f"background_{i}.png" not in used)
+        if not backdrop.store_picture(path, folder, fname):
+            messagebox.showerror("Macro Recorder", "That file couldn't be opened as a picture.\n"
+                                 "Try a .png, .jpg, .bmp or .webp file.", parent=app.settings_win)
+            return
+        lib.append({"file": fname, "name": os.path.basename(path)})
+        app.settings[self.prefix + "_picture"] = fname  # and use it here right away
+        app._save_settings()
+        app._apply_background()
+
+    def remove_picture(self):
+        """Take the shown picture out of the saved pictures (every window using it goes plain)."""
+        app = self.app
+        name = self.picture()
+        if not name:
+            return
+        if not messagebox.askyesno("Macro Recorder", f"Remove \"{self.picture_name()}\" from your saved "
+                                   "pictures?", parent=app.settings_win):
+            return
+        app.settings["background_library"] = [e for e in app.bg_library() if e["file"] != name]
+        for key in list(app.settings):
+            if key.endswith("_picture") and key.startswith(("background", "settings_background")) \
+                    and app.settings[key] == name:
+                app.settings[key] = ""
+        try:
+            os.remove(os.path.join(os.path.dirname(core.settings_path()), name))
+        except OSError:
+            pass
+        app._save_settings()
+        app._apply_background()
+
+
+def short(text, n=26):
+    return text if len(text) <= n else text[:n - 1] + "…"
+
+
 class ModernMacroRecorder(core.MacroRecorder):
     def __init__(self, root, preview=False):
         self.preview = preview
@@ -536,7 +759,7 @@ class ModernMacroRecorder(core.MacroRecorder):
         tk.Label(st, textvariable=self.status_var, bg=PANEL, fg=TEXT, font=F_STATUS).pack(side="left", padx=(8, 0))
         self.sub_var = tk.StringVar()
         tk.Label(body, textvariable=self.sub_var, bg=PANEL, fg=MUTED, font=F_BASE, anchor="w").pack(
-            fill="x", pady=(4, 14))
+            anchor="w", pady=(4, 14))
 
         # the four big buttons
         cards = tk.Frame(body, bg=PANEL)
@@ -584,7 +807,7 @@ class ModernMacroRecorder(core.MacroRecorder):
             b.pack(side="right", padx=(6, 0))
         self.info_var = tk.StringVar()
         tk.Label(body, textvariable=self.info_var, bg=PANEL, fg=MUTED, font=F_SMALL, anchor="w").pack(
-            fill="x", pady=(2, 0))
+            anchor="w", pady=(2, 0))
 
         # footer: status bar + version
         foot = tk.Frame(outer, bg=BG)
@@ -594,6 +817,27 @@ class ModernMacroRecorder(core.MacroRecorder):
         link(foot, "About", lambda: self.open_settings("About"), fg=MUTED).pack(side="right")
         tk.Label(foot, text=f"v{APP_VERSION}", bg=BG, fg=DIM, font=F_SMALL).pack(side="right", padx=(0, 8))
 
+        # an optional picture behind the window (Settings > Background)
+        self.backdrop = backdrop.Backdrop(
+            root, see_through=(BG, PANEL), base_color=BG, glass=panel, glass_color=PANEL,
+            skip=(self.card_record, self.card_pause, self.card_play, self.card_stop),
+            lift_colors={DIM: MUTED, MUTED: "#c2c2cc"})
+        self._bg_library_upgrade()
+        self.bg_main = BackgroundControls(self, "background", lambda: self.backdrop, lambda: self.root)
+        # the settings window: one background for every page, or one for each page
+        self.bg_per_page_var = tk.BooleanVar(value=bool(s.get("settings_background_per_page", False)))
+        self.bg_page_var = tk.StringVar(value=SETTINGS_PAGES[0])
+
+        def settings_controls(prefix):
+            c = BackgroundControls(self, prefix, None, self._settings_page, same_as=self.bg_main)
+            c.get_backdrop = lambda: (getattr(self, "settings_backdrop", None)
+                                      if self._settings_bg_controls() is c else None)
+            return c
+        self.bg_settings = settings_controls("settings_background")
+        self.bg_pages = {page: settings_controls("settings_background_" + page.lower().replace(" ", "_"))
+                         for page in SETTINGS_PAGES}
+        root.after(80, self._apply_background)
+
         self._build_settings_window()
 
     def _loop_changed(self, save=True):
@@ -601,6 +845,8 @@ class ModernMacroRecorder(core.MacroRecorder):
             self.times_frame.pack_forget()
         else:
             self.times_frame.pack(side="left")
+        if getattr(self, "backdrop", None) is not None:
+            self.root.after_idle(self.backdrop.refresh)
         if save:
             self._save_settings()
 
@@ -617,7 +863,7 @@ class ModernMacroRecorder(core.MacroRecorder):
         self.tabs = ttk.Notebook(win)
         self.tabs.pack(fill="both", expand=True, padx=8, pady=(8, 0))
         self.tab_frames = {}
-        for name in ("General", "Recording", "Playback", "Picture watch", "About"):
+        for name in SETTINGS_PAGES:
             f = ttk.Frame(self.tabs, padding=(18, 14))
             self.tabs.add(f, text=name)
             self.tab_frames[name] = f
@@ -626,11 +872,44 @@ class ModernMacroRecorder(core.MacroRecorder):
         self._build_playback_tab(self.tab_frames["Playback"])
         watch = self.tab_frames["Picture watch"]
         self._build_watch_ui(watch)
+        self._build_background_tab(self.tab_frames["Background"])
         self._build_about_tab(self.tab_frames["About"])
         self._recolor_notes(win)
         bottom = tk.Frame(win, bg=BG)
         bottom.pack(fill="x", padx=18, pady=12)
         ttk.Button(bottom, text="Done", style="Accent.TButton", command=self.close_settings).pack(side="right")
+        self._title_labels(win)
+        # every page the same size (the biggest page, with a little room for lists that grow), so the
+        # window doesn't change size between pages
+        win.update_idletasks()
+        self.tabs.configure(width=max(f.winfo_reqwidth() for f in self.tab_frames.values()),
+                            height=max(f.winfo_reqheight() for f in self.tab_frames.values()) + 40)
+        # the background picture shows here too (darker behind the pages, as there's more text)
+        self.settings_backdrop = backdrop.Backdrop(
+            win, see_through=(BG,), base_color=BG, glass=self.tabs, glass_color=BG, glass_mix=0.55,
+            area=self._settings_page,  # only behind the page, not the tabs or the Done button
+            lift_colors={DIM: MUTED, MUTED: "#c2c2cc"})
+        self.tabs.bind("<<NotebookTabChanged>>", lambda e: win.after(10, self._settings_tab_changed), add="+")
+
+    def _settings_page(self):
+        """The settings page that's open (the area the background picture fills)."""
+        try:
+            return self.tabs.nametowidget(str(self.tabs.select()))
+        except (AttributeError, KeyError, tk.TclError):
+            return self.settings_win
+
+    def _settings_tab_changed(self):
+        if self.bg_per_page_var.get():  # each page may have its own background
+            self._settings_bg_controls().apply()
+        self.settings_backdrop.repaint()
+
+    def _title_labels(self, widget):
+        """Boxes with a title get it as a separate label, so the background picture can go behind it."""
+        for child in widget.winfo_children():
+            if isinstance(child, ttk.Labelframe) and not str(child.cget("labelwidget")):
+                child.config(labelwidget=tk.Label(child, text=child.cget("text"), bg=BG, fg=MUTED,
+                                                  font=F_SECTION))
+            self._title_labels(child)
 
     def _recolor_notes(self, widget):
         """The old option boxes used dark-red and grey notes made for a white window."""
@@ -701,6 +980,97 @@ class ModernMacroRecorder(core.MacroRecorder):
                 tk.Label(f, text="Turned off in the preview, so your .macro files keep opening your real app.",
                          bg=BG, fg=DIM, font=F_SMALL, anchor="w").pack(fill="x")
 
+    # ------------------------------------------------------------ background picture
+
+    def _build_background_tab(self, f):
+        self._section(f, "MAIN WINDOW", first=True)
+        self.bg_main.build(f)
+        self._section(f, "SETTINGS WINDOW")
+        self._switch_row(f, "A different background for each page", self.bg_per_page_var,
+                         command=self._bg_pages_changed)
+        page_holder = tk.Frame(f, bg=BG)
+        page_holder.pack(fill="x")
+        self.bg_page_row = tk.Frame(page_holder, bg=BG)
+        tk.Label(self.bg_page_row, text="Page", bg=BG, fg=TEXT, font=F_BASE).pack(side="left")
+        tk.Label(self.bg_page_row, text="the options below are for this page", bg=BG, fg=DIM,
+                 font=F_SMALL).pack(side="left", padx=(8, 0))
+        box = ttk.Combobox(self.bg_page_row, width=14, state="readonly", textvariable=self.bg_page_var,
+                           values=list(SETTINGS_PAGES))
+        box.pack(side="right")
+        box.bind("<<ComboboxSelected>>", lambda e: self._bg_show_controls())
+        holder = tk.Frame(f, bg=BG)
+        holder.pack(fill="x")
+        self.bg_frames = {}
+        for c in [self.bg_settings] + list(self.bg_pages.values()):
+            frame = tk.Frame(holder, bg=BG)
+            c.build(frame)
+            self.bg_frames[c] = frame
+        tk.Label(f, text="Darker = easier to read. Your pictures stay on this computer.",
+                 bg=BG, fg=DIM, font=F_SMALL, anchor="w").pack(fill="x", pady=(10, 0))
+        if not backdrop.AVAILABLE:
+            tk.Label(f, text="Needs the picture tools (numpy + opencv), which aren't installed.",
+                     bg=BG, fg=RED, font=F_SMALL, anchor="w").pack(fill="x")
+        self._bg_show_controls()
+
+    def bg_library(self):
+        """The saved background pictures: [{"file": stored file name, "name": original name}], up to 5."""
+        lib = self.settings.get("background_library")
+        if not isinstance(lib, list):
+            lib = self.settings["background_library"] = []
+        return lib
+
+    def _bg_library_upgrade(self):
+        """Pictures chosen before there was a list of saved pictures go into the list."""
+        if isinstance(self.settings.get("background_library"), list):
+            return
+        lib = self.bg_library()
+        folder = os.path.dirname(core.settings_path())
+        for key in [k for k in self.settings if k.endswith("_picture") and
+                    k.startswith(("background", "settings_background"))]:
+            name = self.settings.get(key)
+            if name and os.path.isfile(os.path.join(folder, name)) and len(lib) < MAX_BACKGROUNDS \
+                    and all(e["file"] != name for e in lib):
+                original = self.settings.get(key[:-len("_picture")] + "_original") or name
+                lib.append({"file": name, "name": original})
+
+    def _settings_bg_controls(self):
+        """The options the settings window shows right now: the shared ones, or the open page's."""
+        if not self.bg_per_page_var.get():
+            return self.bg_settings
+        try:
+            page = self.tabs.tab(self.tabs.select(), "text")
+        except (AttributeError, tk.TclError):
+            page = SETTINGS_PAGES[0]
+        return self.bg_pages.get(page, self.bg_settings)
+
+    def _bg_show_controls(self):
+        """Show the options of every page together, or of the page picked in the Page box."""
+        per_page = self.bg_per_page_var.get()
+        if per_page:
+            self.bg_page_row.pack(fill="x", pady=4)
+        else:
+            self.bg_page_row.pack_forget()
+        shown = self.bg_pages.get(self.bg_page_var.get(), self.bg_settings) if per_page else self.bg_settings
+        for c, frame in self.bg_frames.items():
+            if c is shown:
+                frame.pack(fill="x")
+            else:
+                frame.pack_forget()
+        shown.show_state()
+        if getattr(self, "settings_backdrop", None) is not None:
+            self.settings_win.after_idle(self.settings_backdrop.refresh)
+
+    def _bg_pages_changed(self):
+        self._save_settings()
+        self._bg_show_controls()
+        self._apply_background()
+
+    def _apply_background(self):
+        self.bg_main.apply()
+        self._settings_bg_controls().apply()
+        for c in [self.bg_settings] + list(self.bg_pages.values()):
+            c.show_state()
+
     def _build_recording_tab(self, f):
         self._section(f, "MOUSE", first=True)
         self._switch_row(f, "Record mouse movement", self.rec_moves_var,
@@ -764,6 +1134,7 @@ class ModernMacroRecorder(core.MacroRecorder):
         if tab in self.tab_frames:
             self.tabs.select(self.tab_frames[tab])
         self._refresh()
+        win.after(60, lambda: (self.settings_backdrop.repaint(), self._bg_show_controls()))
 
     def close_settings(self):
         self.capture_callback = None
@@ -916,7 +1287,7 @@ class ModernMacroRecorder(core.MacroRecorder):
         self.status_var.set(state)
         self.sub_var.set(sub)
         d = self.status_dot
-        d.delete("all")
+        d.delete("!bdimg")
         d.create_oval(1, 1, 15, 15, outline=color, width=2)
         d.create_oval(5, 5, 11, 11, fill=color, outline="")
 
@@ -945,7 +1316,7 @@ class ModernMacroRecorder(core.MacroRecorder):
         self.speed_box.config(state="disabled" if busy else "normal")
         self.repeat_box.config(state="disabled" if busy else "normal")
         self.loop_switch.set_enabled(not busy)
-        self.name_entry.config(state="disabled" if busy else "normal", disabledbackground=PANEL,
+        self.name_entry.config(state="disabled" if busy else "normal", disabledbackground=self.name_entry.cget("bg"),
                                disabledforeground=MUTED)
         for b in (self.made_for_box, self.play_on_box):
             b.config(state="disabled" if busy else "normal")
@@ -965,6 +1336,9 @@ class ModernMacroRecorder(core.MacroRecorder):
             self.statusbar_label.config(text="   ·   ".join(bits))
         else:
             self.statusbar_label.config(text="")
+        for b in (getattr(self, "backdrop", None), getattr(self, "settings_backdrop", None)):
+            if b is not None:
+                b.refresh()
 
     # ------------------------------------------------------------ settings
 
@@ -978,6 +1352,10 @@ class ModernMacroRecorder(core.MacroRecorder):
             s["record_mouse_moves"] = bool(self.rec_moves_var.get())
             s["mouse_detail"] = self.detail_var.get()
             s["play_overlay"] = bool(self.overlay_var.get())
+            if hasattr(self, "bg_settings"):
+                for c in [self.bg_main, self.bg_settings] + list(self.bg_pages.values()):
+                    c.save(s)
+                s["settings_background_per_page"] = bool(self.bg_per_page_var.get())
             try:
                 s["repeat_count"] = max(1, min(9999, int(self.repeat_var.get())))
             except (tk.TclError, ValueError):
