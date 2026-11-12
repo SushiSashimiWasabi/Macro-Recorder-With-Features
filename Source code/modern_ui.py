@@ -462,6 +462,7 @@ def format_clock(seconds):
 
 
 MAX_BACKGROUNDS = 5  # saved background pictures
+MAX_MACROS = 20  # saved macros for the ◀ ▶ quick switch
 SETTINGS_PAGES = ("General", "Recording", "Playback", "Picture watch", "Background", "About")
 
 
@@ -686,6 +687,7 @@ class ModernMacroRecorder(core.MacroRecorder):
         self.sub_note = "Record something, or open a macro"
         self.settings_win = None
         self.edit_win = None
+        self.unsaved = False  # the open macro was edited and not saved since
         super().__init__(root)
 
     # ------------------------------------------------------------ main window
@@ -792,6 +794,19 @@ class ModernMacroRecorder(core.MacroRecorder):
         self._loop_changed(save=False)
 
         tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=14)
+
+        # quick switch: ◀ ▶ go through the saved macros (every macro opened or saved goes in the list)
+        sw = tk.Frame(body, bg=PANEL)
+        sw.pack(fill="x", pady=(0, 8))
+        tk.Label(sw, text="Saved macros", bg=PANEL, fg=MUTED, font=F_SMALL).pack(side="left")
+        self.mac_prev = link(sw, "◀", lambda: self.step_macro(-1), bg=PANEL, fg=TEXT, font=(FAMILY, 11))
+        self.mac_prev.pack(side="left", padx=(10, 0))
+        self.mac_label = tk.Label(sw, bg=PANEL, fg=MUTED, font=F_SMALL, width=34)
+        self.mac_label.pack(side="left", padx=4)
+        self.mac_next = link(sw, "▶", lambda: self.step_macro(1), bg=PANEL, fg=TEXT, font=(FAMILY, 11))
+        self.mac_next.pack(side="left")
+        self.mac_remove = link(sw, "Remove", self.remove_macro_from_list, bg=PANEL)
+        self.mac_remove.pack(side="right")
 
         # the macro: its name, size and file buttons
         mac = tk.Frame(body, bg=PANEL)
@@ -1247,6 +1262,7 @@ class ModernMacroRecorder(core.MacroRecorder):
                                     "Settings > Recording for that.", parent=win)
                 return
             self.events = events
+            self.unsaved = True
             self.sub_note = "Macro edited (Save… to keep the changes in the file)"
             win.destroy()
             self._refresh()
@@ -1310,6 +1326,7 @@ class ModernMacroRecorder(core.MacroRecorder):
         if self.current_file and os.path.splitext(os.path.basename(self.current_file))[0] != self.name_var.get():
             parts.append(os.path.basename(self.current_file))
         self.info_var.set("  ·  ".join(parts))
+        self._show_macro_list(busy)
 
         for b in (self.btn_save, self.btn_load, self.btn_edit, self.btn_clear):
             b.config(state="disabled" if busy else "normal")
@@ -1485,18 +1502,108 @@ class ModernMacroRecorder(core.MacroRecorder):
         self._sound("play_end")
         self._refresh()
 
-    def load(self, path=None):
-        before = (self.current_file, len(self.events), id(self.events))
-        super().load(path)
-        if (self.current_file, len(self.events), id(self.events)) != before and self.current_file:
+    def load(self, path=None, quiet=False):
+        ok = super().load(path, quiet=quiet)
+        if ok:
             self.name_var.set(os.path.splitext(os.path.basename(self.current_file))[0])
             self.sub_note = "Macro opened"
+            self.unsaved = False
+            self._remember_macro(self.current_file)
             self._refresh()
+        return ok
+
+    # ------------------------------------------------------------ saved macros (◀ ▶ quick switch)
+
+    def macro_list(self):
+        """The saved macros: file paths, in the order they were added (up to MAX_MACROS)."""
+        lib = self.settings.get("macro_library")
+        if not isinstance(lib, list):
+            lib = self.settings["macro_library"] = []
+        lib[:] = [p for p in lib if isinstance(p, str) and p]
+        return lib
+
+    def _list_index(self, path):
+        key = os.path.normcase(os.path.abspath(path)) if path else None
+        for i, p in enumerate(self.macro_list()):
+            if os.path.normcase(os.path.abspath(p)) == key:
+                return i
+        return None
+
+    def _remember_macro(self, path):
+        """Put an opened or saved macro in the list (the oldest one goes when it's full)."""
+        if not path or self._list_index(path) is not None:
+            return
+        lib = self.macro_list()
+        lib.append(os.path.abspath(path))
+        del lib[:-MAX_MACROS]
+        self._save_settings()
+
+    def _show_macro_list(self, busy=False):
+        lib = self.macro_list()
+        i = self._list_index(self.current_file)
+        if i is not None:
+            name = os.path.splitext(os.path.basename(lib[i]))[0]
+            text = f"{i + 1} of {len(lib)}:  {short(name, 28)}"
+        elif lib:
+            text = f"{len(lib)} saved  ·  this one isn't in the list"
+        else:
+            text = "macros you open or save show up here"
+        self.mac_label.config(text=text)
+        arrows = len(lib) > (0 if i is None else 1) and not busy
+        for a, sym in ((self.mac_prev, "◀"), (self.mac_next, "▶")):
+            a.config(text=sym if arrows else "", cursor="hand2" if arrows else "arrow")
+        rem = i is not None and not busy
+        self.mac_remove.config(text="Remove" if rem else "", cursor="hand2" if rem else "arrow")
+
+    def _has_unsaved_macro(self):
+        return bool(self.events) and (self.current_file is None or getattr(self, "unsaved", False))
+
+    def step_macro(self, d):
+        """◀ / ▶: open the previous or next saved macro."""
+        lib = self.macro_list()
+        if self.recording or self.playing or not lib:
+            return
+        i = self._list_index(self.current_file)
+        if i is not None and len(lib) < 2:
+            return
+        if self._has_unsaved_macro() and not messagebox.askyesno(
+                "Macro Recorder", "This macro isn't saved. Switch to another one anyway?\n\n"
+                "(Click No, then Save…, to keep it.)", parent=self.root):
+            return
+        if i is None:  # not in the list: ▶ starts at the first one, ◀ at the last
+            order = lib[:] if d > 0 else lib[::-1]
+        else:
+            order = [lib[(i + d * n) % len(lib)] for n in range(1, len(lib))]
+        missing = []
+        for path in order:  # skip files that were moved or deleted
+            if not os.path.isfile(path):
+                missing.append(path)
+                continue
+            if self.load(path, quiet=True):
+                self.sub_note = "Switched macro" + (f" (skipped {len(missing)} missing file"
+                                                    f"{'s' if len(missing) != 1 else ''})" if missing else "")
+            else:
+                self.sub_note = "Couldn't open " + os.path.basename(path)
+            self._refresh()
+            return
+        self.sub_note = "None of the other saved macros could be found"
+        self._refresh()
+
+    def remove_macro_from_list(self):
+        """Take the open macro out of the list (the file itself stays where it is)."""
+        i = self._list_index(self.current_file)
+        if i is None or self.recording or self.playing:
+            return
+        del self.macro_list()[i]
+        self._save_settings()
+        self.sub_note = "Taken out of the list (the file wasn't deleted)"
+        self._refresh()
 
     def clear(self):
         had = bool(self.events)
         super().clear()
         if had and not self.events:
+            self.unsaved = False
             self.name_var.set("Untitled macro")
             self.sub_note = "Record something, or open a macro"
             self._refresh()
@@ -1520,8 +1627,10 @@ class ModernMacroRecorder(core.MacroRecorder):
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=1)
         self.current_file = path
+        self.unsaved = False
         self.name_var.set(os.path.splitext(os.path.basename(path))[0])
         self.sub_note = "Saved"
+        self._remember_macro(path)
         self._refresh()
 
 

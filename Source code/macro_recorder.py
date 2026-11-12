@@ -1448,13 +1448,23 @@ class MacroRecorder:
         self.current_file = path
         self._refresh()
 
-    def load(self, path=None):
+    def load(self, path=None, quiet=False):
+        """Open a macro file. quiet: no message boxes (an error goes to self.load_error instead).
+        Returns True when the macro was opened."""
+        self.load_error = None
+
+        def fail(text):
+            self.load_error = text
+            if not quiet:
+                messagebox.showerror("Macro Recorder", text)
+            return False
+
         if self.recording or self.playing:
-            return
+            return False
         if path is None:
             path = filedialog.askopenfilename(filetypes=OPEN_FILE_TYPES)
         if not path:
-            return
+            return False
         imported = None
         try:
             events, screen = self._read_own_file(path)
@@ -1463,16 +1473,13 @@ class MacroRecorder:
             try:
                 imported = importers.import_file(path)
             except importers.ImportError_ as exc:
-                messagebox.showerror("Macro Recorder", f"Couldn't open that file:\n{exc}")
-                return
+                return fail(f"Couldn't open that file:\n{exc}")
             except Exception as exc:
                 if os.path.splitext(path)[1].lower() in (FILE_EXT, ".json"):
                     exc = own_error
-                messagebox.showerror("Macro Recorder", f"Couldn't open that file:\n{exc}")
-                return
+                return fail(f"Couldn't open that file:\n{exc}")
             if not imported.events:
-                messagebox.showerror("Macro Recorder", "No actions could be read from that file.")
-                return
+                return fail("No actions could be read from that file.")
             events = imported.events
             events.sort(key=lambda ev: ev["t"])
             screen = {"width": imported.screen[0], "height": imported.screen[1]} if imported.screen else {}
@@ -1498,6 +1505,8 @@ class MacroRecorder:
         elif not made_for and any("x" in ev for ev in events):
             size_note = ("This file doesn't say which screen size it was made for. If it was made on a "
                          "different size than yours, pick that size in \"Macro recorded at\".")
+        if quiet:
+            return True
         if imported is None and size_note:
             messagebox.showinfo("Macro Recorder", size_note)
         if imported is not None:
@@ -1512,6 +1521,7 @@ class MacroRecorder:
                              "not into a background window.")
             lines.append("Click Save... to keep it as a .macro file.")
             messagebox.showinfo("Macro Recorder", "\n\n".join(lines))
+        return True
 
     @staticmethod
     def _read_own_file(path):

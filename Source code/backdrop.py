@@ -147,6 +147,8 @@ class Backdrop:
         self.composite_key = None
         self.items = {}         # widget -> what we changed (to undo it)
         self.pending = None
+        self.pending_fix = None
+        self._probe = self._probe_ttk = None
         self._new_widgets = False
         root.bind("<Configure>", self._root_changed, add="+")
 
@@ -198,11 +200,18 @@ class Backdrop:
             return
         changed = [w for w, it in self.items.items()
                    if it["kind"] == "label" and w.winfo_exists() and str(w.cget("text")) != it["text"]]
-        for w in changed:
-            self._undo(w, forget=False)
         new_labels = self._decorate(self.root, dry=True)
         if not changed and not new_labels and not self._new_widgets:
             return
+        if not new_labels and not self._new_widgets and self.composite is not None:
+            # only texts changed: each label gets its new piece in one go, so nothing flashes
+            for w in changed:
+                self._retext(w)
+            if self.pending_fix is None:  # parts that moved because of it get their piece right after
+                self.pending_fix = self.root.after(1, self._fix_moved)
+            return
+        for w in changed:
+            self._undo(w, forget=False)
         if changed:  # let them measure their new text, then give them their picture again
             self.root.update_idletasks()
             for w in changed:
@@ -211,6 +220,48 @@ class Backdrop:
         self.repaint()
 
     text_changed = refresh
+
+    def _fix_moved(self):
+        self.pending_fix = None
+        if self.active and self._shown():
+            self._crop_all()
+
+    def _natural_size(self, w, it):
+        """The size a label wants for its text right now (measured on a spare label that's never
+        shown, so the real one doesn't have to drop its picture first)."""
+        pad = it["pad"]
+        try:
+            if w.winfo_class() == "TLabel":
+                if self._probe_ttk is None:
+                    self._probe_ttk = ttk.Label(self.root, style="Bd.TLabel")
+                probe = self._probe_ttk
+                probe.config(text=w.cget("text"), font=w.cget("font"), padding=pad["padding"],
+                             width=w.cget("width"), wraplength=w.cget("wraplength"))
+            else:
+                if self._probe is None:
+                    self._probe = tk.Label(self.root)
+                probe = self._probe
+                probe.config(text=w.cget("text"), font=w.cget("font"), wraplength=w.cget("wraplength"),
+                             justify=w.cget("justify"),
+                             **{k: pad[k] for k in ("padx", "pady", "bd", "highlightthickness", "width", "height")})
+            return probe.winfo_reqwidth(), probe.winfo_reqheight()
+        except (tk.TclError, KeyError):
+            return w.winfo_width(), w.winfo_height()
+
+    def _retext(self, w):
+        """A label with a picture got a new text: give it its piece at its new size straight away."""
+        it = self.items[w]
+        width, height = self._natural_size(w, it)
+        stretch = it.get("stretch", (False, False))
+        if stretch[0]:  # stretched by its row: keeps that width
+            width = w.winfo_width()
+        if stretch[1]:
+            height = w.winfo_height()
+        width, height = max(1, width), max(1, height)
+        x, y = self._pos(w)
+        img = photo(self._crop(w, (width, height)))
+        it["img"], it["text"], it["rect"] = img, str(w.cget("text")), (x, y, width, height)
+        w.config(image=img)
 
     def clear(self):
         """Back to the plain window."""
@@ -286,10 +337,10 @@ class Backdrop:
             return 0, 0
         return w.winfo_rootx() - self.root.winfo_rootx(), w.winfo_rooty() - self.root.winfo_rooty()
 
-    def _crop(self, w):
-        """The piece of the picture behind widget w."""
+    def _crop(self, w, size=None):
+        """The piece of the picture behind widget w (size: if it's about to get another size)."""
         x, y = self._pos(w)
-        cw, ch = max(1, w.winfo_width()), max(1, w.winfo_height())
+        cw, ch = size or (max(1, w.winfo_width()), max(1, w.winfo_height()))
         H, W = self.composite.shape[:2]
         piece = np.empty((ch, cw, 3), np.uint8)
         piece[:] = hex_to_bgr(self.base).astype(np.uint8)
@@ -312,6 +363,8 @@ class Backdrop:
         if self.composite is None or self.composite_key != key:
             self.composite = self._compose(*size)
             self.composite_size, self.composite_key = size, key
+            for it in self.items.values():
+                it.pop("rect", None)
         for w, it in list(self.items.items()):
             if not w.winfo_exists():
                 self.items.pop(w, None)
@@ -319,6 +372,10 @@ class Backdrop:
             target = it.get("under", w)
             if not target.winfo_ismapped() or not w.winfo_ismapped():
                 continue
+            rect = self._pos(target) + (target.winfo_width(), target.winfo_height())
+            if it.get("rect") == rect:
+                continue  # still where it was: its piece is still right
+            it["rect"] = rect
             piece = self._crop(target)
             kind = it["kind"]
             if kind in ("entry", "check"):
@@ -463,6 +520,8 @@ class Backdrop:
             return
         width, height = w.winfo_width(), w.winfo_height()
         it["text"] = str(w.cget("text"))
+        it["stretch"] = (width > w.winfo_reqwidth(), height > w.winfo_reqheight())
+        it.pop("rect", None)
         blank = tk.PhotoImage(width=max(1, width), height=max(1, height))
         it["img"] = blank
         if w.winfo_class() == "TLabel":

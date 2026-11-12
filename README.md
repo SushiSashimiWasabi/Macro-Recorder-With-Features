@@ -178,6 +178,11 @@ There are three ways to open a macro:
   It only changes settings for your own Windows account. If you move `MacroRecorder.exe` to another
   folder, click the button again.
 
+**Saved macros (quick switch):** every macro you open or save is added to the **Saved macros** row
+in the main window (up to 20). Click **◀** or **▶** to switch straight to the previous or next one.
+**Remove** only takes the open macro off that list; the file itself is never deleted. Files that
+were moved or deleted are skipped, and the app asks first if the open macro has unsaved changes.
+
 ## Open macros from other programs
 
 **Open...** (or dragging a file onto `MacroRecorder.exe`) also reads macros saved by other recorders.
