@@ -8,7 +8,7 @@ a = Analysis(
     [os.path.join(here, "macro_recorder.py")],
     pathex=[here],
     datas=[(os.path.join(here, "retry_default.png"), ".")],
-    hiddenimports=["pynput.keyboard._darwin", "pynput.mouse._darwin"],
+    hiddenimports=["pynput.keyboard._darwin", "pynput.mouse._darwin", "WebKit", "AppKit", "Foundation"],
 )
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="MacroRecorder", console=False)

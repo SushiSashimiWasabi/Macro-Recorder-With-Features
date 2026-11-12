@@ -73,6 +73,16 @@ screen shows the countdown, then "Playing" with how long it's been going, the ru
 keys that pause and stop it. It stays there even when the app is minimized, and clicks go straight
 through it (on Windows). Turn it off in Settings > Playback.
 
+**Video over the game:** paste a YouTube video or playlist link into the **Video** row (under
+Saved macros) and click **Show**. The video plays with sound in a small window that always stays on
+top of the game. Move it by its title bar and resize it by dragging its edges; it remembers its size
+and place. While a macro records or plays, clicks go straight through it and it never takes the
+keyboard, so the macro isn't affected (pause the macro to use the video's own buttons). **Close**
+(or the window's X) shuts it. Settings > Playback > Video window: let clicks always go through, and
+a See-through slider. It uses YouTube's official embedded player (in Edge on Windows), so YouTube's
+ads still play, and videos whose owner blocks outside players, and YouTube Mixes, can't play.
+You can't open a video while a macro is running; open it first.
+
 **Pausing playback:** press the pause key while a macro plays. It lets go of any keys and buttons
 it's holding and waits; press it again to carry on from the same spot.
 
@@ -250,6 +260,9 @@ In **Settings > General**, pick other keys you don't use in the game.
   need to match the recorder's.
 - Screen sizes: a Mac counts positions in "points" (a Retina screen has 2 pixels per point). The
   "Your screen" box shows the size in points, which is what macros use there, so leave it on Auto.
+- The video window: on a Mac it's a floating window of the app (Safari's engine) that should stay
+  above fullscreen games and let clicks through. That was checked on GitHub's Macs, but not with a
+  game or with real playback. macOS may ask once to let the app "find devices on local networks".
 - The built-in RETRY picture: Roblox may draw it at a different size on a Mac. If **Test now** doesn't
   find it, use **Add from screen...** to take a new picture on the Mac.
 

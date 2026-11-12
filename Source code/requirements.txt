@@ -2,3 +2,4 @@ pynput>=1.7
 numpy
 opencv-python-headless
 mss
+pyobjc-framework-WebKit; sys_platform == "darwin"

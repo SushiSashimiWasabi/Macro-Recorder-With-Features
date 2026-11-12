@@ -25,6 +25,7 @@ import backdrop
 import macro_recorder as core
 import platform_keys
 import sounds
+import video_overlay
 from macro_recorder import (HOTKEY_ACTIONS, IS_MAC, IS_WIN, SCREEN_TARGET, SPEED_PRESETS, background,
                             format_speed, hotkey_name, image_watch, parse_speed)
 
@@ -403,6 +404,8 @@ def format_clock(seconds):
 
 MAX_BACKGROUNDS = 5  # saved background pictures
 MAX_MACROS = 20  # saved macros for the ◀ ▶ quick switch
+VIDEO_THROUGH = ("While recording or playing", "Always")  # when clicks go through the video window
+VIDEO_HINT = "Paste a YouTube video or playlist link"
 SETTINGS_PAGES = ("General", "Recording", "Playback", "Picture watch", "Background", "Sounds", "About")
 
 
@@ -673,6 +676,24 @@ class ModernMacroRecorder(core.MacroRecorder):
         self.rec_moves_var = tk.BooleanVar(value=bool(s.get("record_mouse_moves", True)))
         self.detail_var = tk.StringVar(value=s.get("mouse_detail", "Smooth")
                                        if s.get("mouse_detail") in MOUSE_DETAIL else "Smooth")
+        # the YouTube video window over the game
+        self.video_var = tk.StringVar(value=str(s.get("video_link", "")))
+        self.video_through_var = tk.StringVar(
+            value=s.get("video_click_through") if s.get("video_click_through") in VIDEO_THROUGH
+            else VIDEO_THROUGH[0])
+        self.video_opacity_var = tk.IntVar(value=core.int_setting(s, "video_opacity", 100, 20, 100))
+        def setup_video_window(win):
+            dark_title_bar(win)
+            if getattr(self, "icon_img", None) is not None:
+                win.iconphoto(False, self.icon_img)
+        self.video = video_overlay.make_overlay(
+            os.path.join(os.path.dirname(core.settings_path()), "video_browser"), root=root,
+            on_closed=lambda: self._video_closed(), setup_window=setup_video_window)
+        r = s.get("video_rect")
+        if isinstance(r, list) and len(r) == 4 and all(isinstance(v, int) for v in r):
+            self.video.rect = tuple(r)
+        self.video.opacity = self.video_opacity_var.get()
+        self.video_job = None
 
         outer = tk.Frame(root, bg=BG)
         outer.pack(fill="both", expand=True)
@@ -751,6 +772,19 @@ class ModernMacroRecorder(core.MacroRecorder):
         self.mac_next.pack(side="left")
         self.mac_remove = link(sw, "Remove", self.remove_macro_from_list, bg=PANEL)
         self.mac_remove.pack(side="right")
+
+        # a YouTube video or playlist in a window over the game
+        vid = tk.Frame(body, bg=PANEL)
+        vid.pack(fill="x", pady=(0, 8))
+        tk.Label(vid, text="Video", bg=PANEL, fg=MUTED, font=F_SMALL).pack(side="left")
+        self.video_entry = tk.Entry(vid, textvariable=self.video_var, bg=FIELD, fg=TEXT, font=F_SMALL,
+                                    relief="flat", insertbackground=TEXT, highlightthickness=1,
+                                    highlightbackground=BORDER, highlightcolor=ACCENT)
+        self.video_entry.pack(side="left", fill="x", expand=True, padx=(10, 6), ipady=3)
+        self.video_entry.bind("<Return>", lambda e: self.show_video())
+        self.btn_video = ttk.Button(vid, text="Show", width=7, command=self.toggle_video)
+        self.btn_video.pack(side="right")
+        self._video_hint()
 
         # the macro: its name, size and file buttons
         mac = tk.Frame(body, bg=PANEL)
@@ -1254,6 +1288,17 @@ class ModernMacroRecorder(core.MacroRecorder):
         holder = ttk.Frame(f)
         holder.pack(fill="x", pady=(12, 0))
         self._build_resolution_ui(holder)
+        self._section(f, "VIDEO WINDOW")
+        row = self._row(f, "Clicks go through it", "so the macro and the game don't notice it")
+        box = ttk.Combobox(row, width=24, state="readonly", textvariable=self.video_through_var,
+                           values=VIDEO_THROUGH)
+        box.pack(side="right")
+        box.bind("<<ComboboxSelected>>", lambda e: (self._save_settings(), self._video_mode()))
+        row = self._row(f, "See-through", "lower shows more of the game")
+        scale = ttk.Scale(row, from_=20, to=100, length=160, variable=self.video_opacity_var,
+                          command=lambda v: self._video_opacity())
+        scale.pack(side="right")
+        scale.bind("<ButtonRelease-1>", lambda e: self._save_settings())
 
     def _build_about_tab(self, f):
         tk.Label(f, text="Macro Recorder", bg=BG, fg=TEXT, font=(FAMILY, 14, "bold"), anchor="w").pack(fill="x")
@@ -1459,6 +1504,8 @@ class ModernMacroRecorder(core.MacroRecorder):
         for b in (self.btn_save, self.btn_load, self.btn_edit, self.btn_clear):
             b.config(state="disabled" if busy else "normal")
         self.speed_box.config(state="disabled" if busy else "normal")
+        # opening the video takes the keyboard for a moment, so not while a macro runs (closing is fine)
+        self.btn_video.config(state="disabled" if busy and not self.video.is_open() else "normal")
         self.repeat_box.config(state="disabled" if busy else "normal")
         self.loop_switch.set_enabled(not busy)
         self.name_entry.config(state="disabled" if busy else "normal", disabledbackground=self.name_entry.cget("bg"),
@@ -1483,6 +1530,7 @@ class ModernMacroRecorder(core.MacroRecorder):
             self.statusbar_label.config(text="")
         if hasattr(self, "bg_animate_var"):
             self._apply_animation()
+        self._video_mode()
         for b in (getattr(self, "backdrop", None), getattr(self, "settings_backdrop", None)):
             if b is not None:
                 b.refresh()
@@ -1499,6 +1547,12 @@ class ModernMacroRecorder(core.MacroRecorder):
             s["record_mouse_moves"] = bool(self.rec_moves_var.get())
             s["mouse_detail"] = self.detail_var.get()
             s["play_overlay"] = bool(self.overlay_var.get())
+            if hasattr(self, "video_entry"):
+                s["video_link"] = self.video_link_text()
+                s["video_click_through"] = self.video_through_var.get()
+                s["video_opacity"] = int(self.video_opacity_var.get())
+                if self.video.rect:
+                    s["video_rect"] = [int(v) for v in self.video.rect]
             if hasattr(self, "bg_settings"):
                 for c in [self.bg_main, self.bg_settings] + list(self.bg_pages.values()):
                     c.save(s)
@@ -1651,6 +1705,111 @@ class ModernMacroRecorder(core.MacroRecorder):
             self._remember_macro(self.current_file)
             self._refresh()
         return ok
+
+    # ------------------------------------------------------------ the video window
+
+    def _video_hint(self):
+        """Grey "Paste a YouTube…" text in the empty link box (gone as soon as you click into it)."""
+        e = self.video_entry
+        self.video_hint_on = False
+
+        def show(_e=None):
+            if not self.video_var.get().strip() and self.root.focus_get() is not e:
+                self.video_hint_on = True
+                self.video_var.set(VIDEO_HINT)
+                e.config(fg=DIM)
+
+        def hide(_e=None):
+            if self.video_hint_on:
+                self.video_hint_on = False
+                self.video_var.set("")
+                e.config(fg=TEXT)
+        e.bind("<FocusIn>", hide, add="+")
+        e.bind("<FocusOut>", show, add="+")
+        show()
+
+    def video_link_text(self):
+        return "" if getattr(self, "video_hint_on", False) else self.video_var.get().strip()
+
+    def toggle_video(self):
+        if self.video.is_open():
+            self.close_video()
+        else:
+            self.show_video()
+
+    def show_video(self):
+        text = self.video_link_text()
+        link = video_overlay.parse_link(text)
+        if link is None:
+            messagebox.showinfo("Video", "Paste a YouTube link first, like\n"
+                                "https://www.youtube.com/watch?v=…  or  https://www.youtube.com/playlist?list=…",
+                                parent=self.root)
+            return
+        self.settings["video_link"] = text
+        self.video.opacity = self.video_opacity_var.get()
+        self.video.click_through = self._video_should_click_through()
+        if not self.video.open(link):
+            messagebox.showwarning("Video", self.video.error, parent=self.root)
+            return
+        self.btn_video.config(text="Close")
+        self._save_settings()
+        if self.video_job is None:
+            self.video_job = self.root.after(300, self._tick_video)
+
+    def close_video(self):
+        self.video.close()
+        self._video_closed()
+
+    def _video_closed(self):
+        if self.video_job is not None:
+            self.root.after_cancel(self.video_job)
+            self.video_job = None
+        self.btn_video.config(text="Show")
+        self._save_video_rect()
+
+    def _save_video_rect(self):
+        if self.video.rect and list(self.video.rect) != self.settings.get("video_rect"):
+            self.settings["video_rect"] = [int(v) for v in self.video.rect]
+            self._save_settings()
+
+    def _tick_video(self):
+        """About twice a second while the video window is open: keep it on top, switch clicking
+        through it on or off, and notice when it gets closed with its X."""
+        self.video_job = None
+        if not self.video.poll():
+            self._video_closed()
+            return
+        self._video_mode()
+        n = getattr(self, "video_ticks", 0) + 1
+        self.video_ticks = n
+        if n % 20 == 0:  # remember where it is and how big, every 10 seconds
+            self._save_video_rect()
+        self.video_job = self.root.after(500, self._tick_video)
+
+    def _video_should_click_through(self):
+        if self.video_through_var.get() == "Always":
+            return True
+        if self.recording:
+            return not self.paused
+        if self.playing:
+            return self.play_paused_at is None  # paused: you can use the video's buttons again
+        return False
+
+    def _video_mode(self):
+        if hasattr(self, "video") and self.video.is_open():
+            want = self._video_should_click_through()
+            if want != self.video.click_through:
+                self.video.set_click_through(want)
+
+    def _video_opacity(self):
+        self.video.set_opacity(self.video_opacity_var.get())
+
+    def _on_close(self):
+        try:
+            self.video.close(wait=True)
+        except Exception:
+            pass
+        super()._on_close()
 
     # ------------------------------------------------------------ saved macros (◀ ▶ quick switch)
 
