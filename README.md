@@ -73,8 +73,8 @@ screen shows the countdown, then "Playing" with how long it's been going, the ru
 keys that pause and stop it. It stays there even when the app is minimized, and clicks go straight
 through it (on Windows). Turn it off in Settings > Playback.
 
-**Video over the game:** paste a YouTube video or playlist link into the **Video** row (under
-Saved macros) and click **Show**. The video plays with sound in a small window that always stays on
+**Video over the game:** paste a YouTube video link into the **Video** row (under Saved macros)
+and click **Show**. Playlists aren't supported, only single videos (the red note under the row). The video plays with sound in a small window that always stays on
 top of the game. Move it by its title bar and resize it by dragging its edges; it remembers its size
 and place. While a macro records or plays, clicks go straight through it and it never takes the
 keyboard, so the macro isn't affected (pause the macro to use the video's own buttons). **Close**

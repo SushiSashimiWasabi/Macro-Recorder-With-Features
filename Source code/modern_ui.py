@@ -775,7 +775,7 @@ class ModernMacroRecorder(core.MacroRecorder):
 
         # a YouTube video or playlist in a window over the game
         vid = tk.Frame(body, bg=PANEL)
-        vid.pack(fill="x", pady=(0, 8))
+        vid.pack(fill="x", pady=(0, 2))
         tk.Label(vid, text="Video", bg=PANEL, fg=MUTED, font=F_SMALL).pack(side="left")
         self.video_entry = tk.Entry(vid, textvariable=self.video_var, bg=FIELD, fg=TEXT, font=F_SMALL,
                                     relief="flat", insertbackground=TEXT, highlightthickness=1,
@@ -785,6 +785,8 @@ class ModernMacroRecorder(core.MacroRecorder):
         self.btn_video = ttk.Button(vid, text="Show", width=7, command=self.toggle_video)
         self.btn_video.pack(side="right")
         self._video_hint()
+        tk.Label(body, text="Playlists aren't supported, only single videos.", bg=PANEL, fg=RED,
+                 font=F_SMALL, anchor="w").pack(fill="x", pady=(0, 8))
 
         # the macro: its name, size and file buttons
         mac = tk.Frame(body, bg=PANEL)
