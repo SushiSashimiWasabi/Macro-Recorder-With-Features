@@ -9,7 +9,7 @@ file and send it to friends.
 | --- | --- |
 | `Complete build version\MacroRecorder.exe` | The finished app, always the newest build. This is the one to use and send to friends. |
 | `saved macro file\` | Your own macros. |
-| `Source code\` | The Python code (`macro_recorder.py`, `modern_ui.py` (the window), `backdrop.py` (background pictures), `background.py`, `importers.py`, `image_watch.py`), `requirements.txt`, and `bg_test.py` for testing background playback. |
+| `Source code\` | The Python code (`macro_recorder.py`, `modern_ui.py` (the window), `backdrop.py` (background pictures), `sounds.py` (sounds), `background.py`, `importers.py`, `image_watch.py`), `requirements.txt`, and `bg_test.py` for testing background playback. |
 | `build.bat` | Builds a new `MacroRecorder.exe` from the source code. |
 | `run.bat` | Runs the app straight from the source code, without building. |
 | `build_mac.sh`, `run_mac.sh` | The same two for a Mac (they only work on a Mac). |
@@ -77,18 +77,26 @@ through it (on Windows). Turn it off in Settings > Playback.
 it's holding and waits; press it again to carry on from the same spot.
 
 **Settings** (top right) has tabs:
-- **General:** hotkeys, sounds and their volume, status bar, keep the window on top, link .macro files.
+- **General:** hotkeys, status bar, keep the window on top, link .macro files.
 - **Recording:** record mouse movement or not (clicks keep their position either way), and how
   detailed (Smooth, Normal, Light), and Clear.
 - **Playback:** countdown, top-of-screen timer, Play into, Screen size.
 - **Picture watch:** see below.
-- **Background:** put your own picture behind the window. **Add...** saves a picture (up to 5),
+- **Background:** put your own picture behind the window, also an animated `.gif`. **Add...** saves a picture (up to 5),
   and the **◀ ▶** arrows switch between your saved pictures (or none, the plain dark window).
   **Darkness** keeps text readable, **Fit** fills the window or shows the whole picture, and
   **Show which part** slides the picture (drag it or scroll the mouse wheel over it). The Settings
   window can use the same as the main window, its own picture and options, or a different one for
   each page. Pictures are kept in your settings folder, not inside the app, so the .exe you share
   doesn't include them.
+- **Sounds:** switch sounds on or off, set the volume, and choose what each thing sounds like
+  (recording starts/stops, playing starts/ends, paused, resumed, countdown, picture seen, button
+  click): **Default sound**, **No sound**, or **Choose a file...** for a `.wav` or `.mp3` of your
+  own. **Try** plays it. Your sounds are kept in your settings folder, not inside the app.
+
+An animated `.gif` background plays in the main and the Settings window. It stands still while a
+macro records or plays (so nothing disturbs the macro's timing), and **Play animated pictures**
+on the Background page switches the movement off altogether.
 
 **Edit...** lists every action of the macro with its time. Select rows and **Remove selected**
 (or press Delete), **Remove all mouse moves**, or **Cut the wait at the start**, then **Apply**.
@@ -96,7 +104,9 @@ Save afterwards to keep the changes in the file.
 
 ## Screen size (play a macro on a different resolution)
 
-**Only works in fullscreen.** Play the game fullscreen, on the main screen.
+**Some macros were recorded in fullscreen, so those only work in fullscreen** (play the game
+fullscreen, on the main screen). The app itself works properly in windowed mode too: a macro
+recorded in a window plays back fine in the same window.
 
 The **Screen size** box (Settings > Playback) has two choices:
 - **Macro recorded at:** the screen size the macro was recorded on. It's filled in by itself for

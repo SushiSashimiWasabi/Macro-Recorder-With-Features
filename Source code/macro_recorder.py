@@ -556,8 +556,10 @@ class MacroRecorder:
         self.play_on_box.grid(row=0, column=3, padx=4, sticky="w")
         for ev in ("<<ComboboxSelected>>", "<FocusOut>", "<Return>"):
             self.play_on_box.bind(ev, lambda e: self._read_play_on(quiet=True))
-        ttk.Label(box, text="Only works in fullscreen. The left box is filled in from the macro file and\n"
-                            "is usually right, so leave it. \"Your screen\" is found by itself (Auto).",
+        ttk.Label(box, text="Some macros were recorded in fullscreen, so those only work in fullscreen.\n"
+                            "The app itself works properly in windowed mode too.\n"
+                            "The left box is filled in from the macro file and is usually right, so leave it.\n"
+                            "\"Your screen\" is found by itself (Auto).",
                   foreground="#b00000", justify="left").grid(row=1, column=0, columnspan=4, sticky="w",
                                                              pady=(6, 0))
 
@@ -1206,6 +1208,9 @@ class MacroRecorder:
             self._refresh()
         self._call_ui(update)
 
+    def _picture_seen(self):
+        """The watched-for picture showed up (the dark window plays a sound here)."""
+
     def _set_note(self, text):
         def update():
             self.play_note = text
@@ -1349,6 +1354,7 @@ class MacroRecorder:
                         break
                     if seen.is_set():
                         seen.clear()
+                        self._call_ui(self._picture_seen)
                         if watch["click"] and watch.get("seen_at"):
                             self._set_note("Picture seen! Clicking it...")
                             self._click_at(*watch["seen_at"])

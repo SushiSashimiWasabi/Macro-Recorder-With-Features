@@ -14,23 +14,17 @@ Works on Windows and Mac (plain Tk, no extra packages).
 """
 
 import datetime
-import io
-import math
 import os
 import shutil
-import struct
-import subprocess
 import sys
-import tempfile
-import threading
 import time
 import tkinter as tk
-import wave
 from tkinter import filedialog, messagebox, ttk
 
 import backdrop
 import macro_recorder as core
 import platform_keys
+import sounds
 from macro_recorder import (HOTKEY_ACTIONS, IS_MAC, IS_WIN, SCREEN_TARGET, SPEED_PRESETS, background,
                             format_speed, hotkey_name, image_watch, parse_speed)
 
@@ -283,59 +277,6 @@ class Card(tk.Frame):
             rounded_rect(c, 4, 4, 20, 20, 4, fill=col, outline="")
 
 
-# ---------------------------------------------------------------- sounds
-
-def _tone_wav(notes, volume):
-    """A short WAV (bytes) playing the notes [(frequency, ms), ...], softly faded in and out."""
-    rate = 22050
-    frames = bytearray()
-    for freq, ms in notes:
-        n = int(rate * ms / 1000)
-        fade = max(1, int(rate * 0.008))
-        for i in range(n):
-            env = min(1.0, i / fade, (n - i) / fade)
-            frames += struct.pack("<h", int(volume * env * 32767 * math.sin(2 * math.pi * freq * i / rate)))
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(rate)
-        w.writeframes(bytes(frames))
-    return buf.getvalue()
-
-
-SOUNDS = {
-    "record_start": [(660, 70), (880, 90)],
-    "record_stop": [(880, 70), (660, 90)],
-    "play_start": [(784, 60), (1046, 80)],
-    "play_end": [(1046, 60), (784, 60), (587, 90)],
-}
-VOLUMES = {"Quiet": 0.12, "Normal": 0.3, "Loud": 0.6}
-
-
-def play_sound(name, volume_name):
-    """Play one of SOUNDS without waiting for it (Windows: winsound, Mac: afplay)."""
-    volume = VOLUMES.get(volume_name, VOLUMES["Normal"])
-    data = _tone_wav(SOUNDS[name], volume)
-
-    def run():
-        try:
-            if IS_WIN:
-                import winsound
-
-                winsound.PlaySound(data, winsound.SND_MEMORY)
-            elif IS_MAC:
-                path = os.path.join(tempfile.gettempdir(), f"macrorecorder_{name}_{volume_name}.wav")
-                if not os.path.exists(path):
-                    with open(path, "wb") as f:
-                        f.write(data)
-                subprocess.run(["afplay", path], check=False)
-        except Exception:
-            pass  # no sound is fine
-
-    threading.Thread(target=run, daemon=True).start()
-
-
 # ---------------------------------------------------------------- describing actions (Edit window)
 
 def key_label(data):
@@ -365,7 +306,6 @@ def describe(ev):
 
 
 MOUSE_DETAIL = {"Smooth": 0.01, "Normal": 0.025, "Light": 0.05}  # seconds between recorded moves
-VOLUME_NAMES = list(VOLUMES)
 
 
 # ---------------------------------------------------------------- the app
@@ -463,7 +403,7 @@ def format_clock(seconds):
 
 MAX_BACKGROUNDS = 5  # saved background pictures
 MAX_MACROS = 20  # saved macros for the ◀ ▶ quick switch
-SETTINGS_PAGES = ("General", "Recording", "Playback", "Picture watch", "Background", "About")
+SETTINGS_PAGES = ("General", "Recording", "Playback", "Picture watch", "Background", "Sounds", "About")
 
 
 class BackgroundControls:
@@ -645,10 +585,12 @@ class BackgroundControls:
             return
         folder = os.path.dirname(core.settings_path())
         used = {e["file"] for e in lib}
-        fname = next(f"background_{i}.png" for i in range(1, 100) if f"background_{i}.png" not in used)
-        if not backdrop.store_picture(path, folder, fname):
+        used_stems = {os.path.splitext(f)[0] for f in used}
+        stem = next(f"background_{i}" for i in range(1, 100) if f"background_{i}" not in used_stems)
+        fname = backdrop.store_any(path, folder, stem)  # an animated .gif is kept as a .gif
+        if not fname:
             messagebox.showerror("Macro Recorder", "That file couldn't be opened as a picture.\n"
-                                 "Try a .png, .jpg, .bmp or .webp file.", parent=app.settings_win)
+                                 "Try a .png, .jpg, .gif, .bmp or .webp file.", parent=app.settings_win)
             return
         lib.append({"file": fname, "name": os.path.basename(path)})
         app.settings[self.prefix + "_picture"] = fname  # and use it here right away
@@ -715,8 +657,10 @@ class ModernMacroRecorder(core.MacroRecorder):
         self.target_var = tk.StringVar(value=SCREEN_TARGET)
         self.name_var = tk.StringVar(value="Untitled macro")
         self.sounds_var = tk.BooleanVar(value=bool(s.get("sounds", True)))
-        self.volume_var = tk.StringVar(value=s.get("sound_volume", "Normal")
-                                       if s.get("sound_volume") in VOLUMES else "Normal")
+        self.player = sounds.Player()
+        self.last_sound = 0.0
+        root.bind_all("<Button-1>", self._click_sound, add="+")
+        self.volume_var = tk.IntVar(value=sounds.volume_number(s.get("sound_volume", sounds.DEFAULT_VOLUME)))
         self.statusbar_var = tk.BooleanVar(value=bool(s.get("status_bar", True)))
         self.ontop_var = tk.BooleanVar(value=bool(s.get("always_on_top", True)))
         self.overlay_var = tk.BooleanVar(value=bool(s.get("play_overlay", True)))
@@ -842,6 +786,7 @@ class ModernMacroRecorder(core.MacroRecorder):
         # the settings window: one background for every page, or one for each page
         self.bg_per_page_var = tk.BooleanVar(value=bool(s.get("settings_background_per_page", False)))
         self.bg_page_var = tk.StringVar(value=SETTINGS_PAGES[0])
+        self.bg_animate_var = tk.BooleanVar(value=bool(s.get("background_animate", True)))
 
         def settings_controls(prefix):
             c = BackgroundControls(self, prefix, None, self._settings_page, same_as=self.bg_main)
@@ -888,6 +833,7 @@ class ModernMacroRecorder(core.MacroRecorder):
         watch = self.tab_frames["Picture watch"]
         self._build_watch_ui(watch)
         self._build_background_tab(self.tab_frames["Background"])
+        self._build_sounds_tab(self.tab_frames["Sounds"])
         self._build_about_tab(self.tab_frames["About"])
         self._recolor_notes(win)
         bottom = tk.Frame(win, bg=BG)
@@ -975,11 +921,6 @@ class ModernMacroRecorder(core.MacroRecorder):
                  bg=BG, fg=DIM, font=F_SMALL, anchor="w").pack(fill="x", pady=(4, 0))
 
         self._section(f, "INTERFACE")
-        self._switch_row(f, "Sounds", self.sounds_var, "beep when recording or playing starts and stops")
-        row = self._row(f, "Volume")
-        vol = ttk.Combobox(row, width=9, state="readonly", textvariable=self.volume_var, values=VOLUME_NAMES)
-        vol.pack(side="right")
-        vol.bind("<<ComboboxSelected>>", lambda e: (self._save_settings(), self._sound("play_start", force=True)))
         self._switch_row(f, "Status bar", self.statusbar_var, "shortcuts and options at the bottom",
                          command=lambda: (self._save_settings(), self._refresh()))
         self._switch_row(f, "Keep window on top", self.ontop_var,
@@ -994,6 +935,180 @@ class ModernMacroRecorder(core.MacroRecorder):
                 b.config(state="disabled")  # the preview must not take over your real app's files
                 tk.Label(f, text="Turned off in the preview, so your .macro files keep opening your real app.",
                          bg=BG, fg=DIM, font=F_SMALL, anchor="w").pack(fill="x")
+
+    # ------------------------------------------------------------ sounds
+
+    SOUND_DEFAULT, SOUND_OFF, SOUND_CHOOSE = "Default sound", "No sound", "Choose a file…"
+
+    def _build_sounds_tab(self, f):
+        self._section(f, "SOUNDS", first=True)
+        self._switch_row(f, "Sounds", self.sounds_var, "off = the app is completely quiet")
+        row = self._row(f, "Volume", "slide or scroll")
+        self.volume_label = tk.Label(row, bg=BG, fg=TEXT, font=F_SMALL, width=5, anchor="e")
+        self.volume_label.pack(side="right")
+        tk.Label(row, text="High", bg=BG, fg=MUTED, font=F_SMALL).pack(side="right")
+        vol = ttk.Scale(row, from_=0, to=100, length=170, command=lambda v: self._volume_moved(v))
+        vol.set(self.volume_var.get())
+        vol.pack(side="right", padx=6)
+        tk.Label(row, text="Low", bg=BG, fg=MUTED, font=F_SMALL).pack(side="right")
+        self.volume_scale = vol
+        # letting go of the bar plays a sound, so you hear how loud it is now
+        vol.bind("<ButtonRelease-1>", lambda e: self._volume_chosen())
+
+        def wheel(event):
+            step = 5 if (event.delta > 0 or event.num == 4) else -5  # wheel up = louder
+            vol.set(max(0, min(100, self.volume_var.get() + step)))
+            if getattr(self, "volume_job", None) is not None:
+                self.root.after_cancel(self.volume_job)
+            self.volume_job = self.root.after(250, self._volume_chosen)
+        for ev in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            vol.bind(ev, wheel)
+        self._volume_moved(self.volume_var.get())
+        self._section(f, "YOUR SOUNDS")
+        self.sound_vars, self.sound_boxes = {}, {}
+        for event, label, tip, _on in sounds.EVENTS:
+            row = self._row(f, label, tip or None)
+            box_var = tk.StringVar()
+            box = ttk.Combobox(row, width=24, state="readonly", textvariable=box_var)
+            box.pack(side="right")
+            box.bind("<<ComboboxSelected>>", lambda e, ev=event: self._sound_picked(ev))
+            link(row, "▶ Try", lambda ev=event: self._sound(ev, test=True), fg=TEXT,
+                 font=F_SMALL).pack(side="right", padx=(0, 10))
+            self.sound_vars[event], self.sound_boxes[event] = box_var, box
+        r = tk.Frame(f, bg=BG)
+        r.pack(fill="x", pady=(4, 0))
+        link(r, "Set all back to how they were", self._reset_sounds).pack(side="right")
+        tk.Label(f, text="Pick \"Choose a file…\" to use a sound of your own (.wav or .mp3). "
+                         "Your sounds stay on this computer.",
+                 bg=BG, fg=DIM, font=F_SMALL, anchor="w").pack(fill="x", pady=(6, 0))
+        self._show_sounds()
+
+    def _volume_moved(self, value):
+        self.volume_var.set(sounds.volume_number(value))
+        v = self.volume_var.get()
+        self.volume_label.config(text=f"{v}%" if v else "off")
+
+    def _volume_chosen(self):
+        self.volume_job = None
+        self._save_settings()
+        self._sound("play_start", test=True, even_if_off=True)
+
+    def sound_choice(self, event):
+        """What an event sounds like: {"mode": "default" / "off" / "custom", "file": stored file name,
+        "name": the name of the file you picked}."""
+        choices = self.settings.get("sound_choices")
+        if not isinstance(choices, dict):
+            choices = self.settings["sound_choices"] = {}
+        c = choices.get(event)
+        if not isinstance(c, dict) or c.get("mode") not in ("default", "off", "custom"):
+            c = choices[event] = {"mode": "default" if self._sound_on_at_first(event) else "off"}
+        return c
+
+    @staticmethod
+    def _sound_on_at_first(event):
+        return next((on for ev, _l, _t, on in sounds.EVENTS if ev == event), True)
+
+    def _sound_folder(self):
+        return os.path.join(os.path.dirname(core.settings_path()), "sounds")
+
+    def _sound_file(self, event):
+        """Your own sound file for an event ("" = there isn't one)."""
+        name = self.sound_choice(event).get("file") or ""
+        path = os.path.join(self._sound_folder(), os.path.basename(name)) if name else ""
+        return path if path and os.path.isfile(path) else ""
+
+    def _show_sounds(self):
+        for event, box in self.sound_boxes.items():
+            c = self.sound_choice(event)
+            own = short(c.get("name") or "", 30) if self._sound_file(event) else ""
+            values = [self.SOUND_DEFAULT, self.SOUND_OFF] + ([own] if own else []) + [self.SOUND_CHOOSE]
+            box.config(values=values)
+            mode = c["mode"] if (c["mode"] != "custom" or own) else "default"
+            self.sound_vars[event].set({"default": self.SOUND_DEFAULT, "off": self.SOUND_OFF}.get(mode, own))
+
+    def _sound_picked(self, event):
+        picked = self.sound_vars[event].get()
+        self.sound_boxes[event].selection_clear()
+        c = self.sound_choice(event)
+        if picked == self.SOUND_CHOOSE:
+            self._show_sounds()  # (the box shows what it was while the file window is open)
+            self._choose_sound(event)
+            return
+        if picked == self.SOUND_DEFAULT:
+            c["mode"] = "default"
+        elif picked == self.SOUND_OFF:
+            c["mode"] = "off"
+        else:
+            c["mode"] = "custom"
+        self._save_settings()
+        self._show_sounds()
+        if picked != self.SOUND_OFF:
+            self._sound(event, test=True)
+
+    def _choose_sound(self, event):
+        path = filedialog.askopenfilename(parent=self.settings_win, title="Choose a sound",
+                                          filetypes=sounds.SOUND_TYPES)
+        if not path:
+            return
+        if not self.player.can_play(path):
+            messagebox.showerror("Macro Recorder", "That file couldn't be played as a sound.\n"
+                                 "Try a .wav or .mp3 file.", parent=self.settings_win)
+            return
+        c = self.sound_choice(event)
+        folder = self._sound_folder()
+        stored = event + os.path.splitext(path)[1].lower()
+        try:
+            self.player.stop()  # lets go of the old file, so it can be replaced
+            os.makedirs(folder, exist_ok=True)
+            old = self._sound_file(event)
+            if old and os.path.basename(old) != stored:
+                os.remove(old)
+            shutil.copyfile(path, os.path.join(folder, stored))
+        except OSError as exc:
+            messagebox.showerror("Macro Recorder", f"Couldn't copy the sound:\n{exc}", parent=self.settings_win)
+            return
+        c.update(mode="custom", file=stored, name=os.path.basename(path))
+        self._save_settings()
+        self._show_sounds()
+        self._sound(event, test=True)
+
+    def _reset_sounds(self):
+        """Every event back to its built-in beep (or silence, for the ones that start silent).
+        Your own files stay in the lists, so you can pick them again."""
+        for event in sounds.EVENT_IDS:
+            self.sound_choice(event)["mode"] = "default" if self._sound_on_at_first(event) else "off"
+        self._save_settings()
+        self._show_sounds()
+
+    def _sound(self, name, test=False, even_if_off=False):
+        """Play an event's sound. test: also when Sounds is switched off (the Try buttons);
+        even_if_off: an event set to "No sound" plays its beep (to hear the volume)."""
+        if not (test or self.sounds_var.get()):
+            return
+        mode = self.sound_choice(name)["mode"]
+        if mode == "off" and not even_if_off:
+            return
+        self.last_sound = time.perf_counter()
+        volume = self.volume_var.get()
+        path = self._sound_file(name) if mode == "custom" else ""
+        if path:
+            self.player.play_file(path, volume, fallback=name)
+        else:
+            self.player.beep(name, volume)
+
+    def _click_sound(self, event):
+        """A click on a button, switch or link in this app (if "Button click" has a sound)."""
+        if not self.sounds_var.get() or self.sound_choice("click")["mode"] == "off":
+            return
+        w = event.widget
+        try:
+            clickable = w.winfo_class() in ("TButton", "TCheckbutton") or str(w.cget("cursor")) == "hand2"
+        except (AttributeError, tk.TclError):
+            return
+        asked = time.perf_counter()
+        if clickable and asked - self.last_sound > 0.05:
+            # the click's own sound (say, "Recording starts") goes first
+            self.root.after(30, lambda: self._sound("click") if self.last_sound < asked else None)
 
     # ------------------------------------------------------------ background picture
 
@@ -1020,6 +1135,10 @@ class ModernMacroRecorder(core.MacroRecorder):
             frame = tk.Frame(holder, bg=BG)
             c.build(frame)
             self.bg_frames[c] = frame
+        self._section(f, "ANIMATED PICTURES (.GIF)")
+        self._switch_row(f, "Play animated pictures", self.bg_animate_var,
+                         "they stand still while recording or playing",
+                         command=lambda: (self._save_settings(), self._apply_animation()))
         tk.Label(f, text="Darker = easier to read. Your pictures stay on this computer.",
                  bg=BG, fg=DIM, font=F_SMALL, anchor="w").pack(fill="x", pady=(10, 0))
         if not backdrop.AVAILABLE:
@@ -1080,7 +1199,16 @@ class ModernMacroRecorder(core.MacroRecorder):
         self._bg_show_controls()
         self._apply_background()
 
+    def _apply_animation(self):
+        """Animated pictures play, unless that's switched off or a macro is recording or playing
+        (then nothing else is going on in the app, so the macro's timing stays exact)."""
+        for b in (getattr(self, "backdrop", None), getattr(self, "settings_backdrop", None)):
+            if b is not None:
+                b.set_animate(self.bg_animate_var.get())
+                b.set_paused(self.recording or self.playing)
+
     def _apply_background(self):
+        self._apply_animation()
         self.bg_main.apply()
         self._settings_bg_controls().apply()
         for c in [self.bg_settings] + list(self.bg_pages.values()):
@@ -1353,6 +1481,8 @@ class ModernMacroRecorder(core.MacroRecorder):
             self.statusbar_label.config(text="   ·   ".join(bits))
         else:
             self.statusbar_label.config(text="")
+        if hasattr(self, "bg_animate_var"):
+            self._apply_animation()
         for b in (getattr(self, "backdrop", None), getattr(self, "settings_backdrop", None)):
             if b is not None:
                 b.refresh()
@@ -1363,7 +1493,7 @@ class ModernMacroRecorder(core.MacroRecorder):
         if hasattr(self, "sounds_var"):
             s = self.settings
             s["sounds"] = bool(self.sounds_var.get())
-            s["sound_volume"] = self.volume_var.get()
+            s["sound_volume"] = int(self.volume_var.get())
             s["status_bar"] = bool(self.statusbar_var.get())
             s["always_on_top"] = bool(self.ontop_var.get())
             s["record_mouse_moves"] = bool(self.rec_moves_var.get())
@@ -1373,15 +1503,12 @@ class ModernMacroRecorder(core.MacroRecorder):
                 for c in [self.bg_main, self.bg_settings] + list(self.bg_pages.values()):
                     c.save(s)
                 s["settings_background_per_page"] = bool(self.bg_per_page_var.get())
+                s["background_animate"] = bool(self.bg_animate_var.get())
             try:
                 s["repeat_count"] = max(1, min(9999, int(self.repeat_var.get())))
             except (tk.TclError, ValueError):
                 pass
         super()._save_settings()
-
-    def _sound(self, name, force=False):
-        if force or self.sounds_var.get():
-            play_sound(name, self.volume_var.get())
 
     # ------------------------------------------------------------ actions with sounds and notes
 
@@ -1437,7 +1564,10 @@ class ModernMacroRecorder(core.MacroRecorder):
     def toggle_pause(self):
         """While recording: pause the recording. While playing: pause playback, or go on."""
         if not self.playing:
+            was = self.paused
             super().toggle_pause()
+            if self.recording and self.paused != was:
+                self._sound("pause" if self.paused else "resume")
             return
         if self.countdown_left > 0:
             return
@@ -1446,12 +1576,22 @@ class ModernMacroRecorder(core.MacroRecorder):
             if self.held_now is not None:
                 # let go of everything, so the character doesn't keep walking while paused
                 self._release_held(None, *self.held_now)
-            self._sound("record_stop")
+            self._sound("pause")
         else:
             self.play_pause_total += time.perf_counter() - self.play_paused_at
             self.play_paused_at = None
-            self._sound("record_start")
+            self._sound("resume")
         self._refresh()
+
+    def _set_countdown(self, seconds):
+        def tick():  # (not for the first second: "Playing starts" is sounding then)
+            if 0 < seconds != self.countdown_left:
+                self._sound("countdown")
+        self._call_ui(tick)
+        super()._set_countdown(seconds)
+
+    def _picture_seen(self):
+        self._sound("picture_seen")
 
     def _tick_overlay(self):
         """Keep the top-of-screen timer up to date while playing (every quarter second)."""
