@@ -203,6 +203,18 @@ in the main window (up to 20). Click **◀** or **▶** to switch straight to th
 **Remove** only takes the open macro off that list; the file itself is never deleted. Files that
 were moved or deleted are skipped, and the app asks first if the open macro has unsaved changes.
 
+## Updates
+
+When the app starts, it checks this project's newest GitHub Release. If there's a newer version,
+it asks first, then downloads it, puts it in place of the old `MacroRecorder.exe` (or
+`MacroRecorder.app` on a Mac) and restarts. It never updates in the middle of recording or
+playing. Turn the check off, or check by hand, in **Settings > About > Updates**. Your settings
+and macros are kept. Versions from before 2.1 can't update themselves: download 2.1 once from
+the Releases page.
+
+For the developer: raise `APP_VERSION` in `Source code\version.py` and push to `main`. GitHub
+then builds Windows and Mac and publishes them as Release `v<version>`.
+
 ## Open macros from other programs
 
 **Open...** (or dragging a file onto `MacroRecorder.exe`) also reads macros saved by other recorders.

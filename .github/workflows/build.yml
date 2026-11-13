@@ -1,6 +1,10 @@
 # Builds the app for Windows and Mac on GitHub's computers, every time code is pushed
 # (or by hand: Actions > Build > Run workflow). The results are on the run's page, under
 # "Artifacts": MacroRecorder-Windows, MacroRecorder-Mac-AppleSilicon, MacroRecorder-Mac-Intel.
+#
+# Releases: when APP_VERSION in "Source code/version.py" is a version that has no Release yet,
+# a push to main also publishes the builds as Release v<version>. Every copy of the app checks
+# the latest Release when it starts and offers to install it.
 name: Build
 
 on:
@@ -47,8 +51,42 @@ jobs:
       - name: Build MacroRecorder.app
         run: bash build_mac.sh
       - name: Zip it (keeps the app bundle intact)
-        run: ditto -c -k --keepParent "Mac build version/MacroRecorder.app" MacroRecorder-Mac.zip
+        run: ditto -c -k --keepParent "Mac build version/MacroRecorder.app" MacroRecorder-Mac-${{ matrix.label }}.zip
       - uses: actions/upload-artifact@v4
         with:
           name: MacroRecorder-Mac-${{ matrix.label }}
-          path: MacroRecorder-Mac.zip
+          path: MacroRecorder-Mac-${{ matrix.label }}.zip
+
+  release:
+    # only from main, and only when every build worked
+    if: github.ref == 'refs/heads/main'
+    needs: [windows, mac]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read the version
+        id: ver
+        run: |
+          v=$(sed -n 's/^APP_VERSION *= *"\(.*\)"/\1/p' "Source code/version.py" | tr -d '\r')
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          if gh release view "v$v" >/dev/null 2>&1; then echo "exists=yes" >> "$GITHUB_OUTPUT"; else echo "exists=no" >> "$GITHUB_OUTPUT"; fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        if: steps.ver.outputs.exists == 'no'
+        with:
+          path: builds
+          merge-multiple: true
+      - name: Publish Release v${{ steps.ver.outputs.version }}
+        if: steps.ver.outputs.exists == 'no'
+        run: |
+          ls -l builds
+          gh release create "v${{ steps.ver.outputs.version }}" \
+            --title "Macro Recorder ${{ steps.ver.outputs.version }}" \
+            --notes "$(git log -1 --format=%B | grep -v '^Co-Authored-By:')" \
+            --target "${{ github.sha }}" \
+            builds/MacroRecorder.exe builds/MacroRecorder-Mac-AppleSilicon.zip builds/MacroRecorder-Mac-Intel.zip
+        env:
+          GH_TOKEN: ${{ github.token }}

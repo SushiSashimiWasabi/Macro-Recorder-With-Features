@@ -3,3 +3,4 @@ numpy
 opencv-python-headless
 mss
 pyobjc-framework-WebKit; sys_platform == "darwin"
+certifi; sys_platform == "darwin"

@@ -29,7 +29,8 @@ import video_overlay
 from macro_recorder import (HOTKEY_ACTIONS, IS_MAC, IS_WIN, SCREEN_TARGET, SPEED_PRESETS, background,
                             format_speed, hotkey_name, image_watch, parse_speed)
 
-APP_VERSION = "2.0"
+import updater
+from version import APP_VERSION
 
 # ---------------------------------------------------------------- look
 
@@ -667,6 +668,11 @@ class ModernMacroRecorder(core.MacroRecorder):
         self.statusbar_var = tk.BooleanVar(value=bool(s.get("status_bar", True)))
         self.ontop_var = tk.BooleanVar(value=bool(s.get("always_on_top", True)))
         self.overlay_var = tk.BooleanVar(value=bool(s.get("play_overlay", True)))
+        self.update_check_var = tk.BooleanVar(value=bool(s.get("check_updates", True)))
+        self.update_status_var = tk.StringVar(value="")
+        # the status text sits on the Settings picture: give it its piece again whenever it changes
+        self.update_status_var.trace_add("write", lambda *a: self.root.after_idle(self._settings_text_changed))
+        self.update_busy = False
         self.overlay = None
         self.overlay_job = None
         self.play_began = None
@@ -1305,7 +1311,15 @@ class ModernMacroRecorder(core.MacroRecorder):
     def _build_about_tab(self, f):
         tk.Label(f, text="Macro Recorder", bg=BG, fg=TEXT, font=(FAMILY, 14, "bold"), anchor="w").pack(fill="x")
         tk.Label(f, text=f"Version {APP_VERSION}" + (" (preview)" if self.preview else ""), bg=BG, fg=MUTED,
-                 font=F_BASE, anchor="w").pack(fill="x", pady=(2, 10))
+                 font=F_BASE, anchor="w").pack(fill="x", pady=(2, 4))
+        page = f"https://github.com/{updater.REPO}"
+
+        def open_page():
+            import webbrowser
+            webbrowser.open(page)
+        gh = link(f, "GitHub page: " + page.replace("https://", ""), open_page, fg=ACCENT)
+        gh.config(anchor="w")
+        gh.pack(fill="x", pady=(0, 10))
         tk.Label(f, justify="left", bg=BG, fg=MUTED, font=F_BASE, anchor="w", text=(
             "Records your mouse and keyboard and plays them back.\n\n"
             "Opens .macro files, and also .luvmacro, TinyTask .rec, Jitbit .mcr\n"
@@ -1313,6 +1327,140 @@ class ModernMacroRecorder(core.MacroRecorder):
             "Settings are kept in:")).pack(fill="x")
         tk.Label(f, text=os.path.dirname(core.settings_path()), bg=BG, fg=TEXT, font=F_SMALL, anchor="w",
                  wraplength=420, justify="left").pack(fill="x", pady=(2, 0))
+        self._section(f, "UPDATES")
+        self._switch_row(f, "Check for updates when the app starts", self.update_check_var,
+                         "asks before installing")
+        row = tk.Frame(f, bg=BG)
+        row.pack(fill="x", pady=4)
+        self.btn_update = ttk.Button(row, text="Check now", command=lambda: self.check_for_update(manual=True))
+        self.btn_update.pack(side="left")
+        tk.Label(row, textvariable=self.update_status_var, bg=BG, fg=MUTED, font=F_SMALL, anchor="w",
+                 wraplength=330, justify="left").pack(side="left", fill="x", padx=(10, 0))
+
+    # ------------------------------------------------------------ updates from GitHub
+
+    def _settings_text_changed(self):
+        bd = getattr(self, "settings_backdrop", None)
+        if bd is not None:
+            try:
+                bd.text_changed()
+            except tk.TclError:
+                pass
+
+    def _in_background(self, work, done):
+        """Runs work() on a helper thread and done(result, error) back on the window's thread."""
+        import threading
+        box = {}
+
+        def run():
+            try:
+                box["result"] = work()
+            except Exception as e:
+                box["error"] = e
+            box["finished"] = True
+
+        def poll():
+            if box.get("finished"):
+                done(box.get("result"), box.get("error"))
+            else:
+                self.root.after(150, poll)
+
+        threading.Thread(target=run, daemon=True).start()
+        self.root.after(150, poll)
+
+    def check_for_update(self, manual=False):
+        if self.update_busy:
+            return
+        if not manual and getattr(self, "update_checked", False):
+            return  # "Check now" was already pressed since the app started
+        self.update_busy = True
+        self.update_checked = True
+        if manual:  # the startup check works quietly and never touches the text
+            self.update_status_var.set("Checking…")
+
+        def done(info, error):
+            self.update_busy = False
+            if error is not None:
+                if manual:
+                    self.update_status_var.set(str(error))
+                return
+            if info is None:
+                if manual:
+                    self.update_status_var.set(f"You have the newest version ({APP_VERSION}).")
+                return
+            self.update_status_var.set(f"Version {info['version']} is available.")
+            self._offer_update(info)
+
+        self._in_background(updater.check, done)
+
+    def _offer_update(self, info):
+        if self.recording or self.playing:  # never in the middle of a macro: ask once it's done
+            self.root.after(3000, lambda: self._offer_update(info))
+            return
+        parent = self.settings_win if self.settings_win.winfo_viewable() else self.root
+        notes = info["notes"]
+        if len(notes) > 600:
+            notes = notes[:600].rstrip() + "…"
+        text = f"Macro Recorder {info['version']} is out (you have {APP_VERSION})."
+        if notes:
+            text += "\n\nWhat's new:\n" + notes
+        if not updater.can_install():
+            messagebox.showinfo("Update available", text + "\n\nYou're running from the source code, so "
+                                "get it with git pull or from:\n" + info["page"], parent=parent)
+            return
+        text += "\n\nDownload and install it now? Macro Recorder will restart by itself."
+        if self.preview:
+            text += "\n\n(Preview: this replaces the preview exe.)"
+        if messagebox.askyesno("Update available", text, parent=parent):
+            self._install_update(info)
+
+    def _install_update(self, info):
+        self.update_busy = True
+        win = tk.Toplevel(self.root)
+        win.title("Updating Macro Recorder")
+        win.configure(bg=BG)
+        win.resizable(False, False)
+        win.attributes("-topmost", True)
+        win.protocol("WM_DELETE_WINDOW", lambda: None)  # finishes by itself
+        msg = tk.StringVar(value=f"Downloading version {info['version']}…")
+        tk.Label(win, textvariable=msg, bg=BG, fg=TEXT, font=F_BASE, padx=24, pady=18,
+                 width=40, anchor="w").pack()
+        dark_title_bar(win)
+        progress = {"done": 0, "total": info.get("size") or 0}
+        path = updater.download_path()
+
+        def tick():
+            if win.winfo_exists() and self.update_busy:
+                if progress.get("stage"):
+                    msg.set(progress["stage"])
+                elif progress["total"]:
+                    pct = int(progress["done"] * 100 / progress["total"])
+                    msg.set(f"Downloading version {info['version']}…  {pct}%")
+                win.after(200, tick)
+
+        def work():
+            updater.download(info, path, lambda d, t: progress.update(done=d, total=t or progress["total"]))
+            progress["stage"] = "Installing…"
+            return updater.install(path)
+
+        def done(proc, error):
+            self.update_busy = False
+            if error is not None:
+                try:
+                    if os.path.exists(path):
+                        os.remove(path)
+                except OSError:
+                    pass
+                win.destroy()
+                self.update_status_var.set(str(error))
+                messagebox.showerror("Update failed", f"{error}\n\nYour current version still works. "
+                                     f"You can also download it from:\n{info['page']}", parent=self.root)
+                return
+            msg.set("Restarting…")
+            self.root.after(300, self._on_close)
+
+        tick()
+        self._in_background(work, done)
 
     def open_settings(self, tab=None):
         if self.recording or self.playing:
@@ -1549,6 +1697,7 @@ class ModernMacroRecorder(core.MacroRecorder):
             s["record_mouse_moves"] = bool(self.rec_moves_var.get())
             s["mouse_detail"] = self.detail_var.get()
             s["play_overlay"] = bool(self.overlay_var.get())
+            s["check_updates"] = bool(self.update_check_var.get())
             if hasattr(self, "video_entry"):
                 s["video_link"] = self.video_link_text()
                 s["video_click_through"] = self.video_through_var.get()
@@ -1959,8 +2108,12 @@ def main(preview=False):
             core.mac_prepare_pynput()
         except Exception:
             pass
+    import threading
+    threading.Thread(target=updater.cleanup_old, daemon=True).start()  # leftover from an update
     root = tk.Tk()
     app = ModernMacroRecorder(root, preview=preview)
+    if app.update_check_var.get():
+        root.after(4000, app.check_for_update)
     if len(sys.argv) > 1 and os.path.isfile(sys.argv[1]):
         root.after(100, lambda: app.load(sys.argv[1]))
     if IS_MAC:
