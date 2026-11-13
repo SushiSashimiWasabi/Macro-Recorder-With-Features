@@ -22,6 +22,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 import backdrop
+import icon_picture
 import macro_recorder as core
 import platform_keys
 import sounds
@@ -722,11 +723,9 @@ class ModernMacroRecorder(core.MacroRecorder):
         root.resizable(False, False)
         root.attributes("-topmost", bool(s.get("always_on_top", True)))
         apply_theme(root)
-        try:
-            self.icon_img = app_icon()
-            root.iconphoto(True, self.icon_img)
-        except Exception:
-            pass
+        self.logo_same_var = tk.BooleanVar(value=bool(s.get("app_logo_same", False)))
+        self.icon_img = None
+        self._apply_app_icon()
         dark_title_bar(root)
 
         # settings that the old window kept on its main screen (used by playback)
@@ -784,9 +783,8 @@ class ModernMacroRecorder(core.MacroRecorder):
         # header: name of the app + settings
         head = tk.Frame(outer, bg=BG)
         head.pack(fill="x", padx=18, pady=(14, 10))
-        mark = tk.Canvas(head, width=30, height=30, bg=BG, highlightthickness=0)
-        rounded_rect(mark, 1, 1, 29, 29, 8, fill=ACCENT, outline="")
-        mark.create_oval(9, 9, 21, 21, fill="white", outline="")
+        mark = self.logo_canvas = tk.Canvas(head, width=30, height=30, bg=BG, highlightthickness=0)
+        self._draw_logo()
         mark.pack(side="left")
         tk.Label(head, text="Macro Recorder", bg=BG, fg=TEXT, font=F_TITLE).pack(side="left", padx=(10, 0))
         if self.preview:
@@ -948,8 +946,12 @@ class ModernMacroRecorder(core.MacroRecorder):
         bar = self.tab_bar = tk.Frame(win, bg=BG)
         bar.pack(fill="x", padx=14, pady=(10, 0))
         self.tab_labels = {}
-        self.tabs = ttk.Notebook(win, style="Flat.TNotebook")
-        self.tabs.pack(fill="both", expand=True, padx=8, pady=(6, 0))
+        # everything under the page names: the background picture fills all of it (full width,
+        # down to the bottom with the buttons); only the page names stay plain
+        self.settings_body = tk.Frame(win, bg=BG)
+        self.settings_body.pack(fill="both", expand=True, pady=(6, 0))
+        self.tabs = ttk.Notebook(self.settings_body, style="Flat.TNotebook")
+        self.tabs.pack(fill="both", expand=True, padx=8, pady=(4, 0))
         self.tab_frames = {}
         for name in SETTINGS_PAGES:
             f = ttk.Frame(self.tabs, padding=(18, 14))
@@ -983,7 +985,7 @@ class ModernMacroRecorder(core.MacroRecorder):
         self._build_sounds_tab(self.tab_frames["Sounds"])
         self._build_about_tab(self.tab_frames["About"])
         self._recolor_notes(win)
-        bottom = tk.Frame(win, bg=BG)
+        bottom = tk.Frame(self.settings_body, bg=BG)
         bottom.pack(fill="x", padx=18, pady=12)
         # "Done" while nothing changed; after a change: Undo (the last change), Reset (every change
         # since the window opened or Apply was last pressed) and Apply
@@ -999,8 +1001,8 @@ class ModernMacroRecorder(core.MacroRecorder):
         self._title_labels(win)
         # the background picture shows here too (darker behind the pages, as there's more text)
         self.settings_backdrop = backdrop.Backdrop(
-            win, see_through=(BG,), base_color=BG, glass=self.tabs, glass_color=BG, glass_mix=0.55,
-            area=self._settings_page,  # only behind the page, not the tabs or the Done button
+            win, see_through=(BG,), base_color=BG, glass=self.settings_body, glass_color=BG, glass_mix=0.55,
+            area=lambda: self.settings_body,  # everything but the page names
             lift_colors={DIM: MUTED, MUTED: "#c2c2cc"},
             skip=(self.tab_bar,) + ((self.title_bar,) if self.title_bar else ()))
         self.tabs.bind("<<NotebookTabChanged>>", lambda e: win.after(10, self._settings_tab_changed), add="+")
@@ -1113,6 +1115,7 @@ class ModernMacroRecorder(core.MacroRecorder):
                          command=lambda: (self._save_settings(), self._refresh()))
         self._switch_row(f, "Keep window on top", self.ontop_var,
                          command=lambda: (self._save_settings(), self._apply_on_top()))
+        self._build_icon_logo_rows(f)
         if IS_WIN:
             self._section(f, "FILES")
             row = self._row(f, "Open .macro files with a double-click")
@@ -1126,6 +1129,127 @@ class ModernMacroRecorder(core.MacroRecorder):
     # ------------------------------------------------------------ sounds
 
     SOUND_DEFAULT, SOUND_OFF, SOUND_CHOOSE = "Default sound", "No sound", "Choose a file…"
+
+    # ------------------------------------------------------------ app icon and logo
+
+    def _own_picture(self, key):
+        """The stored file of your own icon ("app_icon_file") or logo ("app_logo_file"), or ""."""
+        name = self.settings.get(key) or ""
+        if not isinstance(name, str) or os.path.basename(name) != name:
+            return ""
+        path = os.path.join(os.path.dirname(core.settings_path()), name)
+        return path if name and os.path.isfile(path) else ""
+
+    def _logo_file(self):
+        return self._own_picture("app_icon_file" if self.logo_same_var.get() else "app_logo_file")
+
+    @staticmethod
+    def _default_picture():
+        """The built-in picture for the icon and the logo (default_logo.png, bundled with the app)."""
+        path = core.resource_path("default_logo.png")
+        return path if os.path.isfile(path) else ""
+
+    def _apply_app_icon(self):
+        """The icon in the title bars and the taskbar: your own picture, or the built-in one."""
+        path = self._own_picture("app_icon_file") or self._default_picture()
+        imgs = []
+        if path:
+            for size in (64, 32, 16):
+                p = icon_picture.photo(tk, path, size, master=self.root)
+                if p is not None:
+                    imgs.append(p)
+        if not imgs:
+            imgs = [app_icon()]
+        self.icon_imgs = imgs
+        self.icon_img = imgs[0]
+        try:
+            self.root.iconphoto(True, *imgs)
+            for win in (self.settings_win, getattr(self, "edit_win", None)):
+                if win is not None and win.winfo_exists():
+                    win.iconphoto(False, *imgs)
+        except tk.TclError:
+            pass
+
+    def _draw_logo(self):
+        """The logo in front of "Macro Recorder": your own picture, or the built-in blue square."""
+        c = getattr(self, "logo_canvas", None)
+        if c is None:
+            return
+        c.delete("logo")
+        path = self._logo_file() or self._default_picture()
+        img = icon_picture.photo(tk, path, 30, master=self.root) if path else None
+        if img is not None:
+            self.logo_img = img
+            c.create_image(15, 15, image=img, tags="logo")
+        else:
+            self.logo_img = None
+            rounded_rect(c, 1, 1, 29, 29, 8, fill=ACCENT, outline="", tags="logo")
+            c.create_oval(9, 9, 21, 21, fill="white", outline="", tags="logo")
+        c.tag_raise("logo")
+
+    def _icon_logo_changed(self):
+        self._save_settings()
+        self._apply_app_icon()
+        self._draw_logo()
+        self._show_icon_logo()
+
+    def _choose_own_picture(self, key):
+        path = filedialog.askopenfilename(parent=self.settings_win, title="Choose a picture",
+                                          filetypes=icon_picture.PICTURE_TYPES)
+        if not path:
+            return
+        kind = "icon" if key == "app_icon_file" else "logo"
+        name = f"{kind}_{int(time.time() * 1000)}.png"  # a new file each time, so Undo can go back
+        if not icon_picture.store(path, os.path.join(os.path.dirname(core.settings_path()), name)):
+            messagebox.showerror("Macro Recorder", "That file couldn't be opened as a picture.\n"
+                                 "Try a .png, .jpg, .gif, .bmp, .webp or .ico file.", parent=self.settings_win)
+            return
+        self.settings[key] = name
+        self._icon_logo_changed()
+
+    def _default_own_picture(self, key):
+        self.settings[key] = ""
+        self._icon_logo_changed()
+
+    def _build_icon_logo_rows(self, f):
+        self._section(f, "ICON AND LOGO")
+        self.icon_rows = {}
+        for key, label, tip in (("app_icon_file", "App icon", "title bar and taskbar"),
+                                ("app_logo_file", "Logo", "in front of \"Macro Recorder\"")):
+            row = self._row(f, label, tip)
+            default = link(row, "Default", lambda k=key: self._default_own_picture(k))
+            default.pack(side="right")
+            choose = ttk.Button(row, text="Choose…", width=9, command=lambda k=key: self._choose_own_picture(k))
+            choose.pack(side="right", padx=(0, 10))
+            thumb = tk.Canvas(row, width=24, height=24, bg=BG, highlightthickness=0)
+            thumb.pack(side="right", padx=(0, 10))
+            self.icon_rows[key] = (thumb, choose, default)
+        self._switch_row(f, "Logo the same as the app icon", self.logo_same_var, command=self._icon_logo_changed)
+        tk.Label(f, text="Any picture works (.png, .jpg, .gif, .bmp, .webp, .ico). The exe file itself keeps "
+                         "its icon in File Explorer.", bg=BG, fg=DIM, font=F_SMALL, anchor="w",
+                 wraplength=520, justify="left").pack(fill="x", pady=(2, 0))
+        self._show_icon_logo()
+
+    def _show_icon_logo(self):
+        rows = getattr(self, "icon_rows", None)
+        if not rows:
+            return
+        same = self.logo_same_var.get()
+        self.icon_thumbs = []
+        for key, (thumb, choose, default) in rows.items():
+            thumb.delete("pic")
+            follows = key == "app_logo_file" and same
+            path = self._logo_file() if key == "app_logo_file" else self._own_picture(key)
+            path = path or self._default_picture()
+            img = icon_picture.photo(tk, path, 24, master=self.root) if path else None
+            if img is None:
+                img = app_icon(24)
+            self.icon_thumbs.append(img)
+            thumb.create_image(12, 12, image=img, tags="pic")
+            thumb.tag_raise("pic")
+            choose.config(state="disabled" if follows else "normal")
+            own = bool(self._own_picture(key)) and not follows
+            default.config(text="Default" if own else "", cursor="hand2" if own else "arrow")
 
     def _build_sounds_tab(self, f):
         self._section(f, "SOUNDS", first=True)
@@ -1809,7 +1933,8 @@ class ModernMacroRecorder(core.MacroRecorder):
                      "ready_seconds", "play_overlay", "play_resolution", "video_click_through", "video_opacity",
                      "watch_enabled", "watch_ignore_bg", "watch_click", "watch_wait", "watch_match",
                      "watch_end_wait", "watch_pictures", "sounds", "sound_volume", "sound_choices",
-                     "check_updates", "background_animate", "settings_background_per_page")
+                     "check_updates", "background_animate", "settings_background_per_page",
+                     "app_icon_file", "app_logo_file", "app_logo_same")
 
     def _is_page_setting(self, key):
         if key in self.PAGE_SETTINGS:
@@ -1919,6 +2044,7 @@ class ModernMacroRecorder(core.MacroRecorder):
                 (self.watch_end_var, core.int_setting(s, "watch_end_wait", 3, 0, 3600)),
                 (self.sounds_var, bool(s.get("sounds", True))),
                 (self.update_check_var, bool(s.get("check_updates", True))),
+                (self.logo_same_var, bool(s.get("app_logo_same", False))),
                 (self.bg_per_page_var, bool(s.get("settings_background_per_page", False))),
                 (self.bg_animate_var, bool(s.get("background_animate", True))),
                 (self.bg_fps_var, core.int_setting(s, "background_fps", 15, 5, 30)),
@@ -1957,6 +2083,9 @@ class ModernMacroRecorder(core.MacroRecorder):
         for c in [self.bg_main, self.bg_settings] + list(self.bg_pages.values()):
             c.load()
         self._apply_on_top()
+        self._apply_app_icon()
+        self._draw_logo()
+        self._show_icon_logo()
         self._video_opacity()
         self._video_mode()
         self._bg_show_controls()
@@ -1973,9 +2102,12 @@ class ModernMacroRecorder(core.MacroRecorder):
         self._refresh()
 
     def _pictures_in_use(self):
-        """(watch picture files, background picture files) in the lists right now."""
+        """(watch picture files, files in the settings folder: background pictures, own icon and logo)
+        in use right now."""
+        own = {self.settings.get(k) for k in ("app_icon_file", "app_logo_file")}
         return ({p["file"] for p in self.watch_pictures},
-                {e["file"] for e in self.bg_library() if isinstance(e, dict) and e.get("file")})
+                {e["file"] for e in self.bg_library() if isinstance(e, dict) and e.get("file")}
+                | {n for n in own if isinstance(n, str) and n})
 
     def _note_pictures(self):
         """Remember every picture file that was in a list while Settings was open."""
@@ -2221,6 +2353,7 @@ class ModernMacroRecorder(core.MacroRecorder):
             s["mouse_detail"] = self.detail_var.get()
             s["play_overlay"] = bool(self.overlay_var.get())
             s["check_updates"] = bool(self.update_check_var.get())
+            s["app_logo_same"] = bool(self.logo_same_var.get())
             try:
                 s["background_fps"] = max(5, min(30, int(self.bg_fps_var.get())))
             except (tk.TclError, ValueError):

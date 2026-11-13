@@ -15,7 +15,7 @@ EXCLUDE_FILES = ("opencv_videoio_ffmpeg",)
 a = Analysis(
     [entry],
     pathex=[here],
-    datas=[(os.path.join(here, "retry_default.png"), ".")],
+    datas=[(os.path.join(here, "retry_default.png"), "."), (os.path.join(here, "default_logo.png"), ".")],
     hiddenimports=["pynput.keyboard._win32", "pynput.mouse._win32"],
     excludes=EXCLUDE_MODULES,
 )
@@ -24,4 +24,4 @@ a.datas = [d for d in a.datas if not os.path.basename(d[0]).lower().startswith(E
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, a.binaries, a.datas, [],
           name="MacroRecorder_Preview" if preview_dir else "MacroRecorder",
-          console=False, upx=False)
+          console=False, upx=False, icon=os.path.join(here, "app_icon.ico"))

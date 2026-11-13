@@ -45,7 +45,7 @@ ANIM_MIN_SIDE = 320                  # frames aren't shrunk below this; frames a
 ANIM_MIN_MS = 40                     # quickest frame (25 a second)
 ANIM_CACHE_BYTES = 96 * 1024 * 1024  # finished frames kept ready per window (else made each time)
 
-FRAME_CLASSES = {"Frame", "TFrame", "Tk", "Toplevel", "Labelframe", "TLabelframe"}
+FRAME_CLASSES = {"Frame", "TFrame", "Tk", "Toplevel", "Labelframe", "TLabelframe", "TNotebook"}
 LABEL_CLASSES = {"Label", "TLabel"}
 
 
@@ -821,8 +821,10 @@ class Backdrop:
         under = tk.Label(w, bd=0, highlightthickness=0, padx=0, pady=0, bg=self.base)
         under._bd_under = True
         box = cls in ("Labelframe", "TLabelframe")
-        # a titled box: cover its outline too (it is drawn again on the piece)
-        under.place(x=0, y=0, relwidth=1, relheight=1, bordermode="outside" if box else "inside")
+        # a titled box: cover its outline too (it is drawn again on the piece); a ttk frame's
+        # padding counts as its border, so cover that as well (else it stays a plain dark band)
+        outside = box or cls.startswith("T") and cls not in ("Tk", "Toplevel")
+        under.place(x=0, y=0, relwidth=1, relheight=1, bordermode="outside" if outside else "inside")
         under.lower()
         self.items[w] = {"kind": "frame", "under": under, "box": box}
 

@@ -7,7 +7,7 @@ here = os.path.abspath(SPECPATH)
 a = Analysis(
     [os.path.join(here, "macro_recorder.py")],
     pathex=[here],
-    datas=[(os.path.join(here, "retry_default.png"), ".")],
+    datas=[(os.path.join(here, "retry_default.png"), "."), (os.path.join(here, "default_logo.png"), ".")],
     hiddenimports=["pynput.keyboard._darwin", "pynput.mouse._darwin", "WebKit", "AppKit", "Foundation", "certifi"],
 )
 pyz = PYZ(a.pure)

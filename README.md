@@ -105,6 +105,12 @@ it's holding and waits; press it again to carry on from the same spot.
   click): **Default sound**, **No sound**, or **Choose a file...** for a `.wav` or `.mp3` of your
   own. **Try** plays it. Your sounds are kept in your settings folder, not inside the app.
 
+**Icon and logo** (Settings > General): pick your own picture for the app icon (title bar and
+taskbar) and for the logo in front of "Macro Recorder" (.png, .jpg, .gif, .bmp, .webp or .ico).
+**Logo the same as the app icon** uses one picture for both, **Default** goes back to the built-in
+picture (`Source code\default_logo.png`, also the exe file's icon in File Explorer, from
+`app_icon.ico`). Your own picture can't change the exe file's icon in File Explorer.
+
 An animated `.gif` background plays in the main and the Settings window. It stands still while a
 macro records or plays (so nothing disturbs the macro's timing), and **Play animated pictures**
 on the Background page switches the movement off altogether. To keep it light for the computer:
