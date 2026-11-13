@@ -387,7 +387,8 @@ class PlayOverlay:
     see it's still going while the app is minimized. Mouse clicks go straight through it."""
 
     def __init__(self, root, screen_w):
-        self.win = win = tk.Toplevel(root, bg=BORDER)
+        # one dark colour all over (no grey frame, and no grey sides when the box is wider than its text)
+        self.win = win = tk.Toplevel(root, bg=PANEL)
         win.withdraw()
         win.overrideredirect(True)
         win.attributes("-topmost", True)
@@ -396,7 +397,7 @@ class PlayOverlay:
         except tk.TclError:
             pass
         inner = tk.Frame(win, bg=PANEL)
-        inner.pack(padx=1, pady=1)
+        inner.pack(fill="both", expand=True)
         top = tk.Frame(inner, bg=PANEL)
         top.pack(padx=14, pady=(7, 0))
         self.dot = tk.Canvas(top, width=12, height=12, bg=PANEL, highlightthickness=0)
