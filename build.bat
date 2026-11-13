@@ -5,12 +5,16 @@ cd /d "%~dp0"
 set "WORK=%TEMP%\MacroRecorder_build"
 set "OUT=Complete build version"
 py -m pip install -q --upgrade pyinstaller -r "Source code\requirements.txt" || goto :fail
-py -m PyInstaller --noconfirm --clean --onefile --windowed --name MacroRecorder ^
-  --distpath "%WORK%\dist" --workpath "%WORK%\work" --specpath "%WORK%" ^
-  --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32 ^
-  --add-data "%~dp0Source code\retry_default.png;." ^
-  "Source code\macro_recorder.py" || goto :fail
+rem the recipe (what goes into the exe, and what's left out) is in Source code\MacroRecorder_win.spec
+set "MR_PREVIEW="
+py -m PyInstaller --noconfirm --clean --distpath "%WORK%\dist" --workpath "%WORK%\work" ^
+  "Source code\MacroRecorder_win.spec" || goto :fail
 if not exist "%OUT%" mkdir "%OUT%"
+rem keep the version that's being replaced in "Previous version", to go back to it if needed
+if exist "%OUT%\MacroRecorder.exe" (
+  if not exist "Previous version" mkdir "Previous version"
+  copy /y "%OUT%\MacroRecorder.exe" "Previous version\MacroRecorder.exe" >nul
+)
 copy /y "%WORK%\dist\MacroRecorder.exe" "%OUT%\MacroRecorder.exe" >nul || goto :locked
 echo.
 echo Built "%OUT%\MacroRecorder.exe"

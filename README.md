@@ -8,6 +8,7 @@ file and send it to friends.
 | Folder or file | What it is |
 | --- | --- |
 | `Complete build version\MacroRecorder.exe` | The finished app, always the newest build. This is the one to use and send to friends. |
+| `Previous version\MacroRecorder.exe` | The build before the newest one, kept by `build.bat` to go back to if needed. |
 | `saved macro file\` | Your own macros. |
 | `Source code\` | The Python code (`macro_recorder.py`, `modern_ui.py` (the window), `backdrop.py` (background pictures), `sounds.py` (sounds), `background.py`, `importers.py`, `image_watch.py`), `requirements.txt`, and `bg_test.py` for testing background playback. |
 | `build.bat` | Builds a new `MacroRecorder.exe` from the source code. |
@@ -106,7 +107,9 @@ it's holding and waits; press it again to carry on from the same spot.
 
 An animated `.gif` background plays in the main and the Settings window. It stands still while a
 macro records or plays (so nothing disturbs the macro's timing), and **Play animated pictures**
-on the Background page switches the movement off altogether.
+on the Background page switches the movement off altogether. To keep it light for the computer:
+**Frame rate** (5 to 30 pictures a second, default 15), **Only animate the window you're looking at**
+and **Pause while another window is in front** (like the game), both on at first.
 
 **Edit...** lists every action of the macro with its time. Select rows and **Remove selected**
 (or press Delete), **Remove all mouse moves**, or **Cut the wait at the start**, then **Apply**.
@@ -200,7 +203,7 @@ There are three ways to open a macro:
 
 **Saved macros (quick switch):** every macro you open or save is added to the **Saved macros** row
 in the main window (up to 20). Click **◀** or **▶** to switch straight to the previous or next one.
-**Remove** only takes the open macro off that list; the file itself is never deleted. Files that
+**Remove** takes the open macro off that list and opens the next one (or an empty macro when the list is empty); the file itself is never deleted. Files that
 were moved or deleted are skipped, and the app asks first if the open macro has unsaved changes.
 
 ## Updates

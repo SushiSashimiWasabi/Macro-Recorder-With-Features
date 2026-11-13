@@ -921,9 +921,15 @@ class MacroRecorder:
         return screen
 
     def _make_matchers(self):
-        return [image_watch.Matcher(pic["img"], picked_screen_h=pic["screen_h"],
+        matchers = []
+        for pic in self.watch_pictures:
+            m = image_watch.Matcher(pic["img"], picked_screen_h=pic["screen_h"],
                                     ignore_background=bool(self.watch_bg_var.get()), screen_h=self.screen_h)
-                for pic in self.watch_pictures]
+            # where it was found last time (this session): the next playback looks there first
+            m.last_rect = pic.get("seen_rect")
+            m.picture_entry = pic
+            matchers.append(m)
+        return matchers
 
     def test_watch_picture(self):
         """Look at the screen once and say how well each picture matches right now."""
@@ -1265,16 +1271,28 @@ class MacroRecorder:
                 while not done.is_set():
                     started = time.perf_counter()
                     visible = False
-                    # most checks only try the size that matched before (fast); every 6th tries all sizes
-                    quick = checks % 6 != 0
+                    # Every check (about once a second) first looks only around the spot where each
+                    # picture was found before: a small part of the screen, so it's very light.
+                    # The whole screen is searched on every 5th check (or every check while a
+                    # picture was never found yet), trying all sizes on every 30th.
+                    all_sizes = checks % 30 == 0
+                    whole = all_sizes or checks % 5 == 0 or any(m.last_rect is None for m in matchers)
                     checks += 1
                     try:
-                        screen = self._hide_own_window(image_watch.grab_screen(sct), origin)
+                        region = None
+                        if not whole:  # only take the parts of the screen that are looked at
+                            areas = [m.near_last_area() for m in matchers]
+                            region = (min(a[0] for a in areas), min(a[1] for a in areas),
+                                      max(a[2] for a in areas), max(a[3] for a in areas))
+                        screen = self._hide_own_window(image_watch.grab_screen(sct, region), origin)
                         # any one of the pictures counts
                         for m in matchers:
-                            score, rect = m.find(screen, good_enough=need, quick=quick)
+                            score, rect = m.find_near_last(screen, good_enough=need)
+                            if score < need and whole:
+                                score, rect = m.find(screen, good_enough=need, quick=not all_sizes)
                             if score >= need:
                                 visible = True
+                                m.picture_entry["seen_rect"] = m.last_rect
                                 ox, oy = origin
                                 x, y, w, h = rect
                                 watch["seen_at"] = (ox + x + w // 2, oy + y + h // 2)  # its middle
@@ -1286,8 +1304,8 @@ class MacroRecorder:
                     elif visible and armed:
                         armed = False
                         seen.set()
-                    elif not visible and not quick:
-                        armed = True  # gone (checked at every size): it may count again next time
+                    elif not visible and whole:
+                        armed = True  # gone (the whole screen was checked): it may count again next time
                     # check about once a second; when a check is slow, rest at least as long as it
                     # took, so watching never uses more than about half of one CPU core
                     took = time.perf_counter() - started

@@ -160,6 +160,43 @@ def cleanup_old():
             time.sleep(0.5)
 
 
+def cleanup_leftover_unpacks():
+    """Run at start: the built app unpacks itself into a _MEI... folder in Temp each time it starts
+    (about 150 MB) and removes it when it closes. A copy that was force-closed or crashed leaves it
+    behind, so old ones of this app are removed here. A folder that's still in use (another copy
+    is running) is left alone: its Python DLL can't be opened for writing then."""
+    import glob
+    import shutil
+    own = getattr(sys, "_MEIPASS", None)
+    if not own:
+        return
+    temp = os.path.dirname(own)
+    try:
+        names = os.listdir(temp)
+    except OSError:
+        return
+    for name in names:
+        path = os.path.join(temp, name)
+        if not name.startswith("_MEI") or os.path.normcase(path) == os.path.normcase(own):
+            continue
+        # only this app's folders (it bundles retry_default.png), and not younger than a minute
+        if not os.path.isfile(os.path.join(path, "retry_default.png")):
+            continue
+        try:
+            if time.time() - os.path.getmtime(path) < 60:
+                continue
+            dlls = glob.glob(os.path.join(path, "python3*.dll"))
+            if not dlls:
+                continue
+            for dll in dlls:  # a running copy has these loaded: opening one for writing fails
+                open(dll, "r+b").close()
+            gone = path + ".old"
+            os.rename(path, gone)
+        except OSError:
+            continue
+        shutil.rmtree(gone, ignore_errors=True)
+
+
 def install_windows(new_file, exe=None):
     """Puts new_file in place of the running exe and starts it. Windows lets a running exe be
     renamed (not overwritten), so: exe -> exe.old, new -> exe, start exe. The new copy deletes

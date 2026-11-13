@@ -26,10 +26,7 @@ jobs:
         shell: cmd
         run: |
           py -m pip install --upgrade pyinstaller -r "Source code\requirements.txt" || exit /b 1
-          py -m PyInstaller --noconfirm --clean --onefile --windowed --name MacroRecorder ^
-            --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32 ^
-            --add-data "Source code\retry_default.png;." ^
-            "Source code\macro_recorder.py"
+          py -m PyInstaller --noconfirm --clean "Source code\MacroRecorder_win.spec"
       - uses: actions/upload-artifact@v4
         with:
           name: MacroRecorder-Windows

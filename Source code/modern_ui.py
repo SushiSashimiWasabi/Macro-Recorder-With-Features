@@ -80,7 +80,10 @@ def apply_theme(root):
     style.map(".", foreground=[("disabled", DIM)], fieldbackground=[("disabled", BG)])
     style.configure("TFrame", background=BG)
     style.configure("TLabel", background=BG, foreground=TEXT)
-    style.configure("TLabelframe", background=BG, bordercolor=BORDER, relief="solid")
+    # boxes with a title show just the title, like the other sections (no frame line around them)
+    style.configure("TLabelframe", background=BG, bordercolor=BG, lightcolor=BG, darkcolor=BG, relief="flat",
+                    borderwidth=0)
+    style.layout("TLabelframe", [])  # nothing drawn: no frame line
     style.configure("TLabelframe.Label", background=BG, foreground=MUTED, font=F_SECTION)
     style.configure("TButton", background=CARD, foreground=TEXT, padding=(12, 5), relief="flat",
                     bordercolor=BORDER)
@@ -100,6 +103,11 @@ def apply_theme(root):
         style.map(name, fieldbackground=[("readonly", FIELD), ("disabled", BG)],
                   foreground=[("disabled", DIM)], bordercolor=[("focus", ACCENT)])
     style.configure("TNotebook", background=BG, borderwidth=0, tabmargins=(12, 6, 12, 0))
+    # the Settings window draws its own page names, so this notebook has no tabs and no frame line
+    style.layout("Flat.TNotebook.Tab", [])
+    style.layout("Flat.TNotebook", [("Notebook.client", {"sticky": "nswe"})])
+    style.configure("Flat.TNotebook", background=BG, borderwidth=0, bordercolor=BG, lightcolor=BG,
+                    darkcolor=BG, tabmargins=0, padding=0)
     style.configure("TNotebook.Tab", background=BG, foreground=MUTED, padding=(14, 6), borderwidth=0,
                     font=(FAMILY, 10))
     style.map("TNotebook.Tab", background=[("selected", BG)], foreground=[("selected", TEXT)],
@@ -136,6 +144,66 @@ def dark_title_bar(win):
                 break
     except Exception:
         pass
+
+
+TITLE_BG = "#1d2125"  # Windows 11's dark title bar
+CLOSE_HOVER = "#c42b1c"  # Windows 11's red behind the Close X
+
+
+def only_close_button(win):
+    """Windows: no Minimize or Maximize button, just Close (Windows' own title bar)."""
+    if not IS_WIN:
+        return
+    try:
+        import ctypes
+
+        win.update_idletasks()
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetParent(win.winfo_id())
+        style = user32.GetWindowLongW(hwnd, -16)  # GWL_STYLE
+        new = style & ~0x00020000 & ~0x00010000  # WS_MINIMIZEBOX, WS_MAXIMIZEBOX
+        if new != style:
+            user32.SetWindowLongW(hwnd, -16, new)
+            # SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
+            user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x20 | 0x2 | 0x1 | 0x4 | 0x10)
+    except Exception:
+        pass
+
+
+def build_title_bar(win, title, icon, on_close):
+    """A title bar that looks like Windows 11's dark one, with only the Close button."""
+    import tkinter.font as tkfont
+    bar = tk.Frame(win, bg=TITLE_BG, height=30)
+    bar.pack(fill="x", side="top")
+    bar.pack_propagate(False)
+    glyph_font = next(((f, 8) for f in ("Segoe Fluent Icons", "Segoe MDL2 Assets") if f in tkfont.families()),
+                      None)
+    close = tk.Label(bar, text="" if glyph_font else "✕", font=glyph_font or (FAMILY, 10),
+                     bg=TITLE_BG, fg="white", width=0)
+    close.place(relx=1, x=0, y=0, anchor="ne", width=46, relheight=1)
+    close.bind("<Enter>", lambda e: close.config(bg=CLOSE_HOVER))
+    close.bind("<Leave>", lambda e: close.config(bg=TITLE_BG))
+    close.bind("<ButtonRelease-1>", lambda e: on_close() if close.winfo_containing(e.x_root, e.y_root) is close
+               else None)
+    if icon is not None:
+        small = icon.subsample(2) if icon.width() >= 32 else icon
+        bar.icon_small = small
+        tk.Label(bar, image=small, bg=TITLE_BG).pack(side="left", padx=(8, 6))
+    text = tk.Label(bar, text=title, bg=TITLE_BG, fg="#ffffff", font=(FAMILY, 9))
+    text.pack(side="left")
+
+    def drag(event):  # move the window the Windows way (snapping works too)
+        try:
+            import ctypes
+            hwnd = ctypes.windll.user32.GetParent(win.winfo_id())
+            ctypes.windll.user32.ReleaseCapture()
+            ctypes.windll.user32.SendMessageW(hwnd, 0xA1, 2, 0)  # WM_NCLBUTTONDOWN, HTCAPTION
+        except Exception:
+            pass
+    for w in bar.winfo_children() + [bar]:
+        if w is not close:
+            w.bind("<ButtonPress-1>", drag)
+    return bar
 
 
 def app_icon(size=32):
@@ -431,6 +499,18 @@ class BackgroundControls:
         self.job = None
         self.built = False
 
+    def load(self):
+        """Show the saved options again (after Undo or Reset in the Settings window)."""
+        s = self.app.settings
+        self.dark_var.set(core.int_setting(s, self.prefix + "_darkness", 40, 0, 90))
+        fit = s.get(self.prefix + "_fit")
+        self.fit_var.set(fit if fit in backdrop.FITS else "Fill the window")
+        pos = s.get(self.prefix + "_position", 0)
+        pos = backdrop.POSITIONS.get(pos, 0) if isinstance(pos, str) else pos
+        self.pos_var.set(max(0, min(100, pos if isinstance(pos, (int, float)) else 0)))
+        if self.same_var is not None:
+            self.same_var.set(bool(s.get(self.prefix + "_same", True)))
+
     def file(self):
         """The picture file to show ("" = none)."""
         if self.same_var is not None and self.same_var.get():
@@ -615,10 +695,7 @@ class BackgroundControls:
             if key.endswith("_picture") and key.startswith(("background", "settings_background")) \
                     and app.settings[key] == name:
                 app.settings[key] = ""
-        try:
-            os.remove(os.path.join(os.path.dirname(core.settings_path()), name))
-        except OSError:
-            pass
+        # the file stays until the change is applied, so Undo in the Settings window can bring it back
         app._save_settings()
         app._apply_background()
 
@@ -659,7 +736,7 @@ class ModernMacroRecorder(core.MacroRecorder):
         self.ready_var = tk.IntVar(value=core.int_setting(s, "ready_seconds", 3, 0, 600))
         self.target_windows = []
         self.target_var = tk.StringVar(value=SCREEN_TARGET)
-        self.name_var = tk.StringVar(value="Untitled macro")
+        self.name_var = tk.StringVar(value="")  # empty until a macro is opened or saved
         self.sounds_var = tk.BooleanVar(value=bool(s.get("sounds", True)))
         self.player = sounds.Player()
         self.last_sound = 0.0
@@ -829,6 +906,9 @@ class ModernMacroRecorder(core.MacroRecorder):
         self.bg_per_page_var = tk.BooleanVar(value=bool(s.get("settings_background_per_page", False)))
         self.bg_page_var = tk.StringVar(value=SETTINGS_PAGES[0])
         self.bg_animate_var = tk.BooleanVar(value=bool(s.get("background_animate", True)))
+        self.bg_fps_var = tk.IntVar(value=core.int_setting(s, "background_fps", 15, 5, 30))
+        self.bg_focused_var = tk.BooleanVar(value=bool(s.get("background_animate_focused", True)))
+        self.bg_pause_others_var = tk.BooleanVar(value=bool(s.get("background_pause_others", True)))
 
         def settings_controls(prefix):
             c = BackgroundControls(self, prefix, None, self._settings_page, same_as=self.bg_main)
@@ -861,38 +941,84 @@ class ModernMacroRecorder(core.MacroRecorder):
         win.title("Settings - Macro Recorder")
         win.resizable(False, False)
         win.attributes("-topmost", True)
-        win.protocol("WM_DELETE_WINDOW", self.close_settings)
-        self.tabs = ttk.Notebook(win)
-        self.tabs.pack(fill="both", expand=True, padx=8, pady=(8, 0))
+        win.protocol("WM_DELETE_WINDOW", self.close_settings_x)
+        self.title_bar = None  # (an own title bar was tried and rolled back: Windows' own is used)
+        # page names as plain text with a blue line under the open one (the notebook's own tabs
+        # and frame are hidden, see "Flat.TNotebook" in apply_theme)
+        bar = self.tab_bar = tk.Frame(win, bg=BG)
+        bar.pack(fill="x", padx=14, pady=(10, 0))
+        self.tab_labels = {}
+        self.tabs = ttk.Notebook(win, style="Flat.TNotebook")
+        self.tabs.pack(fill="both", expand=True, padx=8, pady=(6, 0))
         self.tab_frames = {}
         for name in SETTINGS_PAGES:
             f = ttk.Frame(self.tabs, padding=(18, 14))
             self.tabs.add(f, text=name)
             self.tab_frames[name] = f
+            cell = tk.Frame(bar, bg=BG)
+            cell.pack(side="left", padx=(0, 4))
+            # as wide as the name in bold, so the names don't shift when the open one turns bold
+            lab = tk.Label(cell, text=name, bg=BG, fg=MUTED, font=(FAMILY, 10, "bold"), padx=8, pady=4,
+                           cursor="hand2")
+            line = tk.Frame(cell, bg=BG, height=2)
+            line.pack(side="bottom", fill="x", padx=8)
+            lab.pack(side="top", fill="x")
+            cell.update_idletasks()
+            cell.config(width=lab.winfo_reqwidth(), height=lab.winfo_reqheight() + 2)
+            cell.pack_propagate(False)
+            lab.config(font=(FAMILY, 10))
+            lab.bind("<Button-1>", lambda e, n=name: self.tabs.select(self.tab_frames[n]))
+            lab.bind("<Enter>", lambda e, n=name: self._tab_hover(n, True))
+            lab.bind("<Leave>", lambda e, n=name: self._tab_hover(n, False))
+            self.tab_labels[name] = (lab, line)
         self._build_general_tab(self.tab_frames["General"])
         self._build_recording_tab(self.tab_frames["Recording"])
         self._build_playback_tab(self.tab_frames["Playback"])
         watch = self.tab_frames["Picture watch"]
         self._build_watch_ui(watch)
-        self._build_background_tab(self.tab_frames["Background"])
+        # the Background page (the slowest one to make) is made the first time Settings opens,
+        # so the app starts sooner
+        self.bg_tab_built = False
+        self._dialogs_over_settings()
         self._build_sounds_tab(self.tab_frames["Sounds"])
         self._build_about_tab(self.tab_frames["About"])
         self._recolor_notes(win)
         bottom = tk.Frame(win, bg=BG)
         bottom.pack(fill="x", padx=18, pady=12)
-        ttk.Button(bottom, text="Done", style="Accent.TButton", command=self.close_settings).pack(side="right")
+        # "Done" while nothing changed; after a change: Undo (the last change), Reset (every change
+        # since the window opened or Apply was last pressed) and Apply
+        self.btn_done = ttk.Button(bottom, text="Done", style="Accent.TButton", width=8,
+                                   command=self._done_or_apply)
+        self.btn_done.pack(side="right")
+        self.btn_reset = ttk.Button(bottom, text="Reset", width=8, command=self.reset_settings_changes)
+        self.btn_undo = ttk.Button(bottom, text="Undo", width=8, command=self.undo_settings_change)
+        self.settings_history = []  # earlier states of the page settings, oldest first
+        self.settings_saved_state = None  # the state at the last Apply (or when the window opened)
+        self.settings_watch_job = None
+        win.bind("<KeyRelease>", lambda e: win.after_idle(self._save_settings), add="+")
         self._title_labels(win)
-        # every page the same size (the biggest page, with a little room for lists that grow), so the
-        # window doesn't change size between pages
-        win.update_idletasks()
-        self.tabs.configure(width=max(f.winfo_reqwidth() for f in self.tab_frames.values()),
-                            height=max(f.winfo_reqheight() for f in self.tab_frames.values()) + 40)
         # the background picture shows here too (darker behind the pages, as there's more text)
         self.settings_backdrop = backdrop.Backdrop(
             win, see_through=(BG,), base_color=BG, glass=self.tabs, glass_color=BG, glass_mix=0.55,
             area=self._settings_page,  # only behind the page, not the tabs or the Done button
-            lift_colors={DIM: MUTED, MUTED: "#c2c2cc"})
+            lift_colors={DIM: MUTED, MUTED: "#c2c2cc"},
+            skip=(self.tab_bar,) + ((self.title_bar,) if self.title_bar else ()))
         self.tabs.bind("<<NotebookTabChanged>>", lambda e: win.after(10, self._settings_tab_changed), add="+")
+
+    def _finish_settings_window(self):
+        """The first time Settings opens: make the Background page, then size every page."""
+        if self.bg_tab_built:
+            return
+        self.bg_tab_built = True
+        f = self.tab_frames["Background"]
+        self._build_background_tab(f)
+        self._recolor_notes(f)
+        self._title_labels(f)
+        # every page the same size (the biggest page, with a little room for lists that grow), so the
+        # window doesn't change size between pages
+        self.settings_win.update_idletasks()
+        self.tabs.configure(width=max(f.winfo_reqwidth() for f in self.tab_frames.values()),
+                            height=max(f.winfo_reqheight() for f in self.tab_frames.values()) + 40)
 
     def _settings_page(self):
         """The settings page that's open (the area the background picture fills)."""
@@ -902,15 +1028,35 @@ class ModernMacroRecorder(core.MacroRecorder):
             return self.settings_win
 
     def _settings_tab_changed(self):
+        self._show_tab_bar()
+        # nothing on the new page should start out selected (the Countdown box used to)
+        self.settings_win.focus_set()
         if self.bg_per_page_var.get():  # each page may have its own background
             self._settings_bg_controls().apply()
         self.settings_backdrop.repaint()
+
+    def _open_page_name(self):
+        try:
+            return self.tabs.tab(self.tabs.select(), "text")
+        except (AttributeError, tk.TclError):
+            return SETTINGS_PAGES[0]
+
+    def _show_tab_bar(self):
+        open_page = self._open_page_name()
+        for name, (lab, line) in self.tab_labels.items():
+            on = name == open_page
+            lab.config(fg=TEXT if on else MUTED, font=(FAMILY, 10, "bold") if on else (FAMILY, 10))
+            line.config(bg=ACCENT if on else BG)
+
+    def _tab_hover(self, name, inside):
+        if name != self._open_page_name():
+            self.tab_labels[name][0].config(fg=TEXT if inside else MUTED)
 
     def _title_labels(self, widget):
         """Boxes with a title get it as a separate label, so the background picture can go behind it."""
         for child in widget.winfo_children():
             if isinstance(child, ttk.Labelframe) and not str(child.cget("labelwidget")):
-                child.config(labelwidget=tk.Label(child, text=child.cget("text"), bg=BG, fg=MUTED,
+                child.config(labelwidget=tk.Label(child, text=str(child.cget("text")).upper(), bg=BG, fg=MUTED,
                                                   font=F_SECTION))
             self._title_labels(child)
 
@@ -966,8 +1112,7 @@ class ModernMacroRecorder(core.MacroRecorder):
         self._switch_row(f, "Status bar", self.statusbar_var, "shortcuts and options at the bottom",
                          command=lambda: (self._save_settings(), self._refresh()))
         self._switch_row(f, "Keep window on top", self.ontop_var,
-                         command=lambda: (self._save_settings(),
-                                          self.root.attributes("-topmost", bool(self.ontop_var.get()))))
+                         command=lambda: (self._save_settings(), self._apply_on_top()))
         if IS_WIN:
             self._section(f, "FILES")
             row = self._row(f, "Open .macro files with a double-click")
@@ -1181,6 +1326,13 @@ class ModernMacroRecorder(core.MacroRecorder):
         self._switch_row(f, "Play animated pictures", self.bg_animate_var,
                          "they stand still while recording or playing",
                          command=lambda: (self._save_settings(), self._apply_animation()))
+        row = self._row(f, "Frame rate", "pictures a second (lower = lighter for the computer)")
+        ttk.Spinbox(row, from_=5, to=30, width=4, textvariable=self.bg_fps_var,
+                    command=lambda: (self._save_settings(), self._apply_animation())).pack(side="right")
+        self._switch_row(f, "Only animate the window you're looking at", self.bg_focused_var,
+                         command=lambda: (self._save_settings(), self._apply_animation()))
+        self._switch_row(f, "Pause while another window is in front", self.bg_pause_others_var,
+                         "like the game", command=lambda: (self._save_settings(), self._apply_animation()))
         tk.Label(f, text="Darker = easier to read. Your pictures stay on this computer.",
                  bg=BG, fg=DIM, font=F_SMALL, anchor="w").pack(fill="x", pady=(10, 0))
         if not backdrop.AVAILABLE:
@@ -1221,6 +1373,8 @@ class ModernMacroRecorder(core.MacroRecorder):
 
     def _bg_show_controls(self):
         """Show the options of every page together, or of the page picked in the Page box."""
+        if not getattr(self, "bg_tab_built", False):
+            return  # the Background page isn't made yet
         per_page = self.bg_per_page_var.get()
         if per_page:
             self.bg_page_row.pack(fill="x", pady=4)
@@ -1244,10 +1398,52 @@ class ModernMacroRecorder(core.MacroRecorder):
     def _apply_animation(self):
         """Animated pictures play, unless that's switched off or a macro is recording or playing
         (then nothing else is going on in the app, so the macro's timing stays exact)."""
-        for b in (getattr(self, "backdrop", None), getattr(self, "settings_backdrop", None)):
+        try:
+            fps = max(5, min(30, int(self.bg_fps_var.get())))
+        except (tk.TclError, ValueError):
+            fps = 15
+        for b, which in ((getattr(self, "backdrop", None), "main"),
+                         (getattr(self, "settings_backdrop", None), "settings")):
             if b is not None:
+                b.set_fps(fps)
+                b.may_animate = lambda which=which: self._may_animate(which)
                 b.set_animate(self.bg_animate_var.get())
                 b.set_paused(self.recording or self.playing)
+
+    def _active_window(self):
+        """The app's window that's in front (self.root, self.settings_win or another one of ours),
+        or None when another app's window is in front (like the game)."""
+        if IS_WIN:
+            try:
+                import ctypes
+                user32 = ctypes.windll.user32
+                fg = user32.GetForegroundWindow()
+                pid = ctypes.c_ulong()
+                user32.GetWindowThreadProcessId(fg, ctypes.byref(pid))
+                if pid.value != os.getpid():
+                    return None
+                if self.settings_win is not None and fg == user32.GetParent(self.settings_win.winfo_id()):
+                    return self.settings_win
+                return self.root
+            except Exception:
+                return self.root
+        try:
+            focus = self.root.focus_get()
+            return focus.winfo_toplevel() if focus is not None else None
+        except (KeyError, tk.TclError):
+            return self.root  # (a dropdown list of this app has the keyboard)
+
+    def _may_animate(self, which):
+        """Whether the main or settings window's animated picture should move right now."""
+        active = self._active_window()
+        if active is None:  # another app is in front, like the game
+            if self.bg_pause_others_var.get():
+                return False
+            return which == "main" or not self.bg_focused_var.get()
+        if not self.bg_focused_var.get():
+            return True
+        settings_active = active is self.settings_win
+        return settings_active if which == "settings" else not settings_active
 
     def _apply_background(self):
         self._apply_animation()
@@ -1293,9 +1489,7 @@ class ModernMacroRecorder(core.MacroRecorder):
         self._refresh_windows()
         tk.Label(f, text="Background playback is experimental and can't turn a game's camera.",
                  bg=BG, fg=DIM, font=F_SMALL, anchor="w").pack(fill="x")
-        holder = ttk.Frame(f)
-        holder.pack(fill="x", pady=(12, 0))
-        self._build_resolution_ui(holder)
+        self._build_resolution_ui(f)
         self._section(f, "VIDEO WINDOW")
         row = self._row(f, "Clicks go through it", "so the macro and the game don't notice it")
         box = ttk.Combobox(row, width=24, state="readonly", textvariable=self.video_through_var,
@@ -1307,6 +1501,46 @@ class ModernMacroRecorder(core.MacroRecorder):
                           command=lambda v: self._video_opacity())
         scale.pack(side="right")
         scale.bind("<ButtonRelease-1>", lambda e: self._save_settings())
+
+    SCREEN_SIZE_HELP = (
+        "Some macros were recorded in fullscreen, so those only work in fullscreen. "
+        "The app itself works properly in windowed mode too.\n\n"
+        "Macro recorded at: the screen size the macro was made on. It's filled in from the macro "
+        "file and is usually right, so leave it.\n\n"
+        "Your screen: the size you play on. Auto finds it by itself.\n\n"
+        "When the two differ, clicks are moved to the same spot on your screen.")
+
+    def _build_resolution_ui(self, f):
+        """Screen size (Playback page): what the macro was made for and what you play on."""
+        self._section(f, "SCREEN SIZE")
+        own = core.format_resolution((self.screen_w, self.screen_h))
+        row = tk.Frame(f, bg=BG)
+        row.pack(fill="x", pady=4)
+        tk.Label(row, text="Macro recorded at", bg=BG, fg=TEXT, font=F_BASE).pack(side="left")
+        self.made_for_var = tk.StringVar(value=core.SAME_AS_PLAY)
+        self.made_for_box = ttk.Combobox(row, width=19, textvariable=self.made_for_var,
+                                         values=[core.SAME_AS_PLAY] + core.RESOLUTIONS)
+        self.made_for_box.pack(side="left", padx=(8, 0))
+        for ev in ("<<ComboboxSelected>>", "<FocusOut>", "<Return>"):
+            self.made_for_box.bind(ev, lambda e: self._read_made_for(quiet=True))
+        self.auto_label = f"{core.AUTO_PREFIX} ({own})"
+        saved = self.settings.get("play_resolution")
+        size = core.parse_resolution(saved) if isinstance(saved, str) else None
+        self.play_on_var = tk.StringVar(value=core.format_resolution(size) if size else self.auto_label)
+        self.play_on_box = ttk.Combobox(row, width=15, textvariable=self.play_on_var,
+                                        values=[self.auto_label] + core.RESOLUTIONS)
+        self.play_on_box.pack(side="right")
+        for ev in ("<<ComboboxSelected>>", "<FocusOut>", "<Return>"):
+            self.play_on_box.bind(ev, lambda e: self._read_play_on(quiet=True))
+        tk.Label(row, text="Your screen", bg=BG, fg=TEXT, font=F_BASE).pack(side="right", padx=(0, 8))
+        note = tk.Frame(f, bg=BG)
+        note.pack(fill="x", pady=(2, 0))
+        tk.Label(note, text="Some macros were recorded in fullscreen, so those only work in fullscreen.",
+                 bg=BG, fg=RED, font=F_SMALL, anchor="w").pack(side="left")
+        info = link(note, "ⓘ", lambda: messagebox.showinfo("Screen size", self.SCREEN_SIZE_HELP,
+                                                           parent=self.settings_win),
+                    fg=MUTED, font=(FAMILY, 11))
+        info.pack(side="left", padx=(6, 0))
 
     def _build_about_tab(self, f):
         tk.Label(f, text="Macro Recorder", bg=BG, fg=TEXT, font=(FAMILY, 14, "bold"), anchor="w").pack(fill="x")
@@ -1466,21 +1700,310 @@ class ModernMacroRecorder(core.MacroRecorder):
         if self.recording or self.playing:
             return
         win = self.settings_win
+        self._finish_settings_window()
         win.deiconify()
         dark_title_bar(win)
         win.lift()
+        only_close_button(win)
         if tab in self.tab_frames:
             self.tabs.select(self.tab_frames[tab])
+        self._show_tab_bar()
+        win.focus_set()
         self._refresh()
         win.after(60, lambda: (self.settings_backdrop.repaint(), self._bg_show_controls()))
+        self._save_settings()
+        self.settings_saved_state = self._page_settings()
+        self.settings_history = []
+        self.pictures_seen = None
+        self._note_pictures()
+        self._show_settings_buttons()
+        if self.settings_watch_job is None:
+            self.settings_watch_job = self.root.after(300, self._watch_settings)
 
     def close_settings(self):
         self.capture_callback = None
         self._read_play_on(quiet=True)
         self._read_made_for(quiet=True)
         self._save_settings()
+        if self.settings_watch_job is not None:
+            self.root.after_cancel(self.settings_watch_job)
+            self.settings_watch_job = None
+        self._forget_removed_pictures()
         self.settings_win.withdraw()
         self._refresh()
+
+    def _dialogs_over_settings(self):
+        """Message boxes from the shared code (like Picture watch > Test now) have no parent window,
+        so Windows tied them to the main window and brought it in front of Settings. While
+        Settings is open they now belong to Settings instead."""
+        app = self
+
+        class Boxes:
+            def __init__(self, real):
+                self.real = real
+
+            def __getattr__(self, name):
+                fn = getattr(self.real, name)
+                if not callable(fn) or not (name.startswith("show") or name.startswith("ask")):
+                    return fn
+
+                def call(*args, **kw):
+                    win = app.settings_win
+                    if "parent" not in kw and win is not None and win.winfo_viewable():
+                        kw["parent"] = win
+                    return fn(*args, **kw)
+                return call
+        core.messagebox = Boxes(messagebox)
+        core.filedialog = Boxes(filedialog)  # (picking a picture file too)
+
+    def _apply_on_top(self):
+        """"Keep window on top" for the main window."""
+        if getattr(self, "holding_main", False):
+            return  # _main_held_behind_settings puts it back when it's done
+        want = bool(self.ontop_var.get())
+        if bool(self.root.attributes("-topmost")) != want:  # setting it again would bring it forward
+            self.root.attributes("-topmost", want)
+        if self.settings_win is not None and self.settings_win.winfo_viewable():
+            self.settings_win.lift()
+
+    def _main_held_behind_settings(self, work):
+        """Run work() (Undo / Reset) without the main window coming in front of Settings.
+        Redrawing the main window's background picture brings it forward for a moment while it's
+        "on top"; so for that moment it's an ordinary window (still above other apps' windows,
+        below Settings), and afterwards it's put back on top right under Settings."""
+        if not IS_WIN or not self.root.attributes("-topmost"):
+            return work()
+        import ctypes
+        user32 = ctypes.windll.user32
+        main = user32.GetParent(self.root.winfo_id())
+        sett = user32.GetParent(self.settings_win.winfo_id())
+        flags = 0x2 | 0x1 | 0x10  # SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+        main, sett = ctypes.c_void_p(main), ctypes.c_void_p(sett)  # full 64-bit handles
+        user32.SetWindowPos(main, ctypes.c_void_p(-2), 0, 0, 0, 0, flags)  # HWND_NOTOPMOST
+        self.holding_main = True
+        try:
+            return work()
+        finally:
+            self.holding_main = False
+            if self.ontop_var.get():  # (Undo may just have turned "Keep window on top" off)
+                # placed right after a topmost window, it becomes topmost again, without coming forward
+                user32.SetWindowPos(main, sett, 0, 0, 0, 0, flags)
+
+    def close_settings_x(self):
+        """The window's Close (X) button: with changes that weren't applied, ask what to do."""
+        self._save_settings()
+        if self._page_settings() != self.settings_saved_state:
+            answer = messagebox.askyesnocancel(
+                "Macro Recorder", "Keep the changes you made?\n\nYes = apply them, No = undo them.",
+                parent=self.settings_win)
+            if answer is None:
+                return
+            if not answer:
+                self.reset_settings_changes()
+        self.close_settings()
+
+    # ------------------------------------------------------------ Undo / Reset / Apply
+
+    # settings the Settings window's pages change (the ones Undo and Reset put back)
+    PAGE_SETTINGS = ("hotkeys", "status_bar", "always_on_top", "record_mouse_moves", "mouse_detail",
+                     "ready_seconds", "play_overlay", "play_resolution", "video_click_through", "video_opacity",
+                     "watch_enabled", "watch_ignore_bg", "watch_click", "watch_wait", "watch_match",
+                     "watch_end_wait", "watch_pictures", "sounds", "sound_volume", "sound_choices",
+                     "check_updates", "background_animate", "settings_background_per_page")
+
+    def _is_page_setting(self, key):
+        if key in self.PAGE_SETTINGS:
+            return True
+        # the background options of every window and the list of saved pictures (a removed
+        # picture's file is only deleted once the change is applied)
+        return key.startswith(("background_", "settings_background_"))
+
+    def _page_settings(self):
+        import copy
+        return {k: copy.deepcopy(v) for k, v in self.settings.items() if self._is_page_setting(k)}
+
+    def _watch_settings(self):
+        """While the Settings window is open: notice changes (for Undo) and show the right buttons."""
+        self.settings_watch_job = None
+        if not self.settings_win.winfo_viewable():
+            return
+        self._note_pictures()
+        now = self._page_settings()
+        last = self.settings_history[-1][1] if self.settings_history else self.settings_saved_state
+        if now != last:
+            prev = last
+            self.settings_history.append((prev, now))
+            del self.settings_history[:-100]
+        self._show_settings_buttons()
+        self.settings_watch_job = self.root.after(300, self._watch_settings)
+
+    def _show_settings_buttons(self):
+        changed = self.settings_saved_state is not None and self._page_settings() != self.settings_saved_state
+        if changed:
+            self.btn_done.config(text="Apply")
+            if not self.btn_reset.winfo_ismapped():
+                self.btn_reset.pack(side="right", padx=(0, 8), after=self.btn_done)
+                self.btn_undo.pack(side="right", padx=(0, 8), after=self.btn_reset)
+        else:
+            self.btn_done.config(text="Done")
+            self.btn_undo.pack_forget()
+            self.btn_reset.pack_forget()
+        self.btn_undo.config(state="normal" if self.settings_history else "disabled")
+
+    def _done_or_apply(self):
+        self._save_settings()
+        if self._page_settings() != self.settings_saved_state:
+            self.apply_settings_changes()
+        else:
+            self.close_settings()
+
+    def apply_settings_changes(self):
+        self._read_play_on(quiet=True)
+        self._save_settings()
+        self.settings_saved_state = self._page_settings()
+        self.settings_history = []
+        self._forget_removed_pictures()
+        self._show_settings_buttons()
+
+    def undo_settings_change(self):
+        """Back to how the settings were before the last change."""
+        if not self.settings_history:
+            return
+        before, _after = self.settings_history.pop()
+        self._put_page_settings(before)
+
+    def reset_settings_changes(self):
+        """Back to how the settings were when the window opened (or Apply was last pressed)."""
+        if self.settings_saved_state is None:
+            return
+        self.settings_history = []
+        self._put_page_settings(self.settings_saved_state)
+
+    def _put_page_settings(self, state):
+        import copy
+        for key in [k for k in self.settings if self._is_page_setting(k)]:
+            del self.settings[key]
+        self.settings.update(copy.deepcopy(state))
+        self._main_held_behind_settings(self._load_page_settings)
+        self._save_settings()
+        # whatever saving tidied up counts as that state, not as a new change
+        tidy = self._page_settings()
+        if self.settings_history:
+            self.settings_history[-1] = (self.settings_history[-1][0], tidy)
+        elif state is self.settings_saved_state or state == self.settings_saved_state:
+            self.settings_saved_state = tidy
+        self._show_settings_buttons()
+        if self.settings_win.winfo_viewable():  # stay in front of the main window
+            self.settings_win.lift()
+            self.settings_win.focus_force()
+
+    def _load_page_settings(self):
+        """Every control on the Settings pages shows what self.settings holds again."""
+        s = self.settings
+        detail = s.get("mouse_detail")
+        through = s.get("video_click_through")
+        for var, value in (
+                (self.statusbar_var, bool(s.get("status_bar", True))),
+                (self.ontop_var, bool(s.get("always_on_top", True))),
+                (self.rec_moves_var, bool(s.get("record_mouse_moves", True))),
+                (self.detail_var, detail if detail in MOUSE_DETAIL else "Smooth"),
+                (self.ready_var, core.int_setting(s, "ready_seconds", 3, 0, 600)),
+                (self.overlay_var, bool(s.get("play_overlay", True))),
+                (self.video_through_var, through if through in VIDEO_THROUGH else VIDEO_THROUGH[0]),
+                (self.video_opacity_var, core.int_setting(s, "video_opacity", 100, 20, 100)),
+                (self.watch_var, bool(s.get("watch_enabled", True)) and image_watch is not None),
+                (self.watch_bg_var, bool(s.get("watch_ignore_bg", True))),
+                (self.watch_click_var, bool(s.get("watch_click", False))),
+                (self.watch_wait_var, core.int_setting(s, "watch_wait", 3, 0, 600)),
+                (self.watch_match_var, core.int_setting(s, "watch_match", 85, 50, 99)),
+                (self.watch_end_var, core.int_setting(s, "watch_end_wait", 3, 0, 3600)),
+                (self.sounds_var, bool(s.get("sounds", True))),
+                (self.update_check_var, bool(s.get("check_updates", True))),
+                (self.bg_per_page_var, bool(s.get("settings_background_per_page", False))),
+                (self.bg_animate_var, bool(s.get("background_animate", True))),
+                (self.bg_fps_var, core.int_setting(s, "background_fps", 15, 5, 30)),
+                (self.bg_focused_var, bool(s.get("background_animate_focused", True))),
+                (self.bg_pause_others_var, bool(s.get("background_pause_others", True)))):
+            var.set(value)
+        # shortcuts
+        self.hotkeys = dict(core.DEFAULT_HOTKEYS)
+        saved = s.get("hotkeys")
+        if isinstance(saved, dict):
+            for action in HOTKEY_ACTIONS:
+                if core.hotkey_is_valid(saved.get(action)):
+                    self.hotkeys[action] = saved[action]
+        if len(set(self.hotkeys.values())) != len(HOTKEY_ACTIONS):
+            self.hotkeys = dict(core.DEFAULT_HOTKEYS)
+        # your screen size
+        saved = s.get("play_resolution")
+        size = core.parse_resolution(saved) if isinstance(saved, str) else None
+        self.play_on_var.set(core.format_resolution(size) if size else self.auto_label)
+        # sounds
+        volume = sounds.volume_number(s.get("sound_volume", sounds.DEFAULT_VOLUME))
+        self.volume_scale.set(volume)
+        self._volume_moved(volume)
+        self._show_sounds()
+        # pictures to watch for
+        if image_watch is not None:
+            self.watch_pictures = []
+            for entry in s.get("watch_pictures") or []:
+                try:
+                    img = image_watch.load_image(os.path.join(core.watch_dir(), entry["file"]))
+                except Exception:
+                    continue
+                self.watch_pictures.append({"img": img, "file": entry["file"], "screen_h": entry.get("screen_h")})
+            self._show_watch_pictures()
+        # background pictures
+        for c in [self.bg_main, self.bg_settings] + list(self.bg_pages.values()):
+            c.load()
+        self._apply_on_top()
+        self._video_opacity()
+        self._video_mode()
+        self._bg_show_controls()
+        self._apply_background()
+        self._refresh()
+
+    def _remove_watch_picture(self, index):
+        """Removing a picture keeps its file until the change is applied, so Undo can bring it back."""
+        if self.recording or self.playing or index >= len(self.watch_pictures):
+            return
+        self.watch_pictures.pop(index)
+        self._show_watch_pictures()
+        self._save_settings()
+        self._refresh()
+
+    def _pictures_in_use(self):
+        """(watch picture files, background picture files) in the lists right now."""
+        return ({p["file"] for p in self.watch_pictures},
+                {e["file"] for e in self.bg_library() if isinstance(e, dict) and e.get("file")})
+
+    def _note_pictures(self):
+        """Remember every picture file that was in a list while Settings was open."""
+        watch, bgs = self._pictures_in_use()
+        seen = getattr(self, "pictures_seen", None)
+        if seen is None:
+            seen = self.pictures_seen = (set(), set())
+        seen[0].update(watch)
+        seen[1].update(bgs)
+
+    def _forget_removed_pictures(self):
+        """Delete the picture files that were in a list while Settings was open and aren't anymore
+        (after Apply or closing): removed watch pictures, and removed (or added, then undone)
+        background pictures. Files that were never in a list this time are never touched."""
+        self._note_pictures()
+        watch, bgs = self._pictures_in_use()
+        seen_watch, seen_bgs = self.pictures_seen
+        for folder, names in ((core.watch_dir(), seen_watch - watch),
+                              (os.path.dirname(core.settings_path()), seen_bgs - bgs)):
+            for name in names:
+                if os.path.basename(name) != name:
+                    continue  # only plain file names from the app's own lists
+                try:
+                    os.remove(os.path.join(folder, name))
+                except OSError:
+                    pass
+        self.pictures_seen = None
+        self._note_pictures()
 
     def open_hotkeys(self):  # the old "Hotkeys..." window is now Settings > General
         self.open_settings("General")
@@ -1522,7 +2045,7 @@ class ModernMacroRecorder(core.MacroRecorder):
         events = [dict(ev) for ev in self.events]
         win = tk.Toplevel(self.root, bg=BG)
         self.edit_win = win
-        win.title(f"Edit - {self.name_var.get()}")
+        win.title(f"Edit - {self.name_var.get().strip() or 'new macro'}")
         win.attributes("-topmost", True)
         win.geometry("560x520")
         win.minsize(460, 360)
@@ -1698,6 +2221,12 @@ class ModernMacroRecorder(core.MacroRecorder):
             s["mouse_detail"] = self.detail_var.get()
             s["play_overlay"] = bool(self.overlay_var.get())
             s["check_updates"] = bool(self.update_check_var.get())
+            try:
+                s["background_fps"] = max(5, min(30, int(self.bg_fps_var.get())))
+            except (tk.TclError, ValueError):
+                pass
+            s["background_animate_focused"] = bool(self.bg_focused_var.get())
+            s["background_pause_others"] = bool(self.bg_pause_others_var.get())
             if hasattr(self, "video_entry"):
                 s["video_link"] = self.video_link_text()
                 s["video_click_through"] = self.video_through_var.get()
@@ -2040,13 +2569,32 @@ class ModernMacroRecorder(core.MacroRecorder):
         self._refresh()
 
     def remove_macro_from_list(self):
-        """Take the open macro out of the list (the file itself stays where it is)."""
+        """Take the open macro out of the list and close it (the file itself stays where it is).
+        The next macro in the list opens instead, or an empty one when the list is empty."""
         i = self._list_index(self.current_file)
         if i is None or self.recording or self.playing:
             return
-        del self.macro_list()[i]
+        if getattr(self, "unsaved", False) and not messagebox.askyesno(
+                "Macro Recorder", "This macro has changes that aren't saved. Remove it anyway?\n\n"
+                "(Click No, then Save…, to keep them.)", parent=self.root):
+            return
+        lib = self.macro_list()
+        gone = os.path.splitext(os.path.basename(lib[i]))[0]
+        del lib[i]
         self._save_settings()
-        self.sub_note = "Taken out of the list (the file wasn't deleted)"
+        for n in range(len(lib)):  # open the one that moved into its place (skip missing files)
+            path = lib[(i + n) % len(lib)]
+            if os.path.isfile(path) and self.load(path, quiet=True):
+                self.sub_note = f"Removed {short(gone, 24)} from the list (the file wasn't deleted)"
+                self._refresh()
+                return
+        self.events = []
+        self.current_file = None
+        self.macro_screen = None
+        self.unsaved = False
+        self._show_made_for()
+        self.name_var.set("")
+        self.sub_note = f"Removed {short(gone, 24)} from the list (the file wasn't deleted)"
         self._refresh()
 
     def clear(self):
@@ -2054,7 +2602,7 @@ class ModernMacroRecorder(core.MacroRecorder):
         super().clear()
         if had and not self.events:
             self.unsaved = False
-            self.name_var.set("Untitled macro")
+            self.name_var.set("")
             self.sub_note = "Record something, or open a macro"
             self._refresh()
 
@@ -2110,6 +2658,8 @@ def main(preview=False):
             pass
     import threading
     threading.Thread(target=updater.cleanup_old, daemon=True).start()  # leftover from an update
+    if IS_WIN:  # unpacked copies left in Temp by copies that were force-closed
+        threading.Thread(target=updater.cleanup_leftover_unpacks, daemon=True).start()
     root = tk.Tk()
     app = ModernMacroRecorder(root, preview=preview)
     if app.update_check_var.get():

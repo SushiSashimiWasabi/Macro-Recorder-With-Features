@@ -50,16 +50,33 @@ def screen_origin(sct=None):
             sct.close()
 
 
-def grab_screen(sct=None):
+def grab_screen(sct=None, region=None):
     """Screenshot of the main screen as a BGR image, one pixel per mouse position.
 
     On Windows (the app is DPI aware) that's the real pixels. A Mac Retina screen has two pixels per
-    mouse position each way, so its screenshot is shrunk to match the mouse and window positions."""
+    mouse position each way, so its screenshot is shrunk to match the mouse and window positions.
+
+    region (x0, y0, x1, y1 on the screen): only that part is taken (much faster); the rest of the
+    image stays black, so positions on it are the same as on a full screenshot."""
     own = sct is None
     if own:
         sct = mss.mss()
     try:
         mon = primary_monitor(sct)
+        if region is not None:
+            x0, y0, x1, y1 = (int(v) for v in region)
+            x0, y0 = max(0, x0), max(0, y0)
+            x1, y1 = min(mon["width"], x1), min(mon["height"], y1)
+            img = np.zeros((mon["height"], mon["width"], 3), np.uint8)
+            if x1 - x0 < 1 or y1 - y0 < 1:
+                return img
+            shot = sct.grab({"left": mon["left"] + x0, "top": mon["top"] + y0,
+                             "width": x1 - x0, "height": y1 - y0})
+            part = np.asarray(shot)[:, :, :3]
+            if part.shape[1] != x1 - x0 or part.shape[0] != y1 - y0:
+                part = cv2.resize(part, (x1 - x0, y1 - y0), interpolation=cv2.INTER_AREA)
+            img[y0:y1, x0:x1] = part
+            return img
         shot = sct.grab(mon)
         img = np.ascontiguousarray(np.asarray(shot)[:, :, :3])
         if img.shape[1] != mon["width"] or img.shape[0] != mon["height"]:
@@ -143,20 +160,56 @@ class Matcher:
             mask = feature_mask(t) if ignore_background else None
             self.templates.append((_soften(t), mask, base * step))
         self.last_best = SIZE_STEPS.index(1.0)
+        self.last_rect = None  # where it was last found on the screen (x, y, w, h)
         # how much the picture varies (contrast); a matching spot on screen must vary about as much
         self.detail = max(4.0, float(_soften(self.templates[self.last_best][0]).std()))
 
-    def find(self, screen, good_enough=None, quick=False):
+    def near_last_area(self):
+        """(x0, y0, x1, y1): the part of the screen around where it was found last time, or None."""
+        if self.last_rect is None:
+            return None
+        x, y, w, h = self.last_rect
+        pad_x, pad_y = w // 2 + 40, h // 2 + 40  # room for a slightly bigger size or a small shift
+        return x - pad_x, y - pad_y, x + w + pad_x, y + h + pad_y
+
+    def find_near_last(self, screen, good_enough=None):
+        """Like find(), but only looks around the spot where the picture was found last time
+        (a small part of the screen: many times faster). (0.0, None) if it was never found yet."""
+        area = self.near_last_area()
+        if area is None:
+            return 0.0, None
+        H, W = screen.shape[:2]
+        x0, y0 = max(0, area[0]), max(0, area[1])
+        x1, y1 = min(W, area[2]), min(H, area[3])
+        if x1 - x0 < 8 or y1 - y0 < 8:
+            return 0.0, None
+        score, rect = self.find(screen[y0:y1, x0:x1], good_enough=good_enough, quick=True, remember=False)
+        if rect is None:
+            return score, None
+        rx, ry, rw, rh = rect
+        rect = (rx + x0, ry + y0, rw, rh)
+        if good_enough is None or score >= good_enough:
+            self.last_rect = rect
+        return score, rect
+
+    def find(self, screen, good_enough=None, quick=False, remember=True):
         """Best match on a BGR screenshot: (score 0..1, (x, y, w, h) on the screen).
 
         With good_enough, stops as soon as a size scores at least that much (tries the size that
         matched best last time first, so a normal check takes one pass). quick only tries that size
         and the ones right next to it."""
+        result = self._find(screen, good_enough, quick)
+        if remember and result[1] is not None and (good_enough is None or result[0] >= good_enough):
+            self.last_rect = result[1]
+        return result
+
+    def _find(self, screen, good_enough, quick):
         gray = cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY)
         if self.work < 1.0:
             gray = cv2.resize(gray, None, fx=self.work, fy=self.work, interpolation=cv2.INTER_AREA)
         gray = _soften(gray)
         best = (0.0, None)
+        best_i = None
         order = sorted(range(len(self.templates)), key=lambda i: abs(i - self.last_best))
         if quick:
             order = order[:3]

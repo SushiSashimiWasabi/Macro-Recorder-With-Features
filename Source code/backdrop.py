@@ -266,7 +266,7 @@ class Backdrop:
     GLASS_BLUR = 0    # how blurry the picture is behind the glass area
 
     def __init__(self, root, see_through, base_color, glass=None, glass_color=None, glass_mix=0.2,
-                 skip=(), lift_colors=None, border_color="#33333d", area=None):
+                 skip=(), lift_colors=None, border_color=None, area=None):
         """area: a function giving the widget the picture fills (None = the whole window); the rest
         stays plain."""
         self.root = root
@@ -287,6 +287,8 @@ class Backdrop:
         self.frame_i = 0
         self.animate = True     # play animated pictures (False: they stand still)
         self.paused = False     # stand still for now (while a macro records or plays)
+        self.fps = 15           # at most this many pictures a second
+        self.may_animate = None  # a function: False = stand still for now (e.g. another window in front)
         self.anim_job = None
         self.anim_start = 0.0
         self.masters = {}       # frame number -> the finished picture of the whole window, in Tk
@@ -318,6 +320,10 @@ class Backdrop:
             self._no_picture()
             return path is None or path == ""
         key = (path, os.path.getmtime(path))
+        darkness_now = max(0.0, min(0.95, darkness / 100))
+        if key == self.source_key and self.composite is not None and \
+                (self.darkness, self.fit, self.position) == (darkness_now, fit, position):
+            return True  # nothing changed: repainting would only make the window flicker
         if key != self.source_key:
             anim = load_animation(path) if is_gif(path) else None
             img = anim[0][0] if anim else read_picture(path)
@@ -364,6 +370,10 @@ class Backdrop:
             self.animate = bool(on)
             self._start_animation()
 
+    def set_fps(self, fps):
+        """Show at most this many pictures a second (Settings > Background, 5 to 30)."""
+        self.fps = max(1, min(60, int(fps)))
+
     def set_paused(self, paused):
         """Stand still for now, e.g. while a macro records or plays (keeps its timing exact)."""
         if bool(paused) != self.paused:
@@ -394,9 +404,10 @@ class Backdrop:
         self.anim_job = None
         if not self._playing():
             return
-        delay = 200  # hidden or minimized: just look again a little later
+        delay = 200  # hidden, minimized or not wanted right now: just look again a little later
         try:
-            if self._shown():
+            allowed = self.may_animate is None or self.may_animate()
+            if allowed and self._shown():
                 t0 = time.perf_counter()
                 total = self.frame_ends[-1]
                 pos = ((t0 - self.anim_start) * 1000) % total
@@ -407,7 +418,8 @@ class Backdrop:
                 self.last_tick_ms = spent
                 # the rest of this frame's time, but always leave the window as much time for
                 # everything else as the frame took (a slow PC shows fewer frames instead of lagging)
-                delay = max(self.frame_ends[i] - pos - spent, spent, 10)
+                # no more than self.fps pictures a second (fewer = less work for the computer)
+                delay = max(self.frame_ends[i] - pos - spent, spent, 10, 1000 / self.fps - spent)
         except tk.TclError:
             return  # the window is gone
         self.anim_job = self.root.after(int(delay), self._tick)
@@ -505,6 +517,10 @@ class Backdrop:
     def _fix_moved(self):
         self.pending_fix = None
         if self.active and self._shown():
+            # labels that just got a longer text may not have their new size yet (Tk sizes them
+            # when idle, and this timer can run first); measuring them now would give them a
+            # piece of their OLD size, leaving the rest of the label as a dark box
+            self.root.update_idletasks()
             self._crop_all()
 
     def _natural_size(self, w, it):
@@ -644,7 +660,7 @@ class Backdrop:
     def _piece(self, it, rect):
         """The piece for an item at rect, with a titled box's outline drawn on."""
         piece = self._crop_rect(*rect)
-        if it.get("box"):
+        if it.get("box") and self.border:  # no line unless a border colour is given
             h, wd = piece.shape[:2]
             cv2.rectangle(piece, (0, it.get("box_top", 0)), (wd - 1, h - 1),
                           tuple(int(v) for v in hex_to_bgr(self.border)), 1)
@@ -683,6 +699,11 @@ class Backdrop:
                 self.items.pop(w, None)
                 continue
             target = it.get("under", w)
+            if not target.winfo_exists():
+                # the picture behind a frame was destroyed with the frame's children (a list that
+                # was rebuilt); forget the frame, so the next refresh gives it a new one
+                self.items.pop(w, None)
+                continue
             if not target.winfo_ismapped() or not w.winfo_ismapped():
                 continue
             rect = self._pos(target) + (target.winfo_width(), target.winfo_height())
