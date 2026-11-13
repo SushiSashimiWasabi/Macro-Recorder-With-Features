@@ -3,8 +3,9 @@
 # "Artifacts": MacroRecorder-Windows, MacroRecorder-Mac-AppleSilicon, MacroRecorder-Mac-Intel.
 #
 # Releases: when APP_VERSION in "Source code/version.py" is a version that has no Release yet,
-# a push to main also publishes the builds as Release v<version>. Every copy of the app checks
-# the latest Release when it starts and offers to install it.
+# a push to main also publishes Release v<version>. The Windows exe goes out first, so a slow
+# Mac queue never holds Windows updates back; each Mac zip is added to that Release when its
+# build finishes. Every copy of the app checks the latest Release when it starts.
 name: Build
 
 on:
@@ -15,6 +16,7 @@ on:
 jobs:
   windows:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -33,37 +35,17 @@ jobs:
           name: MacroRecorder-Windows
           path: dist/MacroRecorder.exe
 
-  mac:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-latest     # Apple Silicon (M1 and newer)
-            label: AppleSilicon
-          - runner: macos-15-intel   # older Intel Macs
-            label: Intel
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-      - name: Build MacroRecorder.app
-        run: bash build_mac.sh
-      - name: Zip it (keeps the app bundle intact)
-        run: ditto -c -k --keepParent "Mac build version/MacroRecorder.app" MacroRecorder-Mac-${{ matrix.label }}.zip
-      - uses: actions/upload-artifact@v4
-        with:
-          name: MacroRecorder-Mac-${{ matrix.label }}
-          path: MacroRecorder-Mac-${{ matrix.label }}.zip
-
   release:
-    # only from main, and only when every build worked
+    # only from main; publishes the Windows exe as soon as it's built
     if: github.ref == 'refs/heads/main'
-    needs: [windows, mac]
+    needs: [windows]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      created: ${{ steps.ver.outputs.exists == 'no' && 'yes' || 'no' }}
     steps:
       - uses: actions/checkout@v4
       - name: Read the version
@@ -77,16 +59,49 @@ jobs:
       - uses: actions/download-artifact@v4
         if: steps.ver.outputs.exists == 'no'
         with:
+          name: MacroRecorder-Windows
           path: builds
-          merge-multiple: true
       - name: Publish Release v${{ steps.ver.outputs.version }}
         if: steps.ver.outputs.exists == 'no'
         run: |
-          ls -l builds
           gh release create "v${{ steps.ver.outputs.version }}" \
             --title "Macro Recorder ${{ steps.ver.outputs.version }}" \
             --notes "$(git log -1 --format=%B | grep -v '^Co-Authored-By:')" \
             --target "${{ github.sha }}" \
-            builds/MacroRecorder.exe builds/MacroRecorder-Mac-AppleSilicon.zip builds/MacroRecorder-Mac-Intel.zip
+            builds/MacroRecorder.exe
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  mac:
+    needs: [release]
+    if: ${{ !cancelled() }}   # also runs when there's no release step (not on main)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15         # Apple Silicon (M1 and newer); pinned instead of the busy macos-latest
+            label: AppleSilicon
+          - runner: macos-15-intel   # older Intel Macs
+            label: Intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Build MacroRecorder.app
+        run: bash build_mac.sh
+      - name: Zip it (keeps the app bundle intact)
+        run: ditto -c -k --keepParent "Mac build version/MacroRecorder.app" MacroRecorder-Mac-${{ matrix.label }}.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MacroRecorder-Mac-${{ matrix.label }}
+          path: MacroRecorder-Mac-${{ matrix.label }}.zip
+      - name: Add it to Release v${{ needs.release.outputs.version }}
+        if: needs.release.outputs.created == 'yes'
+        run: gh release upload "v${{ needs.release.outputs.version }}" MacroRecorder-Mac-${{ matrix.label }}.zip --clobber
         env:
           GH_TOKEN: ${{ github.token }}
