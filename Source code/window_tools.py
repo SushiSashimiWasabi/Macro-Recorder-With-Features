@@ -202,10 +202,12 @@ def set_thread_priority(level):
         pass
 
 
-def hide_own_windows_from_capture(hide):
+def hide_own_windows_from_capture(hide, area=None):
     """Make this app's own windows (main window, timer at the top, Settings, video...) invisible to
     screenshots (hide=True), or visible again. Screenshots then show what's behind them, like the game.
-    Windows 10 (2004) and newer; elsewhere nothing happens. Returns how many windows were changed."""
+    Windows 10 (2004) and newer; elsewhere nothing happens. Returns how many windows were changed.
+    area (x, y, w, h): when hiding, only windows that show in that part of the screen are counted and
+    hidden (a minimized one, or one on another screen, isn't in the picture anyway)."""
     if not IS_WIN:
         return 0
     import os as _os
@@ -217,6 +219,14 @@ def hide_own_windows_from_capture(hide):
         @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
         def callback(hwnd, _):
             if pid_of(hwnd) == own and user32.IsWindowVisible(hwnd):
+                if hide and area is not None:
+                    if user32.IsIconic(hwnd):
+                        return True
+                    r = wintypes.RECT()
+                    user32.GetWindowRect(hwnd, ctypes.byref(r))
+                    ax, ay, aw, ah = area
+                    if r.right <= ax or r.left >= ax + aw or r.bottom <= ay or r.top >= ay + ah:
+                        return True
                 if user32.SetWindowDisplayAffinity(hwnd, 0x11 if hide else 0):  # WDA_EXCLUDEFROMCAPTURE / NONE
                     changed.append(hwnd)
             return True

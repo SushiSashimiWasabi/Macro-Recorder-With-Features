@@ -178,9 +178,15 @@ class EditWindowMixin:
         tree.tag_configure("move", foreground=MUTED)
         tree.tag_configure("step", foreground=AMBER)
 
-        def fill():
-            tree.delete(*tree.get_children())
-            for i, ev in enumerate(events):
+        def fill(start=0):
+            """Show the events in the list; start: only the rows from there on changed (the rows
+            before it are left as they are, which is much quicker in a long recording)."""
+            rows = tree.get_children()
+            start = max(0, min(start, len(rows), len(events)))
+            if rows[start:]:
+                tree.delete(*rows[start:])
+            for i in range(start, len(events)):
+                ev = events[i]
                 action, detail = describe(ev)
                 tags = ("move",) if ev.get("type") in ("move", "move_rel") else (
                     ("step",) if ev.get("type") == "wait_picture" else ())
@@ -193,7 +199,7 @@ class EditWindowMixin:
             if not picked:
                 return
             events[:] = [ev for i, ev in enumerate(events) if i not in picked]
-            fill()
+            fill(min(picked))
 
         def remove_moves():
             n = sum(1 for ev in events if ev.get("type") == "move")
@@ -218,7 +224,7 @@ class EditWindowMixin:
             return picked[0] if picked else None
 
         def show_row(i):
-            fill()
+            fill(max(0, i - 1))
             if 0 <= i < len(events):
                 tree.selection_set(str(i))
                 tree.see(str(i))
@@ -303,8 +309,8 @@ class EditWindowMixin:
                 ev["t"] = round(ev["t"] + shift, 4)
             for k, ev in enumerate(block):
                 ev["t"] = round(start + ev["t"], 4)
-                events.insert(pos + k, ev)
-            fill()
+            events[pos:pos] = block
+            fill(pos)
             rows = [str(pos + k) for k in range(len(block))]
             tree.selection_set(rows)
             tree.see(rows[-1])

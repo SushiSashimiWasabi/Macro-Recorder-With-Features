@@ -263,7 +263,7 @@ class MacroEditor:
             return
         self.current = i
         self.steps = workflow.ensure_ids(steps)
-        self.base_steps = copy.deepcopy(self.steps)
+        self.base_steps = workflow.snapshot(self.steps)
         self.file_data = data
         self.base_name = label if path else (app.name_var.get().strip() or "")
         self.name_var.set(self.base_name)
@@ -324,7 +324,7 @@ class MacroEditor:
 
     def change(self, fn, select=None, keep_detail=False):
         """Make a change (fn changes self.steps) so it can be undone."""
-        self.undo_stack.append((copy.deepcopy(self.steps), self.name_var.get()))
+        self.undo_stack.append((workflow.snapshot(self.steps), self.name_var.get()))
         del self.undo_stack[:-200]
         self.redo_stack = []
         fn()
@@ -338,13 +338,13 @@ class MacroEditor:
         """The first keystroke in a box after choosing a step makes one Undo point (not every key)."""
         if not self.typing_snapshot:
             self.typing_snapshot = True
-            self.undo_stack.append((copy.deepcopy(self.steps), self.name_var.get()))
+            self.undo_stack.append((workflow.snapshot(self.steps), self.name_var.get()))
             self.redo_stack = []
 
     def undo(self):
         if not self.undo_stack:
             return
-        self.redo_stack.append((copy.deepcopy(self.steps), self.name_var.get()))
+        self.redo_stack.append((workflow.snapshot(self.steps), self.name_var.get()))
         self.steps, name = self.undo_stack.pop()
         self.name_var.set(name)
         self._after_jump()
@@ -352,7 +352,7 @@ class MacroEditor:
     def redo(self):
         if not self.redo_stack:
             return
-        self.undo_stack.append((copy.deepcopy(self.steps), self.name_var.get()))
+        self.undo_stack.append((workflow.snapshot(self.steps), self.name_var.get()))
         self.steps, name = self.redo_stack.pop()
         self.name_var.set(name)
         self._after_jump()
@@ -360,9 +360,9 @@ class MacroEditor:
     def reset(self):
         if not self._changed():
             return
-        self.undo_stack.append((copy.deepcopy(self.steps), self.name_var.get()))
+        self.undo_stack.append((workflow.snapshot(self.steps), self.name_var.get()))
         self.redo_stack = []
-        self.steps = copy.deepcopy(self.base_steps)
+        self.steps = workflow.snapshot(self.base_steps)
         self.name_var.set(self.base_name)
         self._after_jump()
 
@@ -444,8 +444,8 @@ class MacroEditor:
             app.unsaved = path is None
             app.sub_note = "Macro edited" + (" (Save… to keep it in a file)" if path is None else " and saved")
             app._refresh()
-        self.base_steps = copy.deepcopy(steps)
-        self.steps = copy.deepcopy(steps)
+        self.base_steps = workflow.snapshot(steps)
+        self.steps = workflow.snapshot(steps)
         self.base_name = name
         self.name_var.set(name)
         self._fill_macros()

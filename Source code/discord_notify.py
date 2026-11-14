@@ -143,6 +143,28 @@ def grab(target=CAPTURE_SCREEN, game_exe=None):
         return None
 
 
+def grab_area(target=CAPTURE_SCREEN, game_exe=None):
+    """The part of the screen grab() will take, as (x, y, w, h); None = all screens (or unknown)."""
+    try:
+        import ctypes
+
+        import window_tools
+
+        target = target or CAPTURE_SCREEN
+        if target == CAPTURE_ALL or not window_tools.IS_WIN:
+            return None
+        exe = game_exe if target == CAPTURE_GAME else (target[8:] if target.startswith("program:") else None)
+        if exe:
+            wins = window_tools.windows_of(exe)
+            rect = window_tools.client_rect(wins[0]) if wins else None
+            if rect:
+                return tuple(rect)
+        u = ctypes.windll.user32
+        return (0, 0, u.GetSystemMetrics(0), u.GetSystemMetrics(1))  # the main screen
+    except Exception:
+        return None
+
+
 class Notifier:
     def __init__(self, get_url, on_result=None):
         """get_url(): the webhook link right now. on_result(ok, text): called (on the helper thread)

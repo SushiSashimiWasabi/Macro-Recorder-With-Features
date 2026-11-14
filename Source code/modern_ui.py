@@ -665,6 +665,11 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
                     self.overlay.show("Paused", clock, note, AMBER, keys)
                 else:
                     self.overlay.show("Playing", clock, note, ACCENT, keys)
+                    # the next look is when the shown second changes (at most half a second away, so
+                    # a pause or a new note still shows quickly)
+                    left = 1.0 - (self._play_clock() - self.play_began) % 1.0
+                    self.overlay_job = self.root.after(int(min(0.5, left) * 1000) + 15, self._tick_overlay)
+                    return
         self.overlay_job = self.root.after(250, self._tick_overlay)
 
     def _finish_overlay(self, recording=False):

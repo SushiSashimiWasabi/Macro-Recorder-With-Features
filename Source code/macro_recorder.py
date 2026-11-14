@@ -381,14 +381,52 @@ def dump_macro(data, f):
     f.write("\n]}\n")
 
 
-def save_settings(data):
-    path = settings_path()
+SETTINGS_WRITE_DELAY = 0.4  # seconds after the last change before the settings file is written
+_settings_write = {"lock": threading.Lock(), "text": None, "path": None, "timer": None, "written": {}}
+
+
+def save_settings(data, now=False):
+    """Remember the settings. They're written to the file a moment after the last change (flipping a
+    few switches in a row is one write, not one each), at once with now=True, and always before the
+    app closes (flush_settings)."""
+    w = _settings_write
     try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=1)
+        text = json.dumps(data, indent=1)  # (made now: the settings may change again before the write)
     except Exception:
-        pass  # not being able to remember settings shouldn't stop the app
+        return  # not being able to remember settings shouldn't stop the app
+    with w["lock"]:
+        w["text"], w["path"] = text, settings_path()
+        if not now and w["timer"] is None:
+            w["timer"] = threading.Timer(SETTINGS_WRITE_DELAY, flush_settings)
+            w["timer"].daemon = True
+            w["timer"].start()
+    if now:
+        flush_settings()
+
+
+def flush_settings():
+    """Write the settings that are waiting to be written, now."""
+    w = _settings_write
+    with w["lock"]:
+        text, path = w["text"], w["path"]
+        w["text"] = None
+        if w["timer"] is not None:
+            w["timer"].cancel()
+            w["timer"] = None
+        if text is None or w["written"].get(path) == text:
+            return  # nothing new
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
+            w["written"][path] = text
+        except Exception:
+            pass  # not being able to remember settings shouldn't stop the app
+
+
+import atexit  # noqa: E402
+
+atexit.register(flush_settings)
 
 
 def parse_speed(text):
@@ -1370,7 +1408,9 @@ class MacroRecorder:
         r = self.root
         self.win_rect = (r.winfo_rootx(), r.winfo_rooty(),
                          r.winfo_rootx() + r.winfo_width(), r.winfo_rooty() + r.winfo_height())
-        self.root.after(50, self._process_ui_queue)
+        # (half as often while nothing is being recorded or played)
+        busy = self.recording or self.playing or self.record_countdown_left > 0
+        self.ui_queue_job = self.root.after(50 if busy else 100, self._process_ui_queue)
 
     def _call_ui(self, fn):
         """Run fn on the Tk thread (listeners run on their own threads)."""
@@ -2859,6 +2899,7 @@ class MacroRecorder:
 
     def _on_close(self):
         self._save_settings()
+        flush_settings()
         self._stop_camera()
         self.stop_play.set()
         self.kb_listener.stop()

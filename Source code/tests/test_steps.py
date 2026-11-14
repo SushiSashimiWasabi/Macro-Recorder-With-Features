@@ -185,6 +185,16 @@ simple_path = os.path.join(tmp, "simple.macro")
 app.set_steps([rec])
 check("one recorded step is a plain macro", app.actions is None and len(app.events) == 2)
 
+# Undo copies in Edit: their own steps, sharing the recorded parts' event lists (little memory)
+orig = [rec, step("repeat", times=2, actions=[step("wait", seconds=1.0)])]
+snap = workflow.snapshot(orig)
+snap[1]["times"] = 9
+snap[1]["actions"][0]["seconds"] = 5.0
+snap.append(step("stop"))
+check("Undo copy: changing it leaves the macro alone", orig[1]["times"] == 2 and
+      orig[1]["actions"][0]["seconds"] == 1.0 and len(orig) == 2)
+check("Undo copy: the recorded part isn't copied again", snap[0]["events"] is rec["events"] and snap[0] is not rec)
+
 print()
 print(f"{sum(ok for _, ok in results)} of {len(results)} passed")
 root.destroy()

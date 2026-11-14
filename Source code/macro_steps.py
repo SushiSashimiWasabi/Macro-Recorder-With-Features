@@ -133,6 +133,21 @@ def count_events(actions):
     return sum(len(a.get("events", [])) for a, _l, _i, _p in walk(actions) if a.get("kind") == "recorded")
 
 
+def snapshot(actions):
+    """A copy of the steps for Undo / Redo / Reset that shares the recorded parts' event lists with
+    the original (the Edit window never changes such a list in place, it puts a new one in), so 200
+    Undo points of a long recording cost almost no memory."""
+    out = []
+    for a in actions:
+        b = copy.deepcopy({k: v for k, v in a.items() if k not in ("events", "actions")})
+        if "events" in a:
+            b["events"] = a["events"]
+        if "actions" in a:
+            b["actions"] = snapshot(a["actions"]) if isinstance(a["actions"], list) else a["actions"]
+        out.append(b)
+    return out
+
+
 def map_points(actions, fn):
     """A copy of the steps with fn(list of events) applied to every recorded action's events and to
     the spots of clicks and mouse moves (used to fit a macro to another screen or window)."""

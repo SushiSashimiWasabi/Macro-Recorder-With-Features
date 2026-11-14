@@ -1,12 +1,20 @@
 # The app's version. Raising it (and pushing to main) makes GitHub publish a new Release,
 # which every copy of the app offers to install when it starts.
-APP_VERSION = "2.6.1"
+APP_VERSION = "2.6.2"
 
 # Every version, newest first: (version, the day it was finalized, changes). The newest is shown once after an update;
 # Settings > About > What's new shows them all. Each change is one paragraph (shown as a bullet).
 # Version numbers started at 2.1 (the first one that could update itself); the earlier steps have
 # names instead.
 HISTORY = [
+    ("2.6.2", "14 November 2026", [
+        "Recorded events: in a long recording, a change redraws only the rows after it (much quicker near "
+        "the end of the list).",
+        "Undo in Edit uses much less memory with long recordings.",
+        "Lighter in the background: the settings file is written once after your last change, the app checks "
+        "in half as often while idle, and the timer at the top redraws once a second.",
+        "Discord screenshots skip a short wait when none of the app's windows are in the picture.",
+    ]),
     ("2.6.1", "14 November 2026", [
         "Fixed: while playing, the game's pointer didn't follow the macro's mouse moves until you moved the "
         "real mouse. Moves are now sent as real mouse input, which games like Roblox notice.",
