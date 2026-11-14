@@ -1,0 +1,97 @@
+"""Checks on a real AOT:R results screen (tests/data/results_screen_part.png, taken on a 2560x1440
+screen): the built-in MISSION COMPLETED picture is found (at the size it really shows, about 6 %
+bigger than the picture), during playback and at the end of a run, and the divine fragment in the
+OBTAINED row is counted. No real input, no windows."""
+import os
+import sys
+import threading
+import time
+
+src = sys.argv[1]
+sys.path.insert(0, src)
+import cv2  # noqa: E402
+import numpy as np  # noqa: E402
+
+import drops  # noqa: E402
+import image_watch as iw  # noqa: E402
+import macro_recorder as core  # noqa: E402
+
+results = []
+
+
+def check(name, cond, info=""):
+    results.append((name, bool(cond)))
+    print(("PASS " if cond else "FAIL ") + name + (f"  [{info}]" if info else ""))
+
+
+part = cv2.imread(os.path.join(src, "tests", "data", "results_screen_part.png"))
+shot = np.full((1440, 2560, 3), 20, np.uint8)
+shot[240:240 + part.shape[0], 560:560 + part.shape[1]] = part  # where it was on the screen
+blank = np.full((1440, 2560, 3), 20, np.uint8)
+cur = {"img": shot}
+iw.grab_screen = lambda sct=None, region=None: cur["img"].copy()
+picture = os.path.join(src, core.BUILTIN_WIN_PICTURE)
+
+
+def make_app(remembered=None):
+    a = core.MacroRecorder.__new__(core.MacroRecorder)
+    a.settings = {"results_match": 85, "results_enabled": True}
+    a.screen_w, a.screen_h = 2560, 1440
+    a.win_rect = (0, 0, 0, 0)
+    fields = dict(file="x", screen_h=core.BUILTIN_WIN_PICTURE_SCREEN_H, kind="win")
+    fields.update(remembered or {})
+    a.result_pictures = [core.SavedPicture(picture, **fields)]
+    a.result_matchers = a._build_result_matchers()
+    a.result_state = {}
+    return a
+
+
+a = make_app()
+t = time.perf_counter()
+check("end of run: MISSION COMPLETED found", a._run_result(0) == "win")
+first = time.perf_counter() - t
+check("end of run: first look under 1.5 s", first < 1.5, f"{first:.2f} s")
+step = a.result_pictures[0].get("found_step")
+check("its size is remembered", isinstance(step, int), step)
+a.result_state = {}
+t = time.perf_counter()
+check("end of run again: found", a._run_result(0) == "win")
+check("end of run again: quick", time.perf_counter() - t < 0.2, f"{time.perf_counter() - t:.3f} s")
+
+# while playing: blank screen, then the results screen shows
+b = make_app()
+cur["img"] = blank
+done = threading.Event()
+th = threading.Thread(target=b._result_worker, args=(b.result_matchers, done))
+th.start()
+time.sleep(1.5)
+cur["img"] = shot
+deadline = time.time() + 15
+while time.time() < deadline and not b.result_state.get("win", {}).get("appeared"):
+    time.sleep(0.2)
+done.set()
+th.join()
+check("while playing: the results screen is noticed once",
+      len(b.result_state.get("win", {}).get("appeared", [])) == 1, b.result_state)
+
+# next session with the remembered size: found straight away
+c = make_app({"found_factor": 1.0, "found_screen": [2560, 1440], "found_step": step})
+cur["img"] = shot
+t = time.perf_counter()
+check("next session: found at once", c._run_result(0) == "win" and time.perf_counter() - t < 0.3,
+      f"{time.perf_counter() - t:.2f} s")
+cur["img"] = blank
+c.result_state = {}
+check("blank screen: unknown", c._run_result(0) == "unknown")
+
+# divine fragments
+check("fragments on the whole screen: 1", drops.count_frames(shot)[0] == 1)
+cur["img"] = shot
+c.result_matchers[0].last_rect = (910, 284, 746, 74)
+check("fragments in the OBTAINED row: 1", c._count_drops() == 1)
+check("fragments on a blank screen: 0", drops.count_frames(blank)[0] == 0)
+for dy in (1, 3, 5):
+    check(f"fragments, screen moved {dy} px: 1", drops.count_frames(shot[dy:], full_height=1440)[0] == 1)
+
+print()
+print(f"{sum(ok for _, ok in results)} of {len(results)} passed")

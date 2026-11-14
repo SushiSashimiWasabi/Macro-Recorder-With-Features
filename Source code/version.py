@@ -1,12 +1,27 @@
 # The app's version. Raising it (and pushing to main) makes GitHub publish a new Release,
 # which every copy of the app offers to install when it starts.
-APP_VERSION = "2.4"
+APP_VERSION = "2.5"
 
 # Every version, newest first: (version, the day it was finalized, changes). The newest is shown once after an update;
 # Settings > About > What's new shows them all. Each change is one paragraph (shown as a bullet).
 # Version numbers started at 2.1 (the first one that could update itself); the earlier steps have
 # names instead.
 HISTORY = [
+    ("2.5", "14 November 2026", [
+        "Fixed: Results counted every run as Unknown when MISSION COMPLETED showed a little bigger or smaller "
+        "on screen than the picture. Every size is now looked for until it's found, and the size it was found "
+        "at is remembered for next time.",
+        "Divine fragments: the ones in the OBTAINED row (pink-to-blue frame) are counted after each run and "
+        "added to the Discord card ({fragments}, {fragments_session}, {fragments_total}) and the Results page.",
+        "Results look at the screen about 7 times quicker and, once found, only at the title's spot; a "
+        "\"failed\" title is less likely to be mistaken for a \"completed\" one.",
+        "\"Save smaller mouse paths\" (Settings > Recording > Advanced, off at first): macros with a lot of "
+        "mouse movement get much smaller files, with the same movement.",
+        "Lighter while playing: the timer at the top redraws only when it changes, and the \"game in front\" "
+        "check asks Windows less often.",
+        "Every new version is now checked by about 75 automatic tests before it's published.",
+        "The code is now under the MIT License (the game's pictures and names belong to their owners).",
+    ]),
     ("2.4", "14 November 2026", [
         "Record game camera movement: turns made with Shift Lock or by holding the right mouse button are "
         "recorded and played back at the same pace (Settings > Recording).",

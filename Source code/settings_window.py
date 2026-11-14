@@ -513,7 +513,7 @@ class SettingsWindowMixin:
                      "discord_runs", "discord_screenshot", "discord_stops", "watch_limit_count",
                      "watch_limit_seconds", "watch_shift_lock", "watch_save_with_macro", "discord_name",
                      "discord_ping", "discord_ping_when", "discord_capture", "discord_title", "discord_content",
-                     "discord_message", "results_enabled", "results_match", "result_pictures")
+                     "discord_message", "results_enabled", "drops_enabled", "simplify_moves", "results_match", "result_pictures")
 
     def _is_page_setting(self, key):
         if key in self.PAGE_SETTINGS:
@@ -667,6 +667,8 @@ class SettingsWindowMixin:
                 (self.discord_ping_var, str(s.get("discord_ping", ""))),
                 (self.discord_ping_when_var, PING_WHEN.get(s.get("discord_ping_when"), PING_WHEN["problems"])),
                 (self.results_var, bool(s.get("results_enabled", True))),
+                (self.drops_var, bool(s.get("drops_enabled", True))),
+                (self.simplify_var, bool(s.get("simplify_moves", False))),
                 (self.results_match_var, core.int_setting(s, "results_match", 85, 50, 99))):
             var.set(value)
         cap = str(s.get("discord_capture", "screen"))

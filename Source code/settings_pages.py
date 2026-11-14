@@ -699,6 +699,14 @@ class SettingsPagesMixin:
         "The camera sensitivity in the game must be the same when you play the macro. "
         "Only on Windows.")
 
+    SIMPLIFY_HELP = (
+        "When a macro is saved, mouse positions that lie on a straight, evenly paced line between "
+        "their neighbours are left out of the file, and put back when it's opened. The pointer goes "
+        "through the same places at the same times (within 1 pixel); clicks, keys, scrolling and "
+        "camera turns are never changed. Macros with a lot of mouse movement get much smaller.\n\n"
+        "Friends need version 2.5 or newer to open such a file the same way (older versions make the "
+        "pointer jump between the saved positions).")
+
     def _build_recording_tab(self, f):
         self._section(f, "MOUSE", first=True)
         self._switch_row(f, "Record mouse movement", self.rec_moves_var,
@@ -712,6 +720,8 @@ class SettingsPagesMixin:
         box.bind("<<ComboboxSelected>>", lambda e: self._save_settings())
         tk.Label(adv, text="Smooth keeps every small movement (bigger files). Light keeps fewer points.",
                  bg=BG, fg=DIM, font=F_SMALL, anchor="w").pack(fill="x")
+        self._switch_row(adv, "Save smaller mouse paths", self.simplify_var, "the same movement, smaller files",
+                         info=self.SIMPLIFY_HELP)
         self._section(f, "GOOD TO KNOW")
         tk.Label(f, justify="left", bg=BG, fg=MUTED, font=F_BASE, anchor="w", text=(
             "Your shortcut keys are never recorded.\n"

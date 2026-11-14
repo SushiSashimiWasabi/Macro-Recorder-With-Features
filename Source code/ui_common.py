@@ -458,7 +458,19 @@ class PlayOverlay:
             pass
 
     def show(self, state, clock, note, color, keys=None):
-        """keys: {"pause": "F10", "stop": "F12"} shows which keys pause and stop; None hides them."""
+        """keys: {"pause": "F10", "stop": "F12"} shows which keys pause and stop; None hides them.
+        Called 4 times a second: it only redraws when something shown changed, and puts itself back
+        on top every 2 seconds (in case the game covered it)."""
+        now = time.monotonic()
+        shown = (state, clock, note, color, tuple(sorted(keys.items())) if keys else None)
+        if shown == getattr(self, "last_shown", None) and self.win.state() != "withdrawn":
+            if now - getattr(self, "last_raised", 0.0) >= 2.0:
+                self.last_raised = now
+                self.win.lift()
+                self.win.attributes("-topmost", True)
+            return
+        self.last_shown = shown
+        self.last_raised = now
         self.state.config(text=state)
         self.clock.config(text=clock)
         self.note.config(text=note)
@@ -483,6 +495,7 @@ class PlayOverlay:
         w.attributes("-topmost", True)
 
     def hide(self):
+        self.last_shown = None
         self.win.withdraw()
 
 

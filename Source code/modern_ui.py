@@ -83,6 +83,7 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
         self.detail_var = tk.StringVar(value=s.get("mouse_detail", "Smooth")
                                        if s.get("mouse_detail") in MOUSE_DETAIL else "Smooth")
         self.camera_var = tk.BooleanVar(value=bool(s.get("record_camera", False)))
+        self.simplify_var = tk.BooleanVar(value=bool(s.get("simplify_moves", False)))
         # playing: pause when the game leaves the front, offer to switch to it, fit to its window
         self.away_var = tk.BooleanVar(value=bool(s.get("pause_when_away", True)))
         self.away_stop_var = tk.IntVar(value=core.int_setting(s, "away_stop_seconds", 0, 0, 3600))
@@ -104,6 +105,9 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
         self.discord_program_var = tk.StringVar(value=cap[8:] if cap.startswith("program:") else "")
         # mission results (wins and losses)
         self.results_var = tk.BooleanVar(value=bool(s.get("results_enabled", True)))
+        self.drops_var = tk.BooleanVar(value=bool(s.get("drops_enabled", True)))
+        if s.get("discord_message") in stats.OLD_DEFAULT_MESSAGES:
+            s["discord_message"] = stats.DEFAULT_MESSAGE  # (the default text, now with divine fragments)
         self.results_match_var = tk.IntVar(value=core.int_setting(s, "results_match", 85, 50, 99))
         self.session_var = tk.StringVar(value="Nothing played yet.")
         self.alltime_var = tk.StringVar(value="")
@@ -391,6 +395,7 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
             s["record_mouse_moves"] = bool(self.rec_moves_var.get())
             s["mouse_detail"] = self.detail_var.get()
             s["record_camera"] = bool(self.camera_var.get())
+            s["simplify_moves"] = bool(self.simplify_var.get())
             s["pause_when_away"] = bool(self.away_var.get())
             try:
                 s["away_stop_seconds"] = max(0, min(3600, int(self.away_stop_var.get())))
@@ -409,6 +414,7 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
                                           "problems")
             s["discord_capture"] = self._capture_setting()
             s["results_enabled"] = bool(self.results_var.get())
+            s["drops_enabled"] = bool(self.drops_var.get())
             try:
                 s["results_match"] = max(50, min(99, int(self.results_match_var.get())))
             except (tk.TclError, ValueError):
@@ -874,8 +880,11 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
             self._save_ahk(path)
             return
         self._read_made_for(quiet=True)
+        events = self.events
+        if self.settings.get("simplify_moves", False):
+            events = core.simplify_moves(events)  # (put back in full when the file is opened)
         data = {"app": "macro_recorder", "version": core.FILE_VERSION, "name": self.name_var.get().strip(),
-                "events": self.events}
+                "events": events}
         if self.macro_screen:
             data["screen"] = {"width": self.macro_screen[0], "height": self.macro_screen[1]}
         if self.macro_program:

@@ -135,10 +135,31 @@ def feature_mask(gray):
     return mask
 
 
+_prepared_cache = []  # [(screenshot, work, prepared picture)], the last few
+_prepared_lock = __import__("threading").Lock()
+
+
+def _prepared(screen, work):
+    """The screenshot in grey, shrunk by work and softened, as every Matcher compares it. Several
+    pictures looked for on the same screenshot share this work (it's the slow part of a look)."""
+    with _prepared_lock:
+        for shot, w, gray in _prepared_cache:
+            if shot is screen and w == work:
+                return gray
+    gray = cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY)
+    if work < 1.0:
+        gray = cv2.resize(gray, None, fx=work, fy=work, interpolation=cv2.INTER_AREA)
+    gray = _soften(gray)
+    with _prepared_lock:
+        _prepared_cache.append((screen, work, gray))
+        del _prepared_cache[:-3]
+    return gray
+
+
 class Matcher:
     """Finds one picture on screenshots."""
 
-    def __init__(self, picture, picked_screen_h=None, ignore_background=True, screen_h=None):
+    def __init__(self, picture, picked_screen_h=None, ignore_background=True, screen_h=None, work_height=None):
         h, w = picture.shape[:2]
         if h < 8 or w < 8:
             raise ValueError("the picture is too small; pick a bigger area")
@@ -150,7 +171,8 @@ class Matcher:
         # how much screenshots are shrunk (smaller is faster): big pictures to about WORK_MAX_HEIGHT
         # tall, small ones (like a button's word) to 3/4, but never below 20 pixels so text stays readable
         hb = h * base
-        self.work = min(1.0, max(20.0, min(hb * 0.75, WORK_MAX_HEIGHT)) / hb)
+        # (work_height: shrink more, for big pictures like a title that's looked for often)
+        self.work = min(1.0, max(20.0, min(hb * 0.75, work_height or WORK_MAX_HEIGHT)) / hb)
         gray = cv2.cvtColor(picture, cv2.COLOR_BGR2GRAY)
         self.templates = []  # (template, mask or None, size factor)
         for step in SIZE_STEPS:
@@ -183,11 +205,14 @@ class Matcher:
         x1, y1 = min(W, area[2]), min(H, area[3])
         if x1 - x0 < 8 or y1 - y0 < 8:
             return 0.0, None
-        score, rect = self.find(screen[y0:y1, x0:x1], good_enough=good_enough, quick=True, remember=False)
+        # cut the part out of the whole prepared (shrunk) screenshot, not out of the screenshot itself:
+        # shrinking a cut-out lines its pixels up differently, which can cost a few % of the score
+        gray = _prepared(screen, self.work)
+        sx0, sy0 = int(x0 * self.work), int(y0 * self.work)
+        sx1, sy1 = int(np.ceil(x1 * self.work)), int(np.ceil(y1 * self.work))
+        score, rect = self._find(None, good_enough, True, gray=gray[sy0:sy1, sx0:sx1], offset=(sx0, sy0))
         if rect is None:
             return score, None
-        rx, ry, rw, rh = rect
-        rect = (rx + x0, ry + y0, rw, rh)
         if good_enough is None or score >= good_enough:
             self.last_rect = rect
         return score, rect
@@ -203,11 +228,9 @@ class Matcher:
             self.last_rect = result[1]
         return result
 
-    def _find(self, screen, good_enough, quick):
-        gray = cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY)
-        if self.work < 1.0:
-            gray = cv2.resize(gray, None, fx=self.work, fy=self.work, interpolation=cv2.INTER_AREA)
-        gray = _soften(gray)
+    def _find(self, screen, good_enough, quick, gray=None, offset=(0, 0)):
+        if gray is None:
+            gray = _prepared(screen, self.work)
         best = (0.0, None)
         best_i = None
         order = sorted(range(len(self.templates)), key=lambda i: abs(i - self.last_best))
@@ -230,7 +253,8 @@ class Matcher:
             _, score, _, (x, y) = cv2.minMaxLoc(res)
             if score > best[0]:
                 inv = 1.0 / self.work
-                best = (float(score), (int(x * inv), int(y * inv), int(tw * inv), int(th * inv)))
+                ox, oy = offset
+                best = (float(score), (int((x + ox) * inv), int((y + oy) * inv), int(tw * inv), int(th * inv)))
                 best_i = i
                 if good_enough is not None and score >= good_enough:
                     break

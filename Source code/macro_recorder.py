@@ -136,6 +136,9 @@ def scale_events_rect(events, src, dst):
     return out
 
 
+# result titles are big: compared at about this height they're still told apart well (true match
+# about 90%, other screens about 30% on AOT:R) and a look is about 7 times quicker
+RESULT_WORK_HEIGHT = 24
 CAMERA_STEP = 0.004  # recorded camera movement is added up into one step every 4 ms (250 a second)
 AWAY_GRACE = 0.4  # seconds another window may be in front before playback pauses (windows changing)
 
@@ -217,6 +220,80 @@ def int_setting(settings, name, default, low, high):
         return max(low, min(high, int(settings.get(name, default))))
     except (TypeError, ValueError):
         return default
+
+
+def simplify_moves(events, tolerance=1.0):
+    """Mouse positions that lie on the straight, evenly paced line between their neighbours (within
+    `tolerance` pixels, in place and in time) are left out. The move after a left-out stretch gets
+    "s": 1, so expand_moves() puts the in-between positions back when the macro is opened. Clicks,
+    keys, scrolling and camera turns are never touched."""
+    out = []
+    run = []
+
+    def flush():
+        if not run:
+            return
+        a = 0
+        kept = [run[0]]
+        while a < len(run) - 1:
+            b = a + 1
+            # stretch the line from run[a] as far as every point in between stays on it
+            while b + 1 < len(run):
+                A, C = run[a], run[b + 1]
+                span = C["t"] - A["t"]
+                if span <= 0:
+                    break
+                ok = True
+                for m in range(a + 1, b + 2):
+                    B = run[m]
+                    f = (B["t"] - A["t"]) / span
+                    if abs(A["x"] + (C["x"] - A["x"]) * f - B["x"]) > tolerance or \
+                            abs(A["y"] + (C["y"] - A["y"]) * f - B["y"]) > tolerance:
+                        ok = False
+                        break
+                if not ok:
+                    break
+                b += 1
+            ev = dict(run[b])
+            if b > a + 1:
+                ev["s"] = 1  # glide here from the previous position
+            kept.append(ev)
+            a = b
+        out.extend(kept)
+        run.clear()
+
+    for ev in events:
+        if ev.get("type") == "move" and "x" in ev:
+            run.append(ev)
+        else:
+            flush()
+            out.append(ev)
+    flush()
+    return out
+
+
+def expand_moves(events, step=0.01):
+    """Puts back the positions simplify_moves() left out: a move marked "s" is reached from the
+    move before it in steps of `step` seconds, as a real mouse would have reported them."""
+    if not any(ev.get("s") for ev in events):
+        return events
+    out = []
+    last_move = None
+    for ev in events:
+        if ev.get("type") == "move" and ev.get("s") and last_move is not None:
+            A, C = last_move, ev
+            span = C["t"] - A["t"]
+            n = int(round(span / step))  # (round: 0.3 / 0.01 is 29.999...)
+            for k in range(1, n):
+                f = k * step / span
+                out.append({"type": "move", "x": round(A["x"] + (C["x"] - A["x"]) * f),
+                            "y": round(A["y"] + (C["y"] - A["y"]) * f), "t": round(A["t"] + k * step, 4)})
+            ev = {k: v for k, v in ev.items() if k != "s"}
+        elif ev.get("s"):
+            ev = {k: v for k, v in ev.items() if k != "s"}
+        out.append(ev)
+        last_move = ev if ev.get("type") == "move" else None  # (stretches never go past other actions)
+    return out
 
 
 def dump_macro(data, f):
@@ -1436,31 +1513,9 @@ class MacroRecorder:
             except Exception as exc:
                 messagebox.showerror("Macro Recorder", f"Couldn't use the picture:\n{exc}")
                 return
-        self.result_matchers = []
-        if image_watch is not None and self.settings.get("results_enabled", True):
-            for pic in self.result_pictures:
-                # a result title can show at quite another size than when the picture was taken (other
-                # screen or window size), so it's also looked for a quarter smaller and a third bigger
-                base_h = pic["screen_h"] or self.screen_h
-                # the size it was found at before (remembered per picture and screen) goes first; the
-                # other sizes are only looked for if it isn't found at that size for a while
-                known = pic.get("found_factor") if pic.get("found_screen") == [self.screen_w, self.screen_h] \
-                    else None
-                factors = [known] + [f for f in (1.0, 1.33, 0.75) if f != known] if known else [1.0, 1.33, 0.75]
-                for f in factors:
-                    try:
-                        m = image_watch.Matcher(pic["img"], picked_screen_h=base_h * f, ignore_background=True,
-                                                screen_h=self.screen_h)
-                        m.kind = pic["kind"]
-                        m.picture_id = id(pic)
-                        m.picture = pic
-                        m.factor = f
-                        m.fallback = bool(known) and f != known
-                        self.result_matchers.append(m)
-                    except Exception as exc:
-                        if f == 1.0:
-                            diag.error("A result picture couldn't be used", exc)
-        self.session = stats.Session(self._macro_name())
+        self.result_matchers = self._build_result_matchers()
+        alltime = self.settings.get("stats_all") if isinstance(self.settings.get("stats_all"), dict) else {}
+        self.session = stats.Session(self._macro_name(), fragments_before=int(alltime.get("fragments", 0)))
         if watch is not None:
             watch["limit_count"] = int_setting(self.settings, "watch_limit_count", 10, 0, 1000)
             watch["limit_seconds"] = int_setting(self.settings, "watch_limit_seconds", 60, 1, 3600)
@@ -1480,6 +1535,37 @@ class MacroRecorder:
         threading.Thread(target=self._play_worker,
                          args=(events, repeats, loop, speed, bg, ready, watch),
                          daemon=True).start()
+
+    def _build_result_matchers(self):
+        """The result pictures, ready to look for (each at its own size and two others)."""
+        matchers = []
+        if image_watch is not None and self.settings.get("results_enabled", True):
+            for pic in self.result_pictures:
+                # a result title can show at quite another size than when the picture was taken (other
+                # screen or window size), so it's also looked for a quarter smaller and a third bigger
+                base_h = pic["screen_h"] or self.screen_h
+                # the size it was found at before (remembered per picture and screen) goes first; the
+                # other sizes are only looked for if it isn't found at that size for a while
+                known = pic.get("found_factor") if pic.get("found_screen") == [self.screen_w, self.screen_h] \
+                    else None
+                factors = [known] + [f for f in (1.0, 1.33, 0.75) if f != known] if known else [1.0, 1.33, 0.75]
+                for f in factors:
+                    try:
+                        m = image_watch.Matcher(pic["img"], picked_screen_h=base_h * f, ignore_background=True,
+                                                screen_h=self.screen_h, work_height=RESULT_WORK_HEIGHT)
+                        m.kind = pic["kind"]
+                        m.picture_id = id(pic)
+                        m.picture = pic
+                        m.factor = f
+                        m.fallback = bool(known) and f != known
+                        step = pic.get("found_step")
+                        if f == known and isinstance(step, int) and 0 <= step < len(m.templates):
+                            m.last_best = step  # the exact size it matched at last time is tried first
+                        matchers.append(m)
+                    except Exception as exc:
+                        if f == 1.0:
+                            diag.error("A result picture couldn't be used", exc)
+        return matchers
 
     def _events_for_play(self, play_on):
         """The macro's actions with mouse positions fitted to this screen, or to the game window
@@ -1787,9 +1873,38 @@ class MacroRecorder:
             seconds = self._play_clock() - began_clock
         else:
             seconds = self._play_clock() - getattr(self, "run_began", (0, self._play_clock()))[1]
-        self.session.add(status, seconds)
-        diag.info(f"Run {count} over ({how}): {status}, {seconds:.0f} s")
+        fragments = self._count_drops() if self.settings.get("drops_enabled", True) else 0
+        self.session.add(status, seconds, fragments)
+        diag.info(f"Run {count} over ({how}): {status}, {seconds:.0f} s, {fragments} fragment(s)")
         self._run_finished(count, how)
+
+    def _count_drops(self):
+        """Divine fragments on the results screen now (counted by their pink-to-blue frame)."""
+        if image_watch is None:
+            return 0
+        try:
+            import drops
+
+            # the drops always show in the OBTAINED row, under the result title: when the title was
+            # found, only that part of the screen is taken and looked at (quicker, and nothing else
+            # on screen can count)
+            title = next((m.last_rect for m in list(self.result_matchers) if m.last_rect is not None), None)
+            if title is not None:
+                x, y, w, h = title
+                x0, x1 = max(0, int(x - 0.15 * w)), min(self.screen_w, int(x + 1.15 * w))
+                y0, y1 = max(0, int(y + h)), min(self.screen_h, int(y + 14 * h))
+                screen = self._hide_own_window(image_watch.grab_screen(None, (x0, y0, x1, y1)),
+                                               image_watch.screen_origin())
+                screen = screen[y0:y1, x0:x1]
+            else:
+                screen = self._hide_own_window(image_watch.grab_screen(), image_watch.screen_origin())
+            count, _rects = drops.count_frames(screen, full_height=self.screen_h)
+            if count:
+                diag.info(f"Divine fragments on the results screen: {count}")
+            return count
+        except Exception as exc:
+            diag.error("Couldn't count the drops", exc)
+            return 0
 
     def _run_result(self, run_began):
         """"win", "loss" or "unknown" for the run that started at run_began (perf_counter time)."""
@@ -1816,10 +1931,12 @@ class MacroRecorder:
                 x0, y0 = max(0, region[0]), max(0, region[1])
                 part = screen[y0:max(y0, region[3]), x0:max(x0, region[2])]
                 found = self._kinds_found()
-                for m in list(self.result_matchers):
-                    if not found.get(m.kind) and part.size:
-                        score, _ = m.find(part, good_enough=need, quick=True, remember=False)
-                        best[m.kind] = max(best.get(m.kind, 0.0), score)
+                with self._result_lock:
+                    for m in list(self.result_matchers):
+                        if not found.get(m.kind) and part.size:
+                            # (a small part: every size is quick)
+                            score, _ = m.find(part, good_enough=need, remember=False)
+                            best[m.kind] = max(best.get(m.kind, 0.0), score)
             kind = self._best_result(best, need)
             since = st.get(kind, {}).get("since") if kind else None
             # (a picture already showing before this run started belongs to the run before)
@@ -1836,7 +1953,16 @@ class MacroRecorder:
             found[m.kind] = found.get(m.kind, False) or m.last_rect is not None
         return found
 
-    def _result_scores(self, screen, need, whole):
+    _result_lock = threading.Lock()  # the watcher and the end-of-run check use the same pictures
+
+    def _result_scores(self, screen, need, whole, every_size=True):
+        with self._result_lock:
+            return self._result_scores_now(screen, need, whole, every_size)
+
+    def _result_scores_now(self, screen, need, whole, every_size=True):
+        """every_size: a picture never found yet is looked for at all its sizes at once (the check at
+        the end of a run). Otherwise (while playing) each look tries 3 other sizes, so all of them
+        are covered every 5 looks without one look taking long."""
         """The best score of each kind ("win" / "loss") on a screenshot. Once a picture was found at
         one of its sizes, its other sizes aren't looked for any more (less work)."""
         scores = {}
@@ -1852,12 +1978,36 @@ class MacroRecorder:
                 continue  # the remembered size goes first; other sizes only every 6th look
             score, _ = m.find_near_last(screen, good_enough=need)
             if score < need and whole:
+                # first the size it was found at before (and the ones next to it); while it was never
+                # found yet, also every other size step: a title can show a few % bigger or smaller
+                # than the picture, and then only matches at that exact size
                 score, _ = m.find(screen, good_enough=need, quick=True)
+                if score < need and m.last_rect is None:
+                    if every_size and not getattr(m, "fallback", False):
+                        score, _ = m.find(screen, good_enough=need)
+                    elif not every_size:
+                        turn = getattr(m, "size_turn", 0)
+                        m.size_turn = turn + 1
+                        steps = list(range(1, len(m.templates), 3))  # 1, 4, 7, ...: with their neighbours, all
+                        remembered = m.last_best
+                        m.last_best = steps[turn % len(steps)]
+                        score, _ = m.find(screen, good_enough=need, quick=True)
+                        if score < need:
+                            m.last_best = remembered
             if score >= need and hasattr(m, "picture"):
                 # remember this size for next time (saved with the pictures when playback ends)
                 m.picture["found_factor"] = m.factor
+                m.picture["found_step"] = m.last_best
                 m.picture["found_screen"] = [self.screen_w, self.screen_h]
             scores[m.kind] = max(scores.get(m.kind, 0.0), score)
+        if any(v >= need for v in scores.values()):
+            # one result shows: before saying which, look properly (every size) for the kinds never
+            # found yet, as a "failed" title can look a bit like a "completed" one
+            for m in matchers:
+                if m.last_rect is None and not getattr(m, "fallback", False) and \
+                        not any(o.kind == m.kind and o.last_rect is not None for o in matchers):
+                    score, _ = m.find(screen, good_enough=need, remember=False)  # (no lock-in on a look-alike)
+                    scores[m.kind] = max(scores.get(m.kind, 0.0), score)
         return scores
 
     @staticmethod
@@ -1880,8 +2030,16 @@ class MacroRecorder:
                     checks += 1
                     visible = {}
                     try:
-                        screen = self._hide_own_window(image_watch.grab_screen(sct), origin)
-                        scores = self._result_scores(screen, need, whole)
+                        region = None
+                        if not whole:
+                            # every kind was found before: take only the parts of the screen around
+                            # where they showed (a small box instead of the whole screen)
+                            areas = [m.near_last_area() for m in list(matchers) if m.last_rect is not None]
+                            if areas:
+                                region = (min(a[0] for a in areas), min(a[1] for a in areas),
+                                          max(a[2] for a in areas), max(a[3] for a in areas))
+                        screen = self._hide_own_window(image_watch.grab_screen(sct, region), origin)
+                        scores = self._result_scores(screen, need, whole, every_size=False)
                         best = self._best_result(scores, need)
                         # only the best-matching kind counts (a "failed" title can look a bit like a
                         # "completed" one)
@@ -1939,12 +2097,18 @@ class MacroRecorder:
         limit = int_setting(self.settings, "away_stop_seconds", 0, 0, 3600)
         state = {"since": None, "last_check": 0.0}
 
+        exe_of = {}  # window -> its program (asked once per window, not 20 times a second)
+
         def game_in_front():
             fg = window_tools.foreground()
             if fg is None or fg in games:
                 return True  # (no window at all for a moment happens while windows change hands)
             exe = (self.macro_program or {}).get("exe")
-            if exe and window_tools.exe_of(fg) == exe:  # the game opened another window of its own
+            if fg not in exe_of:
+                if len(exe_of) > 200:
+                    exe_of.clear()
+                exe_of[fg] = window_tools.exe_of(fg)
+            if exe and exe_of[fg] == exe:  # the game opened another window of its own
                 games.add(fg)
                 return True
             return False
@@ -2229,7 +2393,7 @@ class MacroRecorder:
         if not isinstance(events, list):
             raise ValueError("this isn't a macro file")
         self.file_data = data  # the rest of the file (its program, pictures to watch for)
-        return events, data.get("screen", {})
+        return expand_moves(events), data.get("screen", {})
 
     def link_file_type(self):
         """Make .macro files open with this app when double-clicked (current Windows user only)."""

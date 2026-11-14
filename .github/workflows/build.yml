@@ -14,7 +14,24 @@ on:
   workflow_dispatch:
 
 jobs:
+  tests:
+    # the checks in "Source code/tests" (playback, results, Discord card, a real results screen);
+    # if any fails, nothing is built or published
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Run the tests
+        shell: cmd
+        run: |
+          py -m pip install -r "Source code\requirements.txt" || exit /b 1
+          py "Source code\tests\run_tests.py"
+
   windows:
+    needs: [tests]
     runs-on: windows-latest
     timeout-minutes: 30
     steps:

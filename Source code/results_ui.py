@@ -16,6 +16,14 @@ class ResultsMixin:
         "screen (while it shows) or a picture file. Test now shows how well each one matches the "
         "screen right now.")
 
+    DROPS_HELP = (
+        "When a run ends, the app counts the divine fragments in the results screen's OBTAINED row: "
+        "every item whose frame goes from pink-purple on the left to light blue on the right (all 4 kinds "
+        "of fragment have that frame). The count goes in the Discord card ({fragments} this run, "
+        "{fragments_session} this session, {fragments_total} in total) and in the results here.\n\n"
+        "It looks at the screen when the run ends, so it works best with Picture watch ending each run "
+        "on the results screen (the RETRY button).")
+
     def _load_result_pictures(self):
         self.result_pictures = []
         if image_watch is None:
@@ -31,12 +39,14 @@ class ResultsMixin:
                 continue
             if isinstance(entry.get("found_factor"), (int, float)) and isinstance(entry.get("found_screen"), list):
                 pic["found_factor"], pic["found_screen"] = entry["found_factor"], entry["found_screen"]
+                if isinstance(entry.get("found_step"), int):
+                    pic["found_step"] = entry["found_step"]
             self.result_pictures.append(pic)
 
     def _save_result_pictures(self):
         self.settings["result_pictures"] = [
             dict({"file": p["file"], "screen_h": p["screen_h"], "kind": p["kind"]},
-                 **{k: p[k] for k in ("found_factor", "found_screen") if k in p})
+                 **{k: p[k] for k in ("found_factor", "found_screen", "found_step") if k in p})
             for p in self.result_pictures]
         self._save_settings()
 
@@ -93,7 +103,8 @@ class ResultsMixin:
             screen = self._hide_own_window(image_watch.grab_screen(), image_watch.screen_origin())
             for kind, word in ((stats.WIN, "Completed"), (stats.LOSS, "Failed")):
                 for i, p in enumerate([p for p in self.result_pictures if p["kind"] == kind], start=1):
-                    m = image_watch.Matcher(p["img"], picked_screen_h=p["screen_h"], screen_h=self.screen_h)
+                    m = image_watch.Matcher(p["img"], picked_screen_h=p["screen_h"], screen_h=self.screen_h,
+                                            work_height=core.RESULT_WORK_HEIGHT)
                     pct = round(m.find(screen)[0] * 100)
                     lines.append(f"{word} picture {i}: {pct}%  ({'seen' if pct >= need else 'not seen'})")
         except Exception as exc:
@@ -142,6 +153,8 @@ class ResultsMixin:
         b = ttk.Button(row, text="Test now", command=self.test_result_pictures)
         b.pack(side="right", padx=(0, 10))
         self.result_buttons.append(b)
+        self._switch_row(f, "Count divine fragments", self.drops_var, "by their pink-to-blue frame",
+                         info=self.DROPS_HELP)
         self._section(f, "RESULTS")
         tk.Label(f, textvariable=self.session_var, bg=BG, fg=TEXT, font=F_SMALL, anchor="w", justify="left").pack(
             fill="x")
@@ -188,11 +201,12 @@ class ResultsMixin:
             self.session_var.set(
                 f"Last session ({v['macro']}): {v['run']} runs, completed {v['completed']}, failed {v['failed']}, "
                 f"unknown {v['unknown']}\nWin rate {v['winrate']} · win streak {v['streak']} · average run "
-                f"{v['average']} · total {v['total']}")
+                f"{v['average']} · total {v['total']} · divine fragments {v['fragments_session']}")
         a = self.settings.get("stats_all") if isinstance(self.settings.get("stats_all"), dict) else {}
         runs = a.get("runs", 0)
         self.alltime_var.set(f"All time: {runs} runs · {a.get('wins', 0)} won · {a.get('losses', 0)} failed · "
                              f"{a.get('unknown', 0)} unknown · {stats.duration_text(a.get('seconds', 0))} played"
+                             f"\nDivine fragments: {a.get('fragments', 0)}"
                              if runs else "All time: nothing counted yet")
 
     def _remember_found_sizes(self):
@@ -203,8 +217,11 @@ class ResultsMixin:
         changed = False
         for entry in saved:
             p = by_file.get(entry.get("file"))
-            if p and "found_factor" in p and entry.get("found_factor") != p["found_factor"]:
+            if p and "found_factor" in p and (entry.get("found_factor"), entry.get("found_step")) != \
+                    (p["found_factor"], p.get("found_step")):
                 entry["found_factor"], entry["found_screen"] = p["found_factor"], p["found_screen"]
+                if "found_step" in p:
+                    entry["found_step"] = p["found_step"]
                 changed = True
         if changed:
             core.save_settings(self.settings)
@@ -220,6 +237,7 @@ class ResultsMixin:
         a["wins"] = a.get("wins", 0) + sess.count(stats.WIN)
         a["losses"] = a.get("losses", 0) + sess.count(stats.LOSS)
         a["unknown"] = a.get("unknown", 0) + sess.count(stats.UNKNOWN)
+        a["fragments"] = a.get("fragments", 0) + sum(sess.fragments)
         a["seconds"] = a.get("seconds", 0) + int(time.time() - sess.started)
         core.save_settings(self.settings)
 

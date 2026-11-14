@@ -3,6 +3,11 @@
 Records what you do with the mouse and keyboard, then plays it back. You can save a recording to a
 file and send it to friends.
 
+It was made mainly to grind **AOT:R** (Attack on Titan Revolution, on Roblox): it starts a mission
+over by itself, counts wins, losses and divine fragments, and reports them to Discord. But it works
+just as well as an everyday macro recorder for anything else, and every feature can be freely
+customized.
+
 ## What's in this folder
 
 | Folder or file | What it is |
@@ -355,3 +360,13 @@ In **Settings > General**, pick other keys you don't use in the game.
 
 - A hotkey for each saved macro.
 - More step types in Edit (conditions, repeat a part).
+
+## License
+
+The code is under the [MIT License](LICENSE): you may use, change and share it freely, as long as the
+license text and the copyright line stay with it.
+
+The pictures taken from the game (`Source code/retry_default.png`, `Source code/completed_default.png`
+and `Source code/tests/data/results_screen_part.png`) and the names "Attack on Titan Revolution"
+(AOT:R) and "Roblox" belong to their owners and are not covered by this license. This project is not
+affiliated with or endorsed by them.
