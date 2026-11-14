@@ -10,7 +10,7 @@ file and send it to friends.
 | `Complete build version\MacroRecorder.exe` | The finished app, always the newest build. This is the one to use and send to friends. |
 | `Previous version\MacroRecorder.exe` | The build before the newest one, kept by `build.bat` to go back to if needed. |
 | `saved macro file\` | Your own macros. |
-| `Source code\` | The Python code (`macro_recorder.py`, `modern_ui.py` (the window), `backdrop.py` (background pictures), `sounds.py` (sounds), `background.py`, `importers.py`, `image_watch.py`), `requirements.txt`, and `bg_test.py` for testing background playback. |
+| `Source code\` | The Python code: `macro_recorder.py` (recording and playback), `modern_ui.py` (the window; its parts are `ui_common.py`, `settings_pages.py`, `settings_window.py`, `discord_ui.py`, `results_ui.py`, `edit_window.py`, `video_ui.py`), `backdrop.py` (background pictures), `sounds.py`, `background.py`, `importers.py` (other programs' macros, saving as .ahk), `image_watch.py` (finding pictures), `stats.py` (results), `discord_notify.py`, `text_styles.py`, `raw_mouse.py` (camera), `window_tools.py`, `diag.py` (log and report), `lazy.py`; `requirements.txt`, and `bg_test.py` for testing background playback. |
 | `build.bat` | Builds a new `MacroRecorder.exe` from the source code. |
 | `run.bat` | Runs the app straight from the source code, without building. |
 | `build_mac.sh`, `run_mac.sh` | The same two for a Mac (they only work on a Mac). |
@@ -83,15 +83,22 @@ keyboard, so the macro isn't affected (pause the macro to use the video's own bu
 a See-through slider. It uses YouTube's official embedded player (in Edge on Windows), so YouTube's
 ads still play, and videos whose owner blocks outside players, and YouTube Mixes, can't play.
 You can't open a video while a macro is running; open it first.
+**Video keys** (Settings > Playback > Advanced > Change keys...): while the video window is open, keys
+(the number pad at first) skip 10 seconds back or forward, change the volume, mute, pause, change
+the speed, and go to the next or previous video you showed before, without touching the mouse. They
+aren't recorded. YouTube's player doesn't let apps change the quality; use the gear in the video.
 
 **Pausing playback:** press the pause key while a macro plays. It lets go of any keys and buttons
 it's holding and waits; press it again to carry on from the same spot.
 
 **Settings** (top right) has tabs:
 - **General:** hotkeys, status bar, keep the window on top, link .macro files.
-- **Recording:** record mouse movement or not (clicks keep their position either way), and how
-  detailed (Smooth, Normal, Light), and Clear.
-- **Playback:** countdown, top-of-screen timer, Play into, Screen size.
+- **Recording:** record mouse movement or not (clicks keep their position either way), **Record
+  game camera movement** (see below), how detailed (Smooth, Normal, Light, under Advanced), and Clear.
+- **Playback:** countdown, top-of-screen timer, **Offer to switch to the macro's game**, **Pause if
+  the game isn't in front**, Screen size with **Fit clicks to**, and under Advanced: Play into and the
+  video window.
+- **Discord:** messages in your own Discord channel while a macro runs (see below).
 - **Picture watch:** see below.
 - **Background:** put your own picture behind the window, also an animated `.gif`. **Add...** saves a picture (up to 5),
   and the **◀ ▶** arrows switch between your saved pictures (or none, the plain dark window).
@@ -118,8 +125,50 @@ on the Background page switches the movement off altogether. To keep it light fo
 and **Pause while another window is in front** (like the game), both on at first.
 
 **Edit...** lists every action of the macro with its time. Select rows and **Remove selected**
-(or press Delete), **Remove all mouse moves**, or **Cut the wait at the start**, then **Apply**.
-Save afterwards to keep the changes in the file.
+(or press Delete), **Remove all mouse moves**, or **Cut the wait at the start**. **Add a wait...**
+puts a pause before the selected row, **Change the wait...** sets the time between the selected row
+and the one before it, and **Wait for a picture...** adds a step that stops the macro until a picture
+shows on screen (taken from the screen or a file), up to a time limit, and can click it; if it
+doesn't show, the macro goes on or stops (your choice). Double-click such a step to change it. Then
+**Apply**, and Save afterwards to keep the changes in the file.
+
+**Game camera (Shift Lock):** with **Record game camera movement** on (Settings > Recording,
+Windows only), the app also reads how far the mouse itself moves while the game hides the pointer
+(Shift Lock, or holding the right button), the way the game does, and plays those turns back at
+the same pace. Use the same in-game camera sensitivity when playing.
+
+**The game in front:** a recording remembers which program it was made in. Pressing Play in this
+app's window offers to switch to that game first (or asks before playing if it isn't open). While a
+macro plays, if another window comes in front of the game (a pop-up, Discord), the macro lets go of
+every key and pauses; click back into the game and it carries on. **Stop after waiting** ends it if
+the game stays away that long (0 = keep waiting).
+
+**Results (wins and losses):** Settings > Results has pictures that mean a run was won (the built-in
+gold MISSION COMPLETED title, or your own) or lost (add your own MISSION FAILED picture with **Add from
+screen...** while it shows). While a macro plays, each run counts as won, lost or unknown. The timer
+at the top shows the count, Settings > Results shows the last session and all-time totals, and the
+Discord card has the streak, win rate, completed/runs, failed/runs and run times.
+
+**Discord:** in Settings > Discord, paste a webhook link of a channel on your own server (Channel
+settings > Integrations > Webhooks > New Webhook > Copy Webhook URL) and switch it on. After each run
+you get a results card, and a short summary when playback stops. Choose the name it posts as, who to
+ping (`@everyone`, `<@your user ID>`) and when (every message, only failed runs and stops, or never),
+and what the screenshot shows (main screen, all screens, the game's window or any program's window).
+**Edit the message...** opens its own window (resize it by its edges; it remembers its size): the
+line above the card, the title and the text, with Discord's formatting buttons (bold, italic,
+underline, strike, heading, code, spoiler), letter styles (𝐁𝐨𝐥𝐝, 𝓒𝓾𝓻𝓼𝓲𝓿𝓮, 𝕲𝖔𝖙𝖍𝖎𝖈, Ｗｉｄｅ, ...),
+`{placeholders}` like `{run}` and `{winrate}`, and a preview. Pasting text with special letters asks
+whether to keep them or make it plain. No bot needed. Don't share the link: anyone who has it can post
+in that channel.
+
+**Help:** Settings > About > **Make a report** saves the version, your system, screen sizes, a few
+settings and the end of the log (`log.txt` in the settings folder) as a text file in the `reports`
+folder of the settings folder, and shows a window with **Show the file** (to drag it into Discord,
+for example) and **Copy the text**. **Reports and logs...** shows how much room they take and **Clear reports
+and logs** deletes them. They stay small on their own: the log keeps at most about 2 MB and only the
+last 20 reports are kept. A report never contains macros, keys or your Discord link. When something goes wrong the app says so with
+a sound ("Problem" in Settings > Sounds) instead of failing silently. After an update, a window shows
+what's new once (also in Settings > About).
 
 ## Screen size (play a macro on a different resolution)
 
@@ -180,6 +229,13 @@ These options are in **Settings > Picture watch**. To use your own pictures inst
    - **Ignore the background:** only match the bright parts of the picture (text, lines) and the
      pixels right around them, so a different scene behind the banner doesn't matter. Leave it on.
 
+   - **Safety limit:** if the picture starts the macro over more than this many times in that many
+     seconds (10 in 60 at first), something is stuck, so the macro stops and says why. 0 = no limit.
+   - **Press Shift if the mouse pointer is hidden:** before clicking, frees the mouse from Roblox's
+     Shift Lock so the click lands on the button.
+   - **Save these pictures inside the macros you save:** a friend who opens your macro is asked
+     whether to add its pictures, so they get your Retry picture too.
+
 Each time the picture shows counts as one finished run for **Repeat**. After it has been seen, it
 must go away before it can count again, so a results screen that stays up doesn't restart the macro
 twice. The picture must be visible on your main screen, so this doesn't work with "Play into" a
@@ -234,7 +290,7 @@ They're converted when opened; click **Save...** to keep a copy as a `.macro` fi
 | luvmacro | `.luvmacro` | Clicks, keys, scrolling and camera-turning mouse moves. |
 | TinyTask | `.rec` | Mouse and keys. TinyTask macros turned into `.exe` files can't be opened. |
 | Macro Recorder (Jitbit) | `.mcr` | Mouse, keys and delays. Commands like GOTO or text-typing are left out. |
-| AutoHotkey | `.ahk` | Simple scripts: Send, Sleep, Click, MouseMove, MouseClick and Loop with a count. Conditions (`if`, `ImageSearch`, variables) are ignored. |
+| AutoHotkey | `.ahk` | v1 and v2 scripts: Send, Sleep, Click, MouseMove, MouseClick(Drag), Loop, number variables and sums, Random (its middle value), SetKeyDelay, mouse_event camera moves. Conditions (`if`, `ImageSearch`) are ignored: their actions always play. **Save...** can also write a macro as an AutoHotkey v2 script. |
 | Pulover's Macro Creator | `.pmc` | Not directly. In Pulover's, use File > Export to AHK and open the `.ahk`. |
 
 After opening, a message says how many steps couldn't be converted. Macros that turn the camera
@@ -245,8 +301,9 @@ If the other PC's screen size is different, mouse positions are scaled to fit it
 
 ## Mac
 
-The same app runs on a Mac, with every feature except two Windows-only ones: **Play into** a
-background window, and the **Link .macro files** button (on a Mac, double-clicking a `.macro` file
+The same app runs on a Mac, with every feature except these Windows-only ones: **Play into** a
+background window, **Record game camera movement**, **Pause if the game isn't in front**, switching
+to the macro's game, and the **Link .macro files** button (on a Mac, double-clicking a `.macro` file
 works by itself once the app is in Applications). Macro files work both ways: a macro recorded on
 Windows plays on a Mac and the other way round. Keys are translated between the two keyboards
 (the Windows key becomes Command, Alt becomes Option).
@@ -296,6 +353,5 @@ In **Settings > General**, pick other keys you don't use in the game.
 
 ## Ideas for later
 
-- Edit a recording (delete or change steps, add waits).
-- A list of saved macros, each with its own hotkey.
-- Wait for a picture at any step inside a macro (not only to restart it).
+- A hotkey for each saved macro.
+- More step types in Edit (conditions, repeat a part).

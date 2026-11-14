@@ -1,0 +1,901 @@
+"""The look of the dark Macro Recorder window: colours, fonts, the dark theme for Tk and its
+small widgets (switch, cards, timer at the top, dark message boxes), shared by modern_ui.py and
+its parts (settings_pages, discord_ui, results_ui, settings_window, edit_window, video_ui).
+
+Originally: the dark Macro Recorder window (started from macro_recorder.py).
+
+It reuses everything from macro_recorder.py (recording, playback, hotkeys, speed, countdown,
+picture watch, screen size scaling, imports) and only changes the window around it:
+
+  - a dark main window: status line, big Record / Pause / Play / Stop cards with their hotkeys,
+    a "Repeat continuously" switch, the macro's name with Edit... / Open... / Save..., status bar
+  - a Settings window with tabs: General, Recording, Playback, Picture watch, About
+  - an Edit... window to look through a macro's actions and remove some
+  - small sounds when recording or playback starts and stops
+  - recording options: record mouse movement or not, and how detailed
+
+Works on Windows and Mac (plain Tk, no extra packages).
+"""
+
+# (some imports here aren't used in this file: the window's parts get them from here)
+import datetime
+import os
+import shutil
+import sys
+import time
+import tkinter as tk
+from tkinter import filedialog, ttk
+from tkinter import messagebox as _tk_messagebox
+
+import backdrop
+import diag
+import discord_notify
+import icon_picture
+import importers
+import macro_recorder as core
+import platform_keys
+import sounds
+import stats
+import text_styles
+import video_overlay
+import window_tools
+from macro_recorder import (HOTKEY_ACTIONS, IS_MAC, IS_WIN, SCREEN_TARGET, SPEED_PRESETS, background,
+                            format_speed, hotkey_name, image_watch, parse_speed)
+
+import updater
+from version import APP_VERSION, HISTORY, WHATS_NEW
+
+# ---------------------------------------------------------------- look
+
+if IS_WIN:
+    FAMILY = "Segoe UI"
+elif IS_MAC:
+    FAMILY = "Helvetica Neue"
+else:
+    FAMILY = "Helvetica"
+
+BG = "#111114"        # window
+PANEL = "#18181c"     # main panel
+CARD = "#1f1f25"      # cards and buttons
+CARD_HOVER = "#2a2a33"
+FIELD = "#16161a"     # text boxes
+BORDER = "#33333d"
+BADGE = "#2b2b33"
+TEXT = "#f1f1f4"
+MUTED = "#9b9ba6"
+DIM = "#5a5a64"
+ACCENT = "#4f7cff"    # blue
+ACCENT_DARK = "#1c2648"
+RED = "#ff4757"
+RED_DARK = "#3a1a20"
+GREEN = "#2ecc71"
+AMBER = "#ffb238"
+
+F_BASE = (FAMILY, 10)
+F_SMALL = (FAMILY, 9)
+F_BOLD = (FAMILY, 10, "bold")
+F_CARD = (FAMILY, 12, "bold")
+F_STATUS = (FAMILY, 13, "bold")
+F_TITLE = (FAMILY, 18, "bold")
+F_SECTION = (FAMILY, 9, "bold")
+F_LINK = (FAMILY, 9, "underline")
+
+
+def apply_theme(root):
+    """Dark colours for every ttk widget (the boxes and buttons the old window used)."""
+    root.configure(bg=BG)
+    style = ttk.Style(root)
+    style.theme_use("clam")
+    style.configure(".", background=BG, foreground=TEXT, fieldbackground=FIELD, bordercolor=BORDER,
+                    lightcolor=BORDER, darkcolor=BORDER, troughcolor=PANEL, selectbackground=ACCENT,
+                    selectforeground="white", insertcolor=TEXT, arrowcolor=MUTED, font=F_BASE,
+                    focuscolor=BORDER)
+    style.map(".", foreground=[("disabled", DIM)], fieldbackground=[("disabled", BG)])
+    style.configure("TFrame", background=BG)
+    style.configure("TLabel", background=BG, foreground=TEXT)
+    # boxes with a title show just the title, like the other sections (no frame line around them)
+    style.configure("TLabelframe", background=BG, bordercolor=BG, lightcolor=BG, darkcolor=BG, relief="flat",
+                    borderwidth=0)
+    style.layout("TLabelframe", [])  # nothing drawn: no frame line
+    style.configure("TLabelframe.Label", background=BG, foreground=MUTED, font=F_SECTION)
+    style.configure("TButton", background=CARD, foreground=TEXT, padding=(12, 5), relief="flat",
+                    bordercolor=BORDER)
+    style.map("TButton", background=[("disabled", BG), ("active", CARD_HOVER)],
+              bordercolor=[("active", "#4a4a56")])
+    style.configure("Accent.TButton", background=ACCENT, foreground="white", bordercolor=ACCENT)
+    style.map("Accent.TButton", background=[("active", "#6a90ff")])
+    style.configure("Danger.TButton", background=RED_DARK, foreground=RED, bordercolor="#5a2630")
+    style.map("Danger.TButton", background=[("active", "#4a2028")])
+    style.configure("TCheckbutton", background=BG, foreground=TEXT, indicatorbackground=FIELD,
+                    indicatorforeground="white", indicatorcolor=FIELD)
+    style.map("TCheckbutton", background=[("active", BG)],
+              indicatorcolor=[("selected", ACCENT), ("disabled", BG)])
+    for name in ("TSpinbox", "TCombobox", "TEntry"):
+        style.configure(name, fieldbackground=FIELD, background=CARD, foreground=TEXT, padding=3,
+                        arrowsize=12)
+        style.map(name, fieldbackground=[("readonly", FIELD), ("disabled", BG)],
+                  foreground=[("disabled", DIM)], bordercolor=[("focus", ACCENT)])
+    style.configure("TNotebook", background=BG, borderwidth=0, tabmargins=(12, 6, 12, 0))
+    # the Settings window draws its own page names, so this notebook has no tabs and no frame line
+    style.layout("Flat.TNotebook.Tab", [])
+    style.layout("Flat.TNotebook", [("Notebook.client", {"sticky": "nswe"})])
+    style.configure("Flat.TNotebook", background=BG, borderwidth=0, bordercolor=BG, lightcolor=BG,
+                    darkcolor=BG, tabmargins=0, padding=0)
+    style.configure("TNotebook.Tab", background=BG, foreground=MUTED, padding=(14, 6), borderwidth=0,
+                    font=(FAMILY, 10))
+    style.map("TNotebook.Tab", background=[("selected", BG)], foreground=[("selected", TEXT)],
+              font=[("selected", (FAMILY, 10, "bold"))], lightcolor=[("selected", ACCENT)])
+    style.configure("Treeview", background=FIELD, fieldbackground=FIELD, foreground=TEXT, rowheight=22,
+                    bordercolor=BORDER)
+    style.configure("Treeview.Heading", background=CARD, foreground=MUTED, relief="flat", font=F_SMALL)
+    style.map("Treeview", background=[("selected", ACCENT_DARK)])
+    style.map("Horizontal.TScale", troughcolor=[("disabled", BG)], background=[("disabled", BADGE)],
+              lightcolor=[("disabled", BADGE)], darkcolor=[("disabled", BADGE)],
+              bordercolor=[("disabled", BORDER)])
+    style.configure("Vertical.TScrollbar", background=CARD, troughcolor=FIELD, bordercolor=FIELD,
+                    arrowcolor=MUTED)
+    # the drop-down lists of combo boxes are plain Tk lists
+    root.option_add("*TCombobox*Listbox.background", FIELD)
+    root.option_add("*TCombobox*Listbox.foreground", TEXT)
+    root.option_add("*TCombobox*Listbox.selectBackground", ACCENT)
+    root.option_add("*TCombobox*Listbox.selectForeground", "white")
+    root.option_add("*TCombobox*Listbox.font", F_BASE)
+
+
+def dark_title_bar(win):
+    """Windows 10/11: a dark title bar to match the window (no effect elsewhere)."""
+    if not IS_WIN:
+        return
+    try:
+        import ctypes
+
+        win.update_idletasks()
+        hwnd = ctypes.windll.user32.GetParent(win.winfo_id())
+        on = ctypes.c_int(1)
+        for attr in (20, 19):  # DWMWA_USE_IMMERSIVE_DARK_MODE (newer, older Windows 10)
+            if ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(on), 4) == 0:
+                break
+    except Exception:
+        pass
+
+
+TITLE_BG = "#1d2125"  # Windows 11's dark title bar
+CLOSE_HOVER = "#c42b1c"  # Windows 11's red behind the Close X
+
+
+def only_close_button(win):
+    """Windows: no Minimize or Maximize button, just Close (Windows' own title bar)."""
+    if not IS_WIN:
+        return
+    try:
+        import ctypes
+
+        win.update_idletasks()
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetParent(win.winfo_id())
+        style = user32.GetWindowLongW(hwnd, -16)  # GWL_STYLE
+        new = style & ~0x00020000 & ~0x00010000  # WS_MINIMIZEBOX, WS_MAXIMIZEBOX
+        if new != style:
+            user32.SetWindowLongW(hwnd, -16, new)
+            # SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
+            user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x20 | 0x2 | 0x1 | 0x4 | 0x10)
+    except Exception:
+        pass
+
+
+def build_title_bar(win, title, icon, on_close):
+    """A title bar that looks like Windows 11's dark one, with only the Close button."""
+    import tkinter.font as tkfont
+    bar = tk.Frame(win, bg=TITLE_BG, height=30)
+    bar.pack(fill="x", side="top")
+    bar.pack_propagate(False)
+    glyph_font = next(((f, 8) for f in ("Segoe Fluent Icons", "Segoe MDL2 Assets") if f in tkfont.families()),
+                      None)
+    close = tk.Label(bar, text="" if glyph_font else "✕", font=glyph_font or (FAMILY, 10),
+                     bg=TITLE_BG, fg="white", width=0)
+    close.place(relx=1, x=0, y=0, anchor="ne", width=46, relheight=1)
+    close.bind("<Enter>", lambda e: close.config(bg=CLOSE_HOVER))
+    close.bind("<Leave>", lambda e: close.config(bg=TITLE_BG))
+    close.bind("<ButtonRelease-1>", lambda e: on_close() if close.winfo_containing(e.x_root, e.y_root) is close
+               else None)
+    if icon is not None:
+        small = icon.subsample(2) if icon.width() >= 32 else icon
+        bar.icon_small = small
+        tk.Label(bar, image=small, bg=TITLE_BG).pack(side="left", padx=(8, 6))
+    text = tk.Label(bar, text=title, bg=TITLE_BG, fg="#ffffff", font=(FAMILY, 9))
+    text.pack(side="left")
+
+    def drag(event):  # move the window the Windows way (snapping works too)
+        try:
+            import ctypes
+            hwnd = ctypes.windll.user32.GetParent(win.winfo_id())
+            ctypes.windll.user32.ReleaseCapture()
+            ctypes.windll.user32.SendMessageW(hwnd, 0xA1, 2, 0)  # WM_NCLBUTTONDOWN, HTCAPTION
+        except Exception:
+            pass
+    for w in bar.winfo_children() + [bar]:
+        if w is not close:
+            w.bind("<ButtonPress-1>", drag)
+    return bar
+
+
+def app_icon(size=32):
+    """The window icon: a blue rounded square with a white dot (drawn here, no picture file)."""
+    img = tk.PhotoImage(width=size, height=size)
+    r, c = size * 0.25, size / 2
+    rows = []
+    for y in range(size):
+        row = []
+        for x in range(size):
+            dx = max(r - x, 0, x - (size - 1 - r))
+            dy = max(r - y, 0, y - (size - 1 - r))
+            if dx * dx + dy * dy > r * r:
+                row.append("{}")  # transparent corner
+                continue
+            row.append("#ffffff" if (x - c + 0.5) ** 2 + (y - c + 0.5) ** 2 <= (size * 0.2) ** 2 else ACCENT)
+        rows.append("{" + " ".join(row) + "}")
+    try:
+        img.put(" ".join(rows))
+    except tk.TclError:
+        img.put(ACCENT, to=(0, 0, size, size))
+    return img
+
+
+def rounded_rect(canvas, x0, y0, x1, y1, r, **kw):
+    pts = [x0 + r, y0, x1 - r, y0, x1, y0, x1, y0 + r, x1, y1 - r, x1, y1, x1 - r, y1, x0 + r, y1,
+           x0, y1, x0, y1 - r, x0, y0 + r, x0, y0]
+    return canvas.create_polygon(pts, smooth=True, **kw)
+
+
+def link(parent, text, command, bg=BG, fg=MUTED, font=F_LINK):
+    lab = tk.Label(parent, text=text, bg=bg, fg=fg, font=font, cursor="hand2")
+    lab.bind("<Button-1>", lambda e: command())
+    lab.bind("<Enter>", lambda e: lab.config(fg=TEXT))
+    lab.bind("<Leave>", lambda e: lab.config(fg=fg))
+    return lab
+
+
+class Switch(tk.Canvas):
+    """An on/off switch tied to a BooleanVar."""
+
+    W, H = 42, 22
+
+    def __init__(self, parent, variable, command=None, bg=BG):
+        super().__init__(parent, width=self.W, height=self.H, bg=bg, highlightthickness=0, cursor="hand2")
+        self.var = variable
+        self.command = command
+        self.enabled = True
+        self.bind("<Button-1>", self._click)
+        variable.trace_add("write", lambda *a: self.draw())
+        self.draw()
+
+    def _click(self, _e):
+        if not self.enabled:
+            return
+        self.var.set(not self.var.get())
+        if self.command:
+            self.command()
+
+    def set_enabled(self, enabled):
+        self.enabled = enabled
+        self.config(cursor="hand2" if enabled else "arrow")
+        self.draw()
+
+    def draw(self):
+        self.delete("!bdimg")  # keeps the background picture's piece, if there is one
+        on = bool(self.var.get())
+        w, h = self.W, self.H
+        if on:
+            fill, knob, outline = (ACCENT if self.enabled else ACCENT_DARK), "white", ""
+        else:
+            fill, knob, outline = "#26262d", (MUTED if self.enabled else DIM), BORDER
+        rounded_rect(self, 1, 1, w - 2, h - 2, (h - 2) // 2, fill=fill, outline=outline)
+        x = w - h + 3 if on else 4
+        self.create_oval(x, 4, x + h - 8, h - 4, fill=knob, outline="")
+
+
+class Card(tk.Frame):
+    """A big action button: icon, name and its hotkey."""
+
+    def __init__(self, parent, kind, title, color, command):
+        super().__init__(parent, bg=BORDER, cursor="hand2")
+        self.kind, self.color, self.command = kind, color, command
+        self.enabled, self.active, self.hover = True, False, False
+        self.inner = tk.Frame(self, bg=CARD)
+        self.inner.pack(fill="both", expand=True, padx=1, pady=1)
+        self.icon = tk.Canvas(self.inner, width=24, height=24, bg=CARD, highlightthickness=0)
+        self.icon.grid(row=0, column=0, sticky="nw", padx=(12, 0), pady=(12, 0))
+        self.badge = tk.Label(self.inner, bg=BADGE, fg=MUTED, font=(FAMILY, 8, "bold"), padx=5, pady=1)
+        self.badge.grid(row=0, column=1, sticky="ne", padx=(4, 9), pady=(10, 0))
+        self.label = tk.Label(self.inner, text=title, bg=CARD, fg=TEXT, font=F_CARD, anchor="w")
+        self.label.grid(row=1, column=0, columnspan=2, sticky="w", padx=12, pady=(10, 12))
+        self.inner.columnconfigure(1, weight=1)
+        for w in (self, self.inner, self.icon, self.badge, self.label):
+            w.bind("<Button-1>", self._click)
+            w.bind("<Enter>", lambda e: self._hover(True))
+            w.bind("<Leave>", lambda e: self._hover(False))
+        self._draw()
+
+    def _click(self, _e):
+        if self.enabled:
+            self.command()
+
+    def _hover(self, on):
+        self.hover = on
+        self._draw()
+
+    def update_card(self, title=None, key=None, enabled=True, active=False):
+        if title is not None:
+            self.label.config(text=title)
+        if key is not None:
+            self.badge.config(text=key)
+        self.enabled, self.active = enabled, active
+        self._draw()
+
+    def _draw(self):
+        if self.active:
+            bg, border = (RED_DARK if self.color == RED else ACCENT_DARK), self.color
+        elif self.enabled and self.hover:
+            bg, border = CARD_HOVER, "#4a4a56"
+        else:
+            bg, border = (CARD if self.enabled else PANEL), BORDER
+        fg = TEXT if self.enabled else DIM
+        self.config(bg=border, cursor="hand2" if self.enabled else "arrow")
+        for w in (self.inner, self.icon, self.label):
+            w.config(bg=bg)
+        self.label.config(fg=fg)
+        self.badge.config(fg=MUTED if self.enabled else DIM, bg=BADGE if self.enabled else CARD)
+        c = self.icon
+        c.delete("all")
+        col = self.color if self.enabled else DIM
+        if self.kind == "record":
+            c.create_oval(2, 2, 22, 22, outline=fg, width=2)
+            c.create_oval(7, 7, 17, 17, fill=col, outline="")
+        elif self.kind == "pause":
+            c.create_rectangle(5, 4, 10, 20, fill=col, outline="")
+            c.create_rectangle(14, 4, 19, 20, fill=col, outline="")
+        elif self.kind == "play":
+            c.create_polygon(6, 3, 21, 12, 6, 21, fill=col, outline="")
+        elif self.kind == "stop":
+            rounded_rect(c, 4, 4, 20, 20, 4, fill=col, outline="")
+
+
+# ---------------------------------------------------------------- describing actions (Edit window)
+
+def key_label(data):
+    if "special" in data:
+        return hotkey_name(data["special"])
+    if "vk" in data:
+        return platform_keys.win_vk_name(data["vk"]) or data.get("char") or f"Key {data['vk']}"
+    if data.get("char"):
+        return data["char"].upper()
+    return "?"
+
+
+def describe(ev):
+    kind = ev.get("type")
+    if kind == "move":
+        return "Mouse move", f"{ev['x']}, {ev['y']}"
+    if kind == "move_rel":
+        return "Camera turn", f"{ev['dx']:+}, {ev['dy']:+}"
+    if kind == "click":
+        where = f"at {ev['x']}, {ev['y']}" if "x" in ev else ""
+        return f"{ev['button'].title()} button {'down' if ev['pressed'] else 'up'}", where
+    if kind == "scroll":
+        return "Scroll", f"{'up' if ev['dy'] > 0 else 'down'} {abs(ev['dy'])}"
+    if kind == "key":
+        return f"Key {'down' if ev['pressed'] else 'up'}", key_label(ev["key"])
+    if kind == "wait_picture":
+        limit = ev.get("timeout", 30)
+        bits = [f"up to {limit:g} s" if limit else "no time limit"]
+        if ev.get("click"):
+            bits.append("click it")
+        if ev.get("otherwise") == "stop":
+            bits.append("else stop")
+        return "Wait for a picture", (ev.get("name") or "picture") + ": " + ", ".join(bits)
+    return kind or "?", ""
+
+
+MOUSE_DETAIL = {"Smooth": 0.01, "Normal": 0.025, "Light": 0.05}  # seconds between recorded moves
+
+
+# ---------------------------------------------------------------- the app
+
+class PlayOverlay:
+    """A small always-on-top box at the top middle of the main screen: the countdown before playing,
+    then how long it has been playing. It stays there the whole time the macro runs, so you can
+    see it's still going while the app is minimized. Mouse clicks go straight through it."""
+
+    def __init__(self, root, screen_w):
+        # one dark colour all over (no grey frame, and no grey sides when the box is wider than its text)
+        self.win = win = tk.Toplevel(root, bg=PANEL)
+        win.withdraw()
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        try:
+            win.attributes("-alpha", 0.93)
+        except tk.TclError:
+            pass
+        inner = tk.Frame(win, bg=PANEL)
+        inner.pack(fill="both", expand=True)
+        top = tk.Frame(inner, bg=PANEL)
+        top.pack(padx=14, pady=(7, 0))
+        self.dot = tk.Canvas(top, width=12, height=12, bg=PANEL, highlightthickness=0)
+        self.dot.pack(side="left")
+        self.state = tk.Label(top, bg=PANEL, fg=TEXT, font=(FAMILY, 11, "bold"))
+        self.state.pack(side="left", padx=(7, 0))
+        self.clock = tk.Label(top, bg=PANEL, fg=TEXT, font=(FAMILY, 15, "bold"))
+        self.clock.pack(side="left", padx=(12, 0))
+        self.note = tk.Label(inner, bg=PANEL, fg=MUTED, font=F_SMALL)
+        self.note.pack(padx=14, pady=(0, 2))
+        keys = tk.Frame(inner, bg=PANEL)
+        keys.pack(padx=14, pady=(2, 8))
+        self.key_labels = {}
+        for action, word in (("pause", "Pause"), ("stop", "Stop")):
+            badge = tk.Label(keys, bg=BADGE, fg=TEXT, font=(FAMILY, 8, "bold"), padx=5)
+            badge.pack(side="left", padx=(10 if action == "stop" else 0, 4))
+            text = tk.Label(keys, text=word, bg=PANEL, fg=MUTED, font=F_SMALL)
+            text.pack(side="left")
+            self.key_labels[action] = (badge, text)
+        self.keys_row = keys
+        self.screen_w = screen_w
+        self.made_click_through = False
+
+    def _click_through(self):
+        """Windows: let clicks pass through and keep it off the taskbar and out of Alt-Tab."""
+        if self.made_click_through or not IS_WIN:
+            return
+        try:
+            import ctypes
+
+            u = ctypes.windll.user32
+            hwnd = u.GetParent(self.win.winfo_id()) or self.win.winfo_id()
+            style = u.GetWindowLongW(hwnd, -20)  # GWL_EXSTYLE
+            # LAYERED | TRANSPARENT | TOOLWINDOW | NOACTIVATE
+            u.SetWindowLongW(hwnd, -20, style | 0x80000 | 0x20 | 0x80 | 0x8000000)
+            self.made_click_through = True
+        except Exception:
+            pass
+
+    def show(self, state, clock, note, color, keys=None):
+        """keys: {"pause": "F10", "stop": "F12"} shows which keys pause and stop; None hides them."""
+        self.state.config(text=state)
+        self.clock.config(text=clock)
+        self.note.config(text=note)
+        if keys:
+            for action, (badge, text) in self.key_labels.items():
+                badge.config(text=keys[action])
+                if action == "pause":
+                    text.config(text="Resume" if state == "Paused" else "Pause")
+            self.keys_row.pack(padx=14, pady=(2, 8))
+        else:
+            self.keys_row.pack_forget()
+        self.dot.delete("all")
+        self.dot.create_oval(1, 1, 11, 11, fill=color, outline="")
+        w = self.win
+        w.update_idletasks()
+        width, height = max(w.winfo_reqwidth(), 210), w.winfo_reqheight()  # same size, so it doesn't jump
+        w.geometry(f"{width}x{height}+{max(0, (self.screen_w - width) // 2)}+12")
+        if w.state() == "withdrawn":
+            w.deiconify()
+            self._click_through()
+        w.lift()
+        w.attributes("-topmost", True)
+
+    def hide(self):
+        self.win.withdraw()
+
+
+def format_clock(seconds):
+    seconds = int(seconds)
+    h, rest = divmod(seconds, 3600)
+    m, s = divmod(rest, 60)
+    return f"{h}:{m:02}:{s:02}" if h else f"{m:02}:{s:02}"
+
+
+MAX_BACKGROUNDS = 5  # saved background pictures
+MAX_MACROS = 20  # saved macros for the ◀ ▶ quick switch
+VIDEO_THROUGH = ("While recording or playing", "Always")  # when clicks go through the video window
+VIDEO_HINT = "Paste a YouTube video or playlist link"
+SETTINGS_PAGES = ("General", "Recording", "Playback", "Picture watch", "Results", "Background", "Sounds",
+                  "Discord", "About")
+PING_WHEN = {"always": "Every message", "problems": "Only failed runs and stops", "never": "Never"}
+CAPTURE_CHOICES = {"screen": "Main screen", "all": "All screens", "game": "The game's window",
+                   "program": "A program's window:"}
+RESULT_COLORS = {stats.WIN: 0x2ECC71, stats.LOSS: 0xFF4757, stats.UNKNOWN: 0x9B9BA6}
+FIT_TO = {"screen": "The whole screen", "window": "The game window"}
+
+
+class BackgroundControls:
+    """The background picture options for one window (Settings > Background): the picture,
+    Darkness, Fit and which part shows. Saved in settings as <prefix>_picture, <prefix>_darkness...
+
+    same_as: the main window's controls; this window can use the same picture as that one."""
+
+    def __init__(self, app, prefix, get_backdrop, window, same_as=None):
+        """get_backdrop: the Backdrop to paint (None = not shown right now); window: its window."""
+        self.app, self.prefix, self.get_backdrop, self.same_as = app, prefix, get_backdrop, same_as
+        self.window = window
+        s = app.settings
+        self.dark_var = tk.IntVar(value=core.int_setting(s, prefix + "_darkness", 40, 0, 90))
+        fit = s.get(prefix + "_fit")
+        self.fit_var = tk.StringVar(value=fit if fit in backdrop.FITS else "Fill the window")
+        pos = s.get(prefix + "_position", 0)
+        pos = backdrop.POSITIONS.get(pos, 0) if isinstance(pos, str) else pos  # older "Top"/"Middle"/"Bottom"
+        self.pos_var = tk.DoubleVar(value=max(0, min(100, pos if isinstance(pos, (int, float)) else 0)))
+        self.same_var = tk.BooleanVar(value=bool(s.get(prefix + "_same", True))) if same_as else None
+        self.job = None
+        self.built = False
+
+    def load(self):
+        """Show the saved options again (after Undo or Reset in the Settings window)."""
+        s = self.app.settings
+        self.dark_var.set(core.int_setting(s, self.prefix + "_darkness", 40, 0, 90))
+        fit = s.get(self.prefix + "_fit")
+        self.fit_var.set(fit if fit in backdrop.FITS else "Fill the window")
+        pos = s.get(self.prefix + "_position", 0)
+        pos = backdrop.POSITIONS.get(pos, 0) if isinstance(pos, str) else pos
+        self.pos_var.set(max(0, min(100, pos if isinstance(pos, (int, float)) else 0)))
+        if self.same_var is not None:
+            self.same_var.set(bool(s.get(self.prefix + "_same", True)))
+
+    def file(self):
+        """The picture file to show ("" = none)."""
+        if self.same_var is not None and self.same_var.get():
+            return self.same_as.file()
+        name = self.picture()
+        return os.path.join(os.path.dirname(core.settings_path()), name) if name else ""
+
+    def picture(self):
+        """This window's own pick from the saved pictures (file name, "" = none)."""
+        name = self.app.settings.get(self.prefix + "_picture") or ""
+        return name if any(e["file"] == name for e in self.app.bg_library()) else ""
+
+    def picture_name(self):
+        if self.same_var is not None and self.same_var.get():
+            return self.same_as.picture_name()
+        for e in self.app.bg_library():
+            if e["file"] == self.picture():
+                return e.get("name") or e["file"]
+        return ""
+
+    def save(self, s):
+        s[self.prefix + "_darkness"] = int(float(self.dark_var.get()))
+        s[self.prefix + "_fit"] = self.fit_var.get()
+        s[self.prefix + "_position"] = int(round(float(self.pos_var.get())))
+        if self.same_var is not None:
+            s[self.prefix + "_same"] = bool(self.same_var.get())
+
+    def build(self, f):
+        app = self.app
+        if self.same_var is not None:
+            app._switch_row(f, "Same as the main window", self.same_var, "picture and all options",
+                            command=lambda: (app._save_settings(), self.apply()))
+        row = app._row(f, "Picture")
+        # arrows go through the saved pictures (and "none")
+        self.prev = link(row, "◀", lambda: self.step(-1), fg=TEXT, font=(FAMILY, 11))
+        self.prev.pack(side="left", padx=(12, 0))
+        self.name_label = tk.Label(row, bg=BG, fg=MUTED, font=F_SMALL, width=30)
+        self.name_label.pack(side="left", padx=4)
+        self.next = link(row, "▶", lambda: self.step(1), fg=TEXT, font=(FAMILY, 11))
+        self.next.pack(side="left")
+        self.remove = link(row, "Remove", self.remove_picture)
+        self.remove.pack(side="right")
+        self.choose = ttk.Button(row, text="Add…", width=6, command=self.add_picture)
+        self.choose.pack(side="right", padx=(0, 10))
+        row = app._row(f, "Darkness")
+        self.dark_label = tk.Label(row, bg=BG, fg=TEXT, font=F_SMALL, width=4, anchor="e")
+        self.dark_label.pack(side="right")
+        self.dark_scale = ttk.Scale(row, from_=0, to=90, length=150, variable=self.dark_var,
+                                    command=lambda v: self.changed())
+        self.dark_scale.pack(side="right", padx=(0, 6))
+        row = app._row(f, "Fit")
+        self.fit_box = ttk.Combobox(row, width=22, state="readonly", textvariable=self.fit_var,
+                                    values=list(backdrop.FITS))
+        self.fit_box.pack(side="right")
+        self.fit_box.bind("<<ComboboxSelected>>", lambda e: self.changed(now=True))
+        row = app._row(f, "Show which part", "slide or scroll")
+        self.pos_end = tk.Label(row, bg=BG, fg=MUTED, font=F_SMALL, width=8, anchor="w")
+        self.pos_end.pack(side="right")
+        self.pos_scale = ttk.Scale(row, from_=0, to=100, length=150, variable=self.pos_var,
+                                   command=lambda v: self.changed(delay=40))
+        self.pos_scale.pack(side="right", padx=6)
+        self.pos_start = tk.Label(row, bg=BG, fg=MUTED, font=F_SMALL, width=4, anchor="e")
+        self.pos_start.pack(side="right")
+
+        def wheel(event):
+            if "disabled" in self.pos_scale.state():
+                return
+            step = -1 if (event.delta > 0 or event.num == 4) else 1  # wheel down = further down
+            self.pos_var.set(max(0, min(100, int(float(self.pos_var.get())) + step * 5)))
+            self.changed(delay=40)
+        for ev in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            self.pos_scale.bind(ev, wheel)
+        if not backdrop.AVAILABLE:
+            self.choose.config(state="disabled")
+        self.built = True
+        self.show_state()
+
+    def show_state(self):
+        if not self.built:
+            return
+        path = self.file()
+        on = bool(path) and backdrop.AVAILABLE and os.path.isfile(path)
+        same = self.same_var is not None and self.same_var.get()
+        lib = self.app.bg_library()
+        if same:
+            text = "same as main window" + (f": {short(self.picture_name())}" if self.same_as.file() else "")
+        elif on:
+            n = [e["file"] for e in lib].index(self.picture()) + 1
+            text = f"{n} of {len(lib)}:  {short(self.picture_name())}"
+        else:
+            text = "none (plain dark window)" + (f"  ·  {len(lib)} saved" if lib else "")
+        self.name_label.config(text=text)
+        arrows = not same and bool(lib)
+        for a, sym in ((self.prev, "◀"), (self.next, "▶")):
+            a.config(text=sym if arrows else "", cursor="hand2" if arrows else "arrow")
+        self.choose.config(state="disabled" if same or not backdrop.AVAILABLE else "normal")
+        self.remove.config(text="Remove" if on and not same else "",
+                           cursor="hand2" if on and not same else "arrow")
+        own = on and not same  # with "Same as the main window" the main window's options are used
+        self.fit_box.config(state="readonly" if own else "disabled")
+        self.dark_scale.state(["!disabled"] if own else ["disabled"])
+        # the slider moves the picture along the side that gets cut off (none: it all fits)
+        win = self.window()
+        axis = backdrop.cut_axis_for(path, backdrop.FITS.get(self.fit_var.get(), "cover"),
+                                     win.winfo_width(), win.winfo_height()) if own else None
+        self.pos_scale.state(["!disabled"] if axis else ["disabled"])
+        ends = {"y": ("Top", "Bottom"), "x": ("Left", "Right")}.get(axis, ("", "all shown" if own else ""))
+        self.pos_start.config(text=ends[0])
+        self.pos_end.config(text=ends[1])
+        self.dark_label.config(text=f"{int(float(self.dark_var.get()))}%" if not same else "")
+
+    def apply(self):
+        self.job = None
+        b = self.get_backdrop()
+        if b is None:
+            self.show_state()
+            return
+        src = self.same_as if (self.same_var is not None and self.same_var.get()) else self
+        b.set_picture(self.file(), darkness=int(float(src.dark_var.get())),
+                      fit=backdrop.FITS.get(src.fit_var.get(), "cover"),
+                      position=float(src.pos_var.get()) / 100)
+        self.show_state()
+
+    def changed(self, now=False, delay=150):
+        if self.built:
+            self.dark_label.config(text=f"{int(float(self.dark_var.get()))}%")
+        self.app._save_settings()
+        if self.job is not None:
+            self.app.root.after_cancel(self.job)
+        # both windows, as the settings window may follow the main window's options
+        self.job = self.app.root.after(0 if now else delay, self.app._apply_background)
+
+    def step(self, d):
+        """◀ / ▶: the previous or next saved picture (going past the ends gives "none")."""
+        if self.same_var is not None and self.same_var.get():
+            return
+        files = [""] + [e["file"] for e in self.app.bg_library()]
+        if len(files) < 2:
+            return
+        i = files.index(self.picture()) if self.picture() in files else 0
+        self.app.settings[self.prefix + "_picture"] = files[(i + d) % len(files)]
+        self.app._save_settings()
+        self.app._apply_background()
+
+    def add_picture(self):
+        app = self.app
+        lib = app.bg_library()
+        if len(lib) >= MAX_BACKGROUNDS:
+            messagebox.showinfo("Macro Recorder", f"You can save up to {MAX_BACKGROUNDS} pictures.\n"
+                                "Pick one you don't need with the arrows and click Remove first.",
+                                parent=app.settings_win)
+            return
+        path = filedialog.askopenfilename(parent=app.settings_win, title="Add a background picture",
+                                          filetypes=backdrop.PICTURE_TYPES)
+        if not path:
+            return
+        folder = os.path.dirname(core.settings_path())
+        used = {e["file"] for e in lib}
+        used_stems = {os.path.splitext(f)[0] for f in used}
+        stem = next(f"background_{i}" for i in range(1, 100) if f"background_{i}" not in used_stems)
+        fname = backdrop.store_any(path, folder, stem)  # an animated .gif is kept as a .gif
+        if not fname:
+            messagebox.showerror("Macro Recorder", "That file couldn't be opened as a picture.\n"
+                                 "Try a .png, .jpg, .gif, .bmp or .webp file.", parent=app.settings_win)
+            return
+        lib.append({"file": fname, "name": os.path.basename(path)})
+        app.settings[self.prefix + "_picture"] = fname  # and use it here right away
+        app._save_settings()
+        app._apply_background()
+
+    def remove_picture(self):
+        """Take the shown picture out of the saved pictures (every window using it goes plain)."""
+        app = self.app
+        name = self.picture()
+        if not name:
+            return
+        if not messagebox.askyesno("Macro Recorder", f"Remove \"{self.picture_name()}\" from your saved "
+                                   "pictures?", parent=app.settings_win):
+            return
+        app.settings["background_library"] = [e for e in app.bg_library() if e["file"] != name]
+        for key in list(app.settings):
+            if key.endswith("_picture") and key.startswith(("background", "settings_background")) \
+                    and app.settings[key] == name:
+                app.settings[key] = ""
+        # the file stays until the change is applied, so Undo in the Settings window can bring it back
+        app._save_settings()
+        app._apply_background()
+
+
+class ThemedBoxes:
+    """Message boxes in the app's own dark look (same colours and font), used instead of Windows'
+    white ones: showinfo / showwarning / showerror / askyesno / askyesnocancel / askokcancel, plus
+    asknumber. They take the same arguments as tkinter.messagebox."""
+
+    ICONS = {"info": ("ⓘ", ACCENT), "warning": ("⚠", AMBER), "error": ("✕", RED), "question": ("?", ACCENT)}
+
+    def __init__(self, app):
+        self.app = app
+
+    def _parent(self, parent):
+        if parent is not None:
+            try:
+                if parent.winfo_exists():
+                    return parent
+            except tk.TclError:
+                pass
+        sw = getattr(self.app, "settings_win", None)
+        try:
+            if sw is not None and sw.winfo_viewable():
+                return sw
+        except tk.TclError:
+            pass
+        return self.app.root
+
+    def _box(self, title, message, kind, buttons, default, cancel, parent=None, entry=None):
+        """buttons: [(text, value)]. Returns the value of the button pressed (cancel's for the X / Esc)."""
+        parent = self._parent(parent)
+        win = tk.Toplevel(parent, bg=BG)
+        win.withdraw()
+        win.title(title or "Macro Recorder")
+        win.resizable(False, False)
+        win.attributes("-topmost", True)
+        try:
+            if parent.winfo_viewable():
+                win.transient(parent)
+        except tk.TclError:
+            pass
+        icon_img = getattr(self.app, "icon_img", None)
+        if icon_img is not None:
+            try:
+                win.iconphoto(False, icon_img)
+            except tk.TclError:
+                pass
+        result = {"value": cancel}
+        body = tk.Frame(win, bg=BG)
+        body.pack(fill="both", expand=True, padx=20, pady=(18, 10))
+        glyph, color = self.ICONS.get(kind, self.ICONS["info"])
+        tk.Label(body, text=glyph, bg=BG, fg=color, font=(FAMILY, 20, "bold")).pack(side="left", anchor="n",
+                                                                                  padx=(0, 14))
+        right = tk.Frame(body, bg=BG)
+        right.pack(side="left", fill="both", expand=True)
+        heading = title if title and title != "Macro Recorder" else ""
+        if heading:
+            tk.Label(right, text=heading, bg=BG, fg=TEXT, font=(FAMILY, 11, "bold"), anchor="w",
+                     justify="left").pack(fill="x", pady=(0, 6))
+        tk.Label(right, text=str(message or ""), bg=BG, fg=MUTED if heading else TEXT, font=F_BASE, anchor="w",
+                 justify="left", wraplength=460).pack(fill="x")
+        entry_var = None
+        if entry is not None:
+            entry_var = tk.StringVar(value=entry)
+            e = tk.Entry(right, textvariable=entry_var, bg=FIELD, fg=TEXT, font=F_BASE, relief="flat",
+                         insertbackground=TEXT, highlightthickness=1, highlightbackground=BORDER,
+                         highlightcolor=ACCENT, width=14)
+            e.pack(anchor="w", pady=(10, 0), ipady=3)
+            e.select_range(0, "end")
+        bottom = tk.Frame(win, bg=BG)
+        bottom.pack(fill="x", padx=20, pady=(6, 16))
+
+        def done(value):
+            result["value"] = value
+            if entry_var is not None:
+                result["text"] = entry_var.get()
+            win.grab_release()
+            win.destroy()
+        first = None
+        for text, value in reversed(buttons):
+            b = ttk.Button(bottom, text=text, width=max(8, len(text) + 2), command=lambda v=value: done(v),
+                           style="Accent.TButton" if value == default else "TButton")
+            b.pack(side="right", padx=(8, 0))
+            if value == default:
+                first = b
+        win.bind("<Return>", lambda e: done(default))
+        win.bind("<Escape>", lambda e: done(cancel))
+        win.protocol("WM_DELETE_WINDOW", lambda: done(cancel))
+        win.update_idletasks()
+        try:
+            px, py = parent.winfo_rootx(), parent.winfo_rooty()
+            pw, ph = parent.winfo_width(), parent.winfo_height()
+            if not parent.winfo_viewable() or pw < 50:
+                raise tk.TclError
+        except tk.TclError:
+            px, py, pw, ph = 0, 0, win.winfo_screenwidth(), win.winfo_screenheight()
+        w, h = win.winfo_reqwidth(), win.winfo_reqheight()
+        win.geometry(f"+{max(0, px + (pw - w) // 2)}+{max(0, py + (ph - h) // 3)}")
+        win.deiconify()
+        dark_title_bar(win)
+        only_close_button(win)
+        win.lift()
+        try:
+            win.grab_set()
+        except tk.TclError:
+            pass
+        (e if entry is not None else (first or win)).focus_force()
+        win.wait_window()
+        if entry is not None:
+            return result["value"], result.get("text")
+        return result["value"]
+
+    def showinfo(self, title=None, message=None, parent=None, **_kw):
+        return self._box(title, message, "info", [("OK", "ok")], "ok", "ok", parent)
+
+    def showwarning(self, title=None, message=None, parent=None, **_kw):
+        return self._box(title, message, "warning", [("OK", "ok")], "ok", "ok", parent)
+
+    def showerror(self, title=None, message=None, parent=None, **_kw):
+        return self._box(title, message, "error", [("OK", "ok")], "ok", "ok", parent)
+
+    def askyesno(self, title=None, message=None, parent=None, **_kw):
+        return self._box(title, message, "question", [("Yes", True), ("No", False)], True, False, parent)
+
+    def askokcancel(self, title=None, message=None, parent=None, **_kw):
+        return self._box(title, message, "question", [("OK", True), ("Cancel", False)], True, False, parent)
+
+    def askyesnocancel(self, title=None, message=None, parent=None, **_kw):
+        return self._box(title, message, "question", [("Yes", True), ("No", False), ("Cancel", None)],
+                         True, None, parent)
+
+    def askquestion(self, title=None, message=None, parent=None, **_kw):
+        return "yes" if self.askyesno(title, message, parent) else "no"
+
+    def askchoice(self, title, message, choices, default=None, parent=None):
+        """Buttons with your own words: choices = [(text, value)]. Esc / X gives None."""
+        return self._box(title, message, "question", choices, default, None, parent)
+
+    def asknumber(self, title, message, initial=0.0, low=0.0, high=3600.0, parent=None):
+        """A number typed in a box (None if cancelled or not a number in range)."""
+        value, text = self._box(title, message, "question", [("OK", True), ("Cancel", False)], True, False,
+                                parent, entry=f"{initial:g}")
+        if not value:
+            return None
+        try:
+            number = float(str(text).replace(",", ".").strip())
+        except ValueError:
+            return None
+        return number if low <= number <= high else None
+
+
+def short(text, n=26):
+    return text if len(text) <= n else text[:n - 1] + "…"
+
+
+class _MessageBoxes:
+    """The message boxes every part of the window uses: Windows' own at first, the dark ones
+    (ThemedBoxes) as soon as the window exists (use_boxes)."""
+
+    def __init__(self, target):
+        object.__setattr__(self, "target", target)
+
+    def use(self, target):
+        object.__setattr__(self, "target", target)
+
+    def __getattr__(self, name):
+        return getattr(object.__getattribute__(self, "target"), name)
+
+    def __setattr__(self, name, value):  # (tests replace a box with their own)
+        setattr(object.__getattribute__(self, "target"), name, value)
+
+
+messagebox = _MessageBoxes(_tk_messagebox)
+

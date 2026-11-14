@@ -31,6 +31,7 @@ EVENTS = [
     ("resume", "Resumed", "going on after a pause", True),
     ("countdown", "Countdown", "each second before playing", False),
     ("picture_seen", "Picture seen", "picture watch restarts the macro", False),
+    ("error", "Problem", "playback stopped by itself or an error", True),
     ("click", "Button click", "buttons and switches in this app", False),
 ]
 EVENT_IDS = [e[0] for e in EVENTS]
@@ -45,6 +46,7 @@ TONES = {
     "resume": [(660, 70), (880, 90)],
     "countdown": [(880, 55)],
     "picture_seen": [(1318, 60), (1568, 60), (2093, 90)],
+    "error": [(523, 110), (392, 160)],
     "click": [(1400, 14)],
 }
 OLD_VOLUMES = {"Quiet": 25, "Normal": 50, "Loud": 80}  # the volume used to be one of these words

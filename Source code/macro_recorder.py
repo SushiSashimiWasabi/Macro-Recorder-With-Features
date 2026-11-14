@@ -33,16 +33,21 @@ try:
 except ImportError:  # not on Windows
     background = None
 
+import diag
 import importers
+import stats
 import platform_keys
+import raw_mouse
+import window_tools
 
 IS_WIN = sys.platform == "win32"
 IS_MAC = sys.platform == "darwin"
 
-try:
-    import image_watch
-except ImportError:  # numpy / opencv / mss missing: the "watch for a picture" option is turned off
-    image_watch = None
+import lazy
+
+# loaded the first time a picture is used (OpenCV and numpy take a moment to load); None when they're
+# missing, which turns the picture options off
+image_watch = lazy.module("image_watch") if lazy.available("cv2", "numpy", "mss") else None
 
 FILE_VERSION = 1
 SCREEN_TARGET = "Whole screen (normal)"
@@ -112,6 +117,29 @@ def scale_events(events, src, dst):
     return out
 
 
+def scale_events_rect(events, src, dst):
+    """Copy of events with mouse positions moved from one game window to another.
+
+    src and dst are the windows' insides on the screen as (x, y, w, h). Like scale_events, it's
+    scaled by the height around the middle (how Roblox fits its picture), so it also works when the
+    window moved, changed size or has another shape."""
+    sx, sy, sw, sh = src
+    dx, dy, dw, dh = dst
+    f = dh / sh
+    out = []
+    for ev in events:
+        ev = dict(ev)
+        if "x" in ev and "y" in ev:
+            ev["x"] = round(dx + dw / 2 + (ev["x"] - sx - sw / 2) * f)
+            ev["y"] = round(dy + dh / 2 + (ev["y"] - sy - sh / 2) * f)
+        out.append(ev)
+    return out
+
+
+CAMERA_STEP = 0.004  # recorded camera movement is added up into one step every 4 ms (250 a second)
+AWAY_GRACE = 0.4  # seconds another window may be in front before playback pauses (windows changing)
+
+
 def settings_path():
     if IS_MAC:
         base = os.path.expanduser("~/Library/Application Support")
@@ -131,6 +159,9 @@ def load_settings():
 
 BUILTIN_PICTURE = "retry_default.png"  # comes with the app (bundled into the .exe)
 BUILTIN_PICTURE_SCREEN_H = 1080
+# AOT:R's gold "MISSION COMPLETED" title (Kong's picture), the built-in "mission completed" picture
+BUILTIN_WIN_PICTURE = "completed_default.png"
+BUILTIN_WIN_PICTURE_SCREEN_H = 1440
 
 
 def resource_path(name):
@@ -144,11 +175,60 @@ def watch_dir():
     return os.path.join(os.path.dirname(settings_path()), "watch_pictures")
 
 
+class SavedPicture(dict):
+    """A picture to look for, from a file in the pictures folder. pic["img"] reads the file the first
+    time it's used (so the app starts without loading OpenCV); everything else is there at once."""
+
+    def __init__(self, path, **fields):
+        super().__init__(**fields)
+        self.path = path
+
+    def __missing__(self, key):
+        if key != "img":
+            raise KeyError(key)
+        img = self["img"] = image_watch.load_image(self.path)
+        return img
+
+
+def saved_picture(file, **fields):
+    """A SavedPicture for a file in the pictures folder, or None if the file is gone."""
+    path = os.path.join(watch_dir(), file)
+    return SavedPicture(path, file=file, **fields) if os.path.isfile(path) else None
+
+
+def picture_thumb(pic, max_w, max_h):
+    """(Tk picture, width, height) of a picture to look for, shrunk to fit. Read by Tk straight from
+    its PNG file when it isn't loaded yet (no OpenCV needed)."""
+    if "img" not in pic and getattr(pic, "path", None):
+        try:
+            photo = tk.PhotoImage(file=pic.path)
+            w, h = photo.width(), photo.height()
+            step = max(1, -(-w // max_w), -(-h // max_h))
+            return (photo.subsample(step) if step > 1 else photo), w, h
+        except tk.TclError:
+            pass
+    img = pic["img"]
+    h, w = img.shape[:2]
+    return tk.PhotoImage(data=image_watch.png_data(img, max_w, max_h)), w, h
+
+
 def int_setting(settings, name, default, low, high):
     try:
         return max(low, min(high, int(settings.get(name, default))))
     except (TypeError, ValueError):
         return default
+
+
+def dump_macro(data, f):
+    """Write a macro file compactly: one action per line, no extra spaces (about half the size of
+    the old layout, and quicker to open). Any program that reads JSON still reads it."""
+    events = data.get("events", [])
+    head = {k: v for k, v in data.items() if k != "events"}
+    compact = {"separators": (",", ":"), "ensure_ascii": False}
+    start = json.dumps(head, **compact)[:-1]
+    f.write(start + ("," if head else "") + '"events":[\n')
+    f.write(",\n".join(json.dumps(ev, **compact) for ev in events))
+    f.write("\n]}\n")
 
 
 def save_settings(data):
@@ -415,8 +495,23 @@ class MacroRecorder:
         self.play_note = ""  # what playback is doing right now, shown in the status line
         self.watch_pictures = []  # pictures to watch for: {"img", "file", "screen_h"}
         self.macro_screen = None  # (w, h) the current macro was made on; None = unknown
+        # the program the macro was recorded in: {"exe", "title", "client": [x, y, w, h]} or None
+        self.macro_program = None
+        self.window_samples = {}  # while recording: window -> [times seen, its info]
+        self.raw_mouse = None  # reads camera movement while recording (Windows)
+        self.camera_dx = self.camera_dy = 0
+        self.camera_last = 0.0
+        self.stop_reason = None  # why playback stopped by itself (shown afterwards), None = normal
+        # mission results: pictures that mean a run was won ("win") or lost ("loss")
+        self.result_pictures = []  # {"img", "file", "screen_h", "kind"}
+        self.result_matchers = []
+        self.result_state = {}
+        self.session = stats.Session()
+        self.away_started = None  # core window only: when playback paused because the game left the front
+        self.away_total = 0.0
 
         self.settings = load_settings()
+        diag.setup(os.path.dirname(settings_path()))
         self.hotkeys = dict(DEFAULT_HOTKEYS)  # action -> hotkey id
         saved = self.settings.get("hotkeys")
         if isinstance(saved, dict):
@@ -658,6 +753,27 @@ class MacroRecorder:
         ttk.Checkbutton(row1, variable=self.watch_bg_var, command=self._save_settings,
                         text="Ignore the background around text").grid(row=0, column=3, padx=(12, 0))
 
+        # safety: a picture that keeps showing (a stuck screen) mustn't restart the macro forever
+        row3 = ttk.Frame(box)
+        row3.grid(row=6, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        ttk.Label(row3, text="Safety limit: stop if it starts over more than").grid(row=0, column=0)
+        self.watch_limit_var = tk.IntVar(value=int_setting(s, "watch_limit_count", 10, 0, 1000))
+        ttk.Spinbox(row3, from_=0, to=1000, width=5, textvariable=self.watch_limit_var,
+                    command=self._save_settings).grid(row=0, column=1, padx=2)
+        ttk.Label(row3, text="times in").grid(row=0, column=2)
+        self.watch_limit_s_var = tk.IntVar(value=int_setting(s, "watch_limit_seconds", 60, 1, 3600))
+        ttk.Spinbox(row3, from_=1, to=3600, width=5, textvariable=self.watch_limit_s_var,
+                    command=self._save_settings).grid(row=0, column=3, padx=2)
+        ttk.Label(row3, text="s  (0 = no limit)").grid(row=0, column=4)
+        self.watch_shift_var = tk.BooleanVar(value=bool(s.get("watch_shift_lock", True)))
+        ttk.Checkbutton(box, variable=self.watch_shift_var, command=self._save_settings,
+                        text="Before clicking it, press Shift if the mouse pointer is hidden (Roblox Shift Lock)"
+                        ).grid(row=7, column=0, columnspan=4, sticky="w", pady=(4, 0))
+        self.watch_embed_var = tk.BooleanVar(value=bool(s.get("watch_save_with_macro", True)))
+        ttk.Checkbutton(box, variable=self.watch_embed_var, command=self._save_settings,
+                        text="Save these pictures inside the macros you save (friends get them with the macro)"
+                        ).grid(row=8, column=0, columnspan=4, sticky="w", pady=(4, 0))
+
         self.watch_widgets = [self.watch_check, self.btn_pick, self.btn_pick_file, self.btn_test,
                               self.btn_builtin]
         self.watch_remove_buttons = []
@@ -672,11 +788,9 @@ class MacroRecorder:
             saved = []
             self.root.after(0, self.add_builtin_picture)
         for entry in saved:
-            try:
-                img = image_watch.load_image(os.path.join(watch_dir(), entry["file"]))
-            except Exception:
-                continue  # picture file gone: forget it
-            self.watch_pictures.append({"img": img, "file": entry["file"], "screen_h": entry.get("screen_h")})
+            pic = saved_picture(entry["file"], screen_h=entry.get("screen_h")) if isinstance(entry, dict) else None
+            if pic is not None:  # (picture file gone: forget it)
+                self.watch_pictures.append(pic)
         self._show_watch_pictures()
 
     def _show_watch_pictures(self):
@@ -687,8 +801,7 @@ class MacroRecorder:
         if not self.watch_pictures:
             ttk.Label(self.watch_list, text="No picture yet", foreground="gray").grid(sticky="w")
         for i, pic in enumerate(self.watch_pictures):
-            h, w = pic["img"].shape[:2]
-            thumb = tk.PhotoImage(data=image_watch.png_data(pic["img"], 300, 50))
+            thumb, w, h = picture_thumb(pic, 300, 50)
             self.watch_thumbs.append(thumb)
             ttk.Label(self.watch_list, image=thumb, compound="left", text=f"  {w} x {h}").grid(
                 row=i, column=0, sticky="w", pady=1)
@@ -818,9 +931,13 @@ class MacroRecorder:
             self.settings["watch_enabled"] = bool(self.watch_var.get())
             self.settings["watch_ignore_bg"] = bool(self.watch_bg_var.get())
             self.settings["watch_click"] = bool(self.watch_click_var.get())
+            self.settings["watch_shift_lock"] = bool(self.watch_shift_var.get())
+            self.settings["watch_save_with_macro"] = bool(self.watch_embed_var.get())
             for name, var, low, high in (("watch_wait", self.watch_wait_var, 0, 600),
                                          ("watch_match", self.watch_match_var, 50, 99),
-                                         ("watch_end_wait", self.watch_end_var, 0, 3600)):
+                                         ("watch_end_wait", self.watch_end_var, 0, 3600),
+                                         ("watch_limit_count", self.watch_limit_var, 0, 1000),
+                                         ("watch_limit_seconds", self.watch_limit_s_var, 1, 3600)):
                 try:
                     self.settings[name] = max(low, min(high, int(var.get())))
                 except (tk.TclError, ValueError):
@@ -836,13 +953,22 @@ class MacroRecorder:
         self.root.withdraw()
         self.root.after(300, self._show_picker)
 
-    def _show_picker(self):
+    def _show_picker(self, on_pick=None, on_cancel=None, hidden=()):
+        """Freeze the screen and let the user drag a box. on_pick(img, screen_h) gets the picture
+        (default: add it to the pictures to watch for). hidden: other windows to show again after."""
+        def show_again():
+            self.root.deiconify()
+            for w in hidden:
+                try:
+                    w.deiconify()
+                except tk.TclError:
+                    pass
         try:
             shot = image_watch.grab_screen()
             with image_watch.mss.mss() as sct:
                 mon = image_watch.primary_monitor(sct)
         except Exception as exc:
-            self.root.deiconify()
+            show_again()
             messagebox.showerror("Macro Recorder", f"Couldn't take a screenshot:\n{exc}")
             return
         h, w = shot.shape[:2]
@@ -863,7 +989,12 @@ class MacroRecorder:
 
         def close():
             win.destroy()
-            self.root.deiconify()
+            show_again()
+
+        def cancel():
+            close()
+            if on_cancel:
+                on_cancel()
 
         def down(e):
             state["start"] = (e.x, e.y)
@@ -887,14 +1018,15 @@ class MacroRecorder:
                 return  # too small, probably a stray click: let them try again
             close()
             try:
-                self._add_watch_picture(shot[top:bottom, left:right].copy(), screen_h=h)
+                (on_pick or (lambda img, sh: self._add_watch_picture(img, screen_h=sh)))(
+                    shot[top:bottom, left:right].copy(), h)
             except Exception as exc:
                 messagebox.showerror("Macro Recorder", f"Couldn't use that picture:\n{exc}")
 
         canvas.bind("<ButtonPress-1>", down)
         canvas.bind("<B1-Motion>", drag)
         canvas.bind("<ButtonRelease-1>", up)
-        win.bind("<Escape>", lambda e: close())
+        win.bind("<Escape>", lambda e: cancel())
         win.focus_force()
 
     def load_watch_picture(self):
@@ -1057,6 +1189,10 @@ class MacroRecorder:
         if self.recording:
             self.recording = False
             self.paused = False
+            self._stop_camera()
+            self.macro_program = self._recorded_program()
+            diag.info(f"Recording stopped: {len(self.events)} actions"
+                      + (f", program {self.macro_program['exe']}" if self.macro_program else ""))
         else:
             if self.events and not messagebox.askyesno(
                 "Macro Recorder", "Start a new recording? The current one will be replaced."
@@ -1065,12 +1201,107 @@ class MacroRecorder:
             self.events = []
             self.current_file = None
             self.macro_screen = (self.screen_w, self.screen_h)  # recorded on this screen
+            self.macro_program = None
+            self.window_samples = {}
             self._show_made_for()
             self.paused = False
             self.paused_total = 0.0
             self.start_time = time.perf_counter()
             self.recording = True
+            self._add_held_buttons()
+            self._start_camera()
+            diag.info("Recording started" + (" with camera movement" if self.raw_mouse else ""))
         self._refresh()
+
+    def _add_held_buttons(self):
+        """A mouse button already held down when recording starts is recorded as pressed at the start
+        (otherwise its later release would come without a press)."""
+        try:
+            held = window_tools.held_mouse_buttons()
+            if not held:
+                return
+            x, y = self.mouse_ctrl.position
+            for name in held:
+                self.events.append({"type": "click", "x": int(x), "y": int(y), "button": name, "pressed": True,
+                                    "t": 0.0})
+        except Exception as exc:
+            diag.error("Couldn't read held mouse buttons", exc)
+
+    # ------------------------------------------------------------ camera movement (Windows)
+
+    def _camera_wanted(self):
+        return bool(self.settings.get("record_camera", False))
+
+    def _start_camera(self):
+        self._stop_camera()
+        if not self._camera_wanted() or not raw_mouse.IS_WIN:
+            return
+        self.camera_dx = self.camera_dy = 0
+        self.camera_last = time.perf_counter()
+        rm = raw_mouse.RawMouse(self._on_raw_move)
+        if rm.start():
+            self.raw_mouse = rm
+        else:
+            diag.error("Camera recording couldn't start (Raw Input)")
+
+    def _stop_camera(self):
+        rm, self.raw_mouse = self.raw_mouse, None
+        if rm is not None:
+            self._flush_camera()
+            rm.stop()
+
+    def _camera_turning(self):
+        """While the game hides the pointer (Shift Lock, holding the right button), mouse movement
+        turns the camera: it's recorded as camera movement instead of positions."""
+        if self.raw_mouse is None:
+            return False
+        # asked at most every 10 ms (the mouse can report up to 1000 times a second)
+        now = time.perf_counter()
+        cached = getattr(self, "hidden_cache", (0.0, False))
+        if now - cached[0] >= 0.01:
+            cached = self.hidden_cache = (now, window_tools.cursor_hidden() is True)
+        return cached[1]
+
+    def _on_raw_move(self, dx, dy):
+        """The mouse itself moved (Raw Input thread). Small movements are added up into one step
+        every few milliseconds, so playback sends them at the same pace the mouse did."""
+        if not self._capturing() or not self._camera_turning():
+            self._flush_camera()
+            return
+        self.camera_dx += dx
+        self.camera_dy += dy
+        if time.perf_counter() - self.camera_last >= CAMERA_STEP:
+            self._flush_camera()
+
+    def _flush_camera(self):
+        dx, dy = self.camera_dx, self.camera_dy
+        self.camera_dx = self.camera_dy = 0
+        self.camera_last = time.perf_counter()
+        if (dx or dy) and self.recording:
+            self._add({"type": "move_rel", "dx": int(dx), "dy": int(dy)})
+
+    # ------------------------------------------------------------ the program a macro is recorded in
+
+    def _note_window(self):
+        """While recording: remember which program's window is in front (on each click and key)."""
+        try:
+            hwnd = window_tools.foreground()
+            if not hwnd or window_tools.pid_of(hwnd) == os.getpid():
+                return
+            entry = self.window_samples.get(hwnd)
+            if entry is None:
+                info = window_tools.program_info(hwnd)
+                if info is None:
+                    return
+                entry = self.window_samples[hwnd] = [0, info]
+            entry[0] += 1
+        except Exception:
+            pass
+
+    def _recorded_program(self):
+        if not self.window_samples:
+            return None
+        return max(self.window_samples.values(), key=lambda e: e[0])[1]
 
     def toggle_pause(self):
         if not self.recording:
@@ -1099,7 +1330,7 @@ class MacroRecorder:
         self.events.append(event)
 
     def _on_move(self, x, y):
-        if not self._capturing():
+        if not self._capturing() or self._camera_turning():
             return
         now = time.perf_counter()
         if now - self.last_move < MOVE_INTERVAL:
@@ -1109,7 +1340,10 @@ class MacroRecorder:
 
     def _on_click(self, x, y, button, pressed):
         if self._capturing() and not self._on_own_window(x, y):
+            self._flush_camera()  # camera movement before the click stays before it
             self._add({"type": "click", "x": x, "y": y, "button": button.name, "pressed": pressed})
+            if pressed:
+                self._note_window()
 
     def _on_scroll(self, x, y, dx, dy):
         if self._capturing() and not self._on_own_window(x, y):
@@ -1140,6 +1374,7 @@ class MacroRecorder:
             return
         if self._capturing():
             self._add({"type": "key", "key": key_to_data(key), "pressed": True})
+            self._note_window()
 
     def _on_key_release(self, key):
         if self._hotkey_action(key) is not None:
@@ -1164,7 +1399,12 @@ class MacroRecorder:
         if play_on is None or not self._read_made_for():
             return
         # move mouse positions from the size the macro was made for to the size it's played on
-        events = scale_events(self.events, self.macro_screen, play_on)
+        events = self._events_for_play(play_on)
+        try:
+            self.wait_matchers = self._make_wait_matchers(events)
+        except Exception as exc:
+            messagebox.showerror("Macro Recorder", f"Couldn't use a \"Wait for a picture\" step:\n{exc}")
+            return
         ready = self._ready_seconds()
         bg = None
         if self.target_var.get() != SCREEN_TARGET:
@@ -1196,14 +1436,97 @@ class MacroRecorder:
             except Exception as exc:
                 messagebox.showerror("Macro Recorder", f"Couldn't use the picture:\n{exc}")
                 return
+        self.result_matchers = []
+        if image_watch is not None and self.settings.get("results_enabled", True):
+            for pic in self.result_pictures:
+                # a result title can show at quite another size than when the picture was taken (other
+                # screen or window size), so it's also looked for a quarter smaller and a third bigger
+                base_h = pic["screen_h"] or self.screen_h
+                # the size it was found at before (remembered per picture and screen) goes first; the
+                # other sizes are only looked for if it isn't found at that size for a while
+                known = pic.get("found_factor") if pic.get("found_screen") == [self.screen_w, self.screen_h] \
+                    else None
+                factors = [known] + [f for f in (1.0, 1.33, 0.75) if f != known] if known else [1.0, 1.33, 0.75]
+                for f in factors:
+                    try:
+                        m = image_watch.Matcher(pic["img"], picked_screen_h=base_h * f, ignore_background=True,
+                                                screen_h=self.screen_h)
+                        m.kind = pic["kind"]
+                        m.picture_id = id(pic)
+                        m.picture = pic
+                        m.factor = f
+                        m.fallback = bool(known) and f != known
+                        self.result_matchers.append(m)
+                    except Exception as exc:
+                        if f == 1.0:
+                            diag.error("A result picture couldn't be used", exc)
+        self.session = stats.Session(self._macro_name())
+        if watch is not None:
+            watch["limit_count"] = int_setting(self.settings, "watch_limit_count", 10, 0, 1000)
+            watch["limit_seconds"] = int_setting(self.settings, "watch_limit_seconds", 60, 1, 3600)
+            watch["shift_lock"] = bool(self.settings.get("watch_shift_lock", True))
         self.stop_play.clear()
+        self.stop_reason = None
+        self.away_started = None
+        self.away_total = 0.0
         self.playing = True
         self.countdown_left = ready
         self.play_note = ""
+        self.play_bg = bg
         self._refresh()
+        diag.info(f"Playing: {len(events)} actions, speed {speed:g}, "
+                  + ("loop" if loop else f"{repeats} time(s)") + (", picture watch" if watch else "")
+                  + (", background window" if bg else ""))
         threading.Thread(target=self._play_worker,
                          args=(events, repeats, loop, speed, bg, ready, watch),
                          daemon=True).start()
+
+    def _events_for_play(self, play_on):
+        """The macro's actions with mouse positions fitted to this screen, or to the game window
+        when Settings > Playback > Fit to says so (and the macro knows its window)."""
+        self.fit_note = ""
+        if self.settings.get("fit_to") == "window":
+            src = (self.macro_program or {}).get("client")
+            dst = self._game_client_rect()
+            if src and dst and len(src) == 4 and src[3] > 0:
+                if tuple(src) == tuple(dst):
+                    return [dict(ev) for ev in self.events]
+                self.fit_note = "fitted to the game window"
+                return scale_events_rect(self.events, src, dst)
+            self.fit_note = ("the game window wasn't found, so it's fitted to the screen" if src
+                             else "this macro doesn't know its window, so it's fitted to the screen")
+        return scale_events(self.events, self.macro_screen, play_on)
+
+    def _game_client_rect(self):
+        """Where the inside of the game's window is now: the macro's program if it's open, else the
+        window in front (if it isn't this app)."""
+        exe = (self.macro_program or {}).get("exe")
+        wins = window_tools.windows_of(exe) if exe else []
+        if not wins:
+            fg = window_tools.foreground()
+            if fg and window_tools.pid_of(fg) != os.getpid():
+                wins = [fg]
+        return window_tools.client_rect(wins[0]) if wins else None
+
+    def _make_wait_matchers(self, events):
+        """Pictures of the "Wait for a picture" steps, ready to look for (by step number)."""
+        found = {}
+        for i, ev in enumerate(events):
+            if ev.get("type") != "wait_picture":
+                continue
+            if image_watch is None:
+                raise ValueError("this copy was built without picture support")
+            import base64
+
+            import numpy as np
+
+            data = np.frombuffer(base64.b64decode(ev["png"]), np.uint8)
+            img = image_watch.cv2.imdecode(data, image_watch.cv2.IMREAD_COLOR)
+            if img is None:
+                raise ValueError(f"step {i + 1} has a broken picture")
+            found[i] = image_watch.Matcher(img, picked_screen_h=ev.get("screen_h"), ignore_background=True,
+                                           screen_h=self.screen_h)
+        return found
 
     def stop_playback(self):
         self.stop_play.set()
@@ -1222,6 +1545,22 @@ class MacroRecorder:
             self.play_note = text
             self._refresh()
         self._call_ui(update)
+
+    def _free_shift_lock(self):
+        """If the game hides the pointer (Roblox's Shift Lock is on), press Shift once to get the
+        pointer back, so a click can land on a button. Returns True if the pointer is visible now."""
+        if window_tools.cursor_hidden() is not True:
+            return True
+        try:
+            self.kb_ctrl.press(keyboard.Key.shift_l)
+            time.sleep(0.05)
+            self.kb_ctrl.release(keyboard.Key.shift_l)
+        except Exception:
+            return False
+        time.sleep(0.3)
+        ok = window_tools.cursor_hidden() is not True
+        diag.info("Pressed Shift to free the mouse from Shift Lock: " + ("worked" if ok else "pointer still hidden"))
+        return ok
 
     def _click_at(self, x, y):
         """Left-click a spot like a person would: move there, nudge so the game sees the mouse, click."""
@@ -1263,6 +1602,7 @@ class MacroRecorder:
         for a while doesn't restart the macro over and over. If the picture is already showing when
         playback starts, it waits for it to go away first."""
         matchers, need = watch["matchers"], watch["need"]
+        window_tools.set_thread_priority(-1)  # never in the way of playback's timing
         armed = None
         checks = 0
         try:
@@ -1315,8 +1655,12 @@ class MacroRecorder:
 
     def _play_worker(self, events, repeats, loop, speed, bg=None, ready=0, watch=None):
         held_keys, held_buttons = set(), set()
+        self.held_lists = (held_keys, held_buttons)
+        window_tools.set_thread_priority(1)  # playback goes before the screen checks
         seen = threading.Event()  # the watched-for picture showed up
         watch_done = threading.Event()
+        restarts = []  # when picture watch started the macro over (for the runaway limit)
+        count = 0
         try:
             # "get ready" countdown; Stop cancels it
             for left in range(ready, 0, -1):
@@ -1324,17 +1668,22 @@ class MacroRecorder:
                 if self.stop_play.wait(1.0):
                     return
             self._set_countdown(0)
+            away = self._away_watcher(bg)
+            if self.result_matchers:
+                self.result_state = {}
+                threading.Thread(target=self._result_worker, args=(self.result_matchers, watch_done),
+                                 daemon=True).start()
             if watch is not None:
                 threading.Thread(target=self._watch_worker, args=(watch, seen, watch_done),
                                  daemon=True).start()
-            count = 0
             while not self.stop_play.is_set() and (loop or count < repeats):
                 if loop or repeats > 1 or watch:
                     total = "" if loop else f" of {repeats}"
                     watching = ", watching for the picture" if watch else ""
                     self._set_note(f"Playing run {count + 1}{total}{watching}...")
                 start = self._play_clock()
-                for ev in events:
+                self.run_began = (time.perf_counter(), start)
+                for i, ev in enumerate(events):
                     target = start + ev["t"] / speed
                     # wait in small steps so Stop (F12) and the picture are noticed quickly
                     while True:
@@ -1342,12 +1691,24 @@ class MacroRecorder:
                             return
                         if seen.is_set():
                             break
+                        if away is not None and away(held_keys, held_buttons):
+                            return  # waited too long for the game to come back
                         remaining = target - self._play_clock()
                         if remaining <= 0:
                             break
-                        time.sleep(min(remaining, 0.02))
+                        if remaining > 0.002:
+                            time.sleep(min(remaining - 0.0015, 0.02))
+                        else:
+                            time.sleep(0)  # the last 2 ms: check the clock closely (steadier quick taps)
                     if seen.is_set():
                         break  # the picture showed up: this run is over
+                    if ev["type"] == "wait_picture":
+                        before = self._play_clock()
+                        result = self._wait_for_picture(i, ev, bg, held_keys, held_buttons, away)
+                        if result == "stop":
+                            return
+                        start += self._play_clock() - before  # the rest keeps its timing after the wait
+                        continue
                     if bg is not None:
                         self._replay_event_bg(bg, ev, held_keys)
                     else:
@@ -1368,12 +1729,28 @@ class MacroRecorder:
                             if seen.wait(0):
                                 break
                     count += 1
+                    picture = seen.is_set()
+                    self._finish_run(count, "picture" if picture else "end")
                     if not (loop or count < repeats):
                         break
-                    if seen.is_set():
+                    if picture:
                         seen.clear()
+                        now = time.perf_counter()
+                        restarts.append(now)
+                        limit, within = watch["limit_count"], watch["limit_seconds"]
+                        recent = [t for t in restarts if now - t <= within]
+                        restarts[:] = recent
+                        if limit and len(recent) > limit:
+                            self.stop_reason = (f"Stopped: the picture started the macro over {len(recent)} times "
+                                                f"in {within} s. Something is probably stuck (see Picture watch "
+                                                "> Safety limit).")
+                            diag.error(self.stop_reason)
+                            return
                         self._call_ui(self._picture_seen)
                         if watch["click"] and watch.get("seen_at"):
+                            if watch.get("shift_lock"):
+                                self._set_note("Picture seen! Freeing the mouse from Shift Lock...")
+                                self._free_shift_lock()
                             self._set_note("Picture seen! Clicking it...")
                             self._click_at(*watch["seen_at"])
                         for left in range(int(watch["wait"]), 0, -1):
@@ -1383,11 +1760,298 @@ class MacroRecorder:
                         seen.clear()  # ignore it if it flickered during the wait
                     continue
                 count += 1
+                self._finish_run(count, "end")
+        except Exception as exc:
+            self.stop_reason = diag.error("Playback stopped because of an error", exc)
         finally:
             watch_done.set()
             # never leave a key or mouse button stuck down
             self._release_held(bg, held_keys, held_buttons)
+            self.runs_done = count
             self._call_ui(self._playback_done)
+
+    def _macro_name(self):
+        return os.path.splitext(os.path.basename(self.current_file))[0] if self.current_file else "Macro"
+
+    def _finish_run(self, count, how):
+        """A run is over: work out whether it was won, lost or unknown, add it to the session's
+        results, then tell _run_finished."""
+        status = stats.UNKNOWN
+        if self.result_matchers:
+            began_wall, began_clock = getattr(self, "run_began", (time.perf_counter(), self._play_clock()))
+            status = self._run_result(began_wall)
+            if status != stats.UNKNOWN:
+                # the result showing now belongs to this run, even if the watcher only notices it
+                # after the next run has started
+                self.result_consumed = (status, time.perf_counter())
+            seconds = self._play_clock() - began_clock
+        else:
+            seconds = self._play_clock() - getattr(self, "run_began", (0, self._play_clock()))[1]
+        self.session.add(status, seconds)
+        diag.info(f"Run {count} over ({how}): {status}, {seconds:.0f} s")
+        self._run_finished(count, how)
+
+    def _run_result(self, run_began):
+        """"win", "loss" or "unknown" for the run that started at run_began (perf_counter time)."""
+        st = self.result_state
+        seen = [(t, kind) for kind, s in st.items() for t in s.get("appeared", []) if t >= run_began]
+        if seen:
+            return max(seen)[1]
+        # not seen by the watcher yet: look at the screen once more, now
+        try:
+            need = self.settings.get("results_match", 85) / 100.0
+            # only around the spots where result pictures were seen before (about 0.01 s, so Retry
+            # isn't held up); the whole screen only while no result picture was ever found
+            whole = not any(self._kinds_found().values())
+            region = None
+            if not whole:
+                areas = [m.near_last_area() for m in list(self.result_matchers) if m.last_rect is not None]
+                region = (min(a[0] for a in areas), min(a[1] for a in areas),
+                          max(a[2] for a in areas), max(a[3] for a in areas))
+            screen = self._hide_own_window(image_watch.grab_screen(None, region), image_watch.screen_origin())
+            best = self._result_scores(screen, need, whole=whole)
+            if region is not None:
+                # a kind never found yet (like MISSION FAILED) usually shows where the other one did:
+                # look for it in that same small part of the screen
+                x0, y0 = max(0, region[0]), max(0, region[1])
+                part = screen[y0:max(y0, region[3]), x0:max(x0, region[2])]
+                found = self._kinds_found()
+                for m in list(self.result_matchers):
+                    if not found.get(m.kind) and part.size:
+                        score, _ = m.find(part, good_enough=need, quick=True, remember=False)
+                        best[m.kind] = max(best.get(m.kind, 0.0), score)
+            kind = self._best_result(best, need)
+            since = st.get(kind, {}).get("since") if kind else None
+            # (a picture already showing before this run started belongs to the run before)
+            if kind and (since is None or since >= run_began):
+                return kind
+        except Exception as exc:
+            diag.error("Couldn't check the result picture", exc)
+        return stats.UNKNOWN
+
+    def _kinds_found(self):
+        """kind -> whether one of its pictures was found on screen yet (this playback)."""
+        found = {}
+        for m in list(self.result_matchers):
+            found[m.kind] = found.get(m.kind, False) or m.last_rect is not None
+        return found
+
+    def _result_scores(self, screen, need, whole):
+        """The best score of each kind ("win" / "loss") on a screenshot. Once a picture was found at
+        one of its sizes, its other sizes aren't looked for any more (less work)."""
+        scores = {}
+        matchers = list(self.result_matchers)
+        if whole:
+            self.result_whole_checks = getattr(self, "result_whole_checks", 0) + 1
+        for m in matchers:
+            if m.last_rect is None and any(o is not m and o.picture_id == m.picture_id and o.last_rect is not None
+                                           for o in matchers):
+                continue
+            if getattr(m, "fallback", False) and m.last_rect is None and \
+                    getattr(self, "result_whole_checks", 0) % 6 != 5:
+                continue  # the remembered size goes first; other sizes only every 6th look
+            score, _ = m.find_near_last(screen, good_enough=need)
+            if score < need and whole:
+                score, _ = m.find(screen, good_enough=need, quick=True)
+            if score >= need and hasattr(m, "picture"):
+                # remember this size for next time (saved with the pictures when playback ends)
+                m.picture["found_factor"] = m.factor
+                m.picture["found_screen"] = [self.screen_w, self.screen_h]
+            scores[m.kind] = max(scores.get(m.kind, 0.0), score)
+        return scores
+
+    @staticmethod
+    def _best_result(scores, need):
+        kind = max(scores, key=scores.get) if scores else None
+        return kind if kind and scores[kind] >= need else None
+
+    def _result_worker(self, matchers, done):
+        """While playing: notice when a "mission completed" or "mission failed" picture appears
+        (about every 1.5 s). Each time one appears counts once, for the run that's going on."""
+        need = self.settings.get("results_match", 85) / 100.0
+        window_tools.set_thread_priority(-1)  # never in the way of playback's timing
+        checks = 0
+        try:
+            with image_watch.mss.mss() as sct:
+                origin = image_watch.screen_origin(sct)
+                while not done.is_set():
+                    started = time.perf_counter()
+                    whole = checks % 4 == 0 or not all(self._kinds_found().values())
+                    checks += 1
+                    visible = {}
+                    try:
+                        screen = self._hide_own_window(image_watch.grab_screen(sct), origin)
+                        scores = self._result_scores(screen, need, whole)
+                        best = self._best_result(scores, need)
+                        # only the best-matching kind counts (a "failed" title can look a bit like a
+                        # "completed" one)
+                        visible = {kind: kind == best for kind in scores}
+                    except Exception:
+                        visible = {}
+                    now = time.perf_counter()
+                    for kind, on in visible.items():
+                        s = self.result_state.setdefault(kind, {"since": None, "appeared": [], "first": True})
+                        if on and s["since"] is None:
+                            s["since"] = now
+                            consumed = getattr(self, "result_consumed", None)
+                            if consumed and consumed[0] == kind and now - consumed[1] < 15:
+                                pass  # the run that just ended already counted this one
+                            elif not s["first"]:  # (already showing when playing started: not this run's)
+                                s["appeared"].append(now)
+                        elif not on and whole:
+                            s["since"] = None
+                        s["first"] = False
+                    took = time.perf_counter() - started
+                    done.wait(max(0.5, 1.5 - took, took))
+        except Exception as exc:
+            diag.error("Result pictures: watching the screen failed", exc)
+
+    def _run_finished(self, count, how):
+        """One run of the macro is over (how: "end" = it played to the end, "picture" = picture watch).
+        The dark window sends a Discord message here, if that's set up."""
+
+    # ------------------------------------------------------------ the game must stay in front
+
+    def _game_windows(self):
+        """The windows that count as "the game" while playing: the macro's program if it's open,
+        else whatever is in front when playing starts (unless that's this app). None = don't check."""
+        own = os.getpid()
+        exe = (self.macro_program or {}).get("exe")
+        fg = window_tools.foreground()
+        if exe:
+            wins = set(window_tools.windows_of(exe))
+            if wins:
+                return wins
+        if fg and window_tools.pid_of(fg) != own:
+            return {fg}
+        return None
+
+    def _away_watcher(self, bg):
+        """When "Pause if the game isn't in front" is on: a function the playback loop calls often.
+        If another window (a pop-up, Discord, this app) has been in front for a moment, it lets go of
+        every held key and button and pauses until the game is in front again. It returns True
+        when playback should stop (waited longer than the limit). None when there's nothing to check."""
+        if bg is not None or not self.settings.get("pause_when_away", True) or not window_tools.IS_WIN:
+            return None
+        games = self._game_windows()
+        if not games:
+            return None
+        limit = int_setting(self.settings, "away_stop_seconds", 0, 0, 3600)
+        state = {"since": None, "last_check": 0.0}
+
+        def game_in_front():
+            fg = window_tools.foreground()
+            if fg is None or fg in games:
+                return True  # (no window at all for a moment happens while windows change hands)
+            exe = (self.macro_program or {}).get("exe")
+            if exe and window_tools.exe_of(fg) == exe:  # the game opened another window of its own
+                games.add(fg)
+                return True
+            return False
+
+        def check(held_keys, held_buttons):
+            now = time.perf_counter()
+            if now - state["last_check"] < 0.05 or self._user_paused():
+                return False
+            state["last_check"] = now
+            if game_in_front():
+                state["since"] = None
+                return False
+            if state["since"] is None:
+                state["since"] = now
+                return False
+            if now - state["since"] < AWAY_GRACE:
+                return False
+            # pause: let go of everything, and wait for the game to come back
+            self._release_held(None, held_keys, held_buttons)
+            self._away_pause(True)
+            diag.info("Paused: the game isn't in front")
+            began = time.perf_counter()
+            try:
+                while not self.stop_play.is_set():
+                    waited = time.perf_counter() - began
+                    if limit and waited >= limit:
+                        self.stop_reason = (f"Stopped: the game wasn't in front for {limit} s "
+                                            "(Settings > Playback > Pause if the game isn't in front).")
+                        diag.info(self.stop_reason)
+                        return True
+                    note = "Paused: the game isn't in front. Click back into the game to go on"
+                    if limit:
+                        note += f" (stops in {int(limit - waited) + 1} s)"
+                    self._set_note(note + ".")
+                    if game_in_front():
+                        # give the game a moment to take the mouse and keyboard back
+                        if self.stop_play.wait(0.3):
+                            break
+                        if game_in_front():
+                            break
+                    self.stop_play.wait(0.1)
+            finally:
+                self._away_pause(False)
+                state["since"] = None
+            self._set_note("Playing...")
+            diag.info("Going on: the game is in front again")
+            return False
+
+        return check
+
+    def _user_paused(self):
+        """True while the user paused playback (the dark window's Pause key)."""
+        return False
+
+    def _away_pause(self, on):
+        """Playback's clock stands still while the game isn't in front."""
+        if on and self.away_started is None:
+            self.away_started = time.perf_counter()
+        elif not on and self.away_started is not None:
+            self.away_total += time.perf_counter() - self.away_started
+            self.away_started = None
+
+    # ------------------------------------------------------------ "Wait for a picture" steps
+
+    def _wait_for_picture(self, index, ev, bg, held_keys, held_buttons, away):
+        """A step that waits until a picture shows on screen (up to its time limit), then maybe clicks
+        it. Returns "stop" when the macro should stop, else "go on"."""
+        matcher = self.wait_matchers.get(index)
+        if matcher is None:
+            return "go on"
+        need = max(0.5, min(0.99, ev.get("match", 85) / 100.0))
+        timeout = float(ev.get("timeout", 30))
+        began = time.perf_counter()
+        found = None
+        with image_watch.mss.mss() as sct:
+            origin = image_watch.screen_origin(sct)
+            while not self.stop_play.is_set():
+                if away is not None and away(held_keys, held_buttons):
+                    return "stop"
+                waited = time.perf_counter() - began
+                left = timeout - waited
+                if timeout > 0 and left <= 0:
+                    break
+                label = ev.get("name") or "the picture"
+                self._set_note(f"Waiting for {label}" + (f" ({int(left) + 1} s)..." if timeout > 0 else "..."))
+                try:
+                    screen = self._hide_own_window(image_watch.grab_screen(sct), origin)
+                    score, rect = matcher.find(screen, good_enough=need, quick=True)
+                except Exception as exc:
+                    diag.error("Wait for a picture: screenshot failed", exc)
+                    score, rect = 0.0, None
+                if score >= need and rect is not None:
+                    x, y, w, h = rect
+                    found = (origin[0] + x + w // 2, origin[1] + y + h // 2)
+                    break
+                self.stop_play.wait(0.25)
+        if self.stop_play.is_set():
+            return "stop"
+        if found is None:
+            if ev.get("otherwise") == "stop":
+                self.stop_reason = f"Stopped: {ev.get('name') or 'the picture'} didn't show within {timeout:g} s."
+                diag.info(self.stop_reason)
+                return "stop"
+            return "go on"
+        if ev.get("click"):
+            self._click_at(*found)
+        return "go on"
 
     def _replay_event(self, ev, held_keys, held_buttons):
         kind = ev["type"]
@@ -1422,7 +2086,7 @@ class MacroRecorder:
 
     def _replay_event_bg(self, bg, ev, held_vks):
         kind = ev["type"]
-        if kind == "move_rel":
+        if kind in ("move_rel", "wait_picture"):
             return  # camera-style moves can't be sent to a background window
         x, y = (ev["x"], ev["y"]) if "x" in ev else self.mouse_ctrl.position
         if kind == "move":
@@ -1439,14 +2103,19 @@ class MacroRecorder:
             (held_vks.add if ev["pressed"] else held_vks.discard)(vk)
 
     def _play_clock(self):
-        """The clock playback follows (the new window stops it while playback is paused)."""
-        return time.perf_counter()
+        """The clock playback follows: it stands still while the game isn't in front (and, in the dark
+        window, while playback is paused)."""
+        now = self.away_started if self.away_started is not None else time.perf_counter()
+        return now - self.away_total
 
     def _playback_done(self):
         self.playing = False
         self.countdown_left = 0
         self.play_note = ""
         self._refresh()
+        diag.info("Playback ended" + (f": {self.stop_reason}" if self.stop_reason else ""))
+        if self.stop_reason and type(self) is MacroRecorder:  # (the dark window shows it its own way)
+            messagebox.showwarning("Macro Recorder", self.stop_reason)
 
     # ------------------------------------------------------------ files
 
@@ -1468,7 +2137,7 @@ class MacroRecorder:
         if self.macro_screen:
             data["screen"] = {"width": self.macro_screen[0], "height": self.macro_screen[1]}
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=1)
+            dump_macro(data, f)
         self.current_file = path
         self._refresh()
 
@@ -1490,6 +2159,7 @@ class MacroRecorder:
         if not path:
             return False
         imported = None
+        self.file_data = {}
         try:
             events, screen = self._read_own_file(path)
         except Exception as own_error:
@@ -1517,8 +2187,11 @@ class MacroRecorder:
             made_for = None
         self.macro_screen = made_for
         self._show_made_for()
+        program = imported.program if imported is not None else self.file_data.get("program")
+        self.macro_program = program if isinstance(program, dict) else None
         self.events = events
         self.current_file = path
+        diag.info(f"Opened a macro: {len(events)} actions" + (f" ({imported.source})" if imported else ""))
         self._refresh()
         play_on = self._read_play_on(quiet=True)
         size_note = ""
@@ -1547,8 +2220,7 @@ class MacroRecorder:
             messagebox.showinfo("Macro Recorder", "\n\n".join(lines))
         return True
 
-    @staticmethod
-    def _read_own_file(path):
+    def _read_own_file(self, path):
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
         if data.get("format") == "luvmacro":
@@ -1556,6 +2228,7 @@ class MacroRecorder:
         events = data["events"]
         if not isinstance(events, list):
             raise ValueError("this isn't a macro file")
+        self.file_data = data  # the rest of the file (its program, pictures to watch for)
         return events, data.get("screen", {})
 
     def link_file_type(self):
@@ -1595,11 +2268,13 @@ class MacroRecorder:
             self.events = []
             self.current_file = None
             self.macro_screen = None
+            self.macro_program = None
             self._show_made_for()
             self._refresh()
 
     def _on_close(self):
         self._save_settings()
+        self._stop_camera()
         self.stop_play.set()
         self.kb_listener.stop()
         self.mouse_listener.stop()

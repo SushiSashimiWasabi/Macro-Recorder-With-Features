@@ -6,8 +6,14 @@ Transparent parts stay transparent. The chosen picture is stored as a .png in th
 import base64
 import struct
 
-import cv2
-import numpy as np
+import hashlib
+import os
+
+import lazy
+
+cv2 = lazy.module("cv2")  # (loaded only when a picture has to be made; see photo())
+np = lazy.module("numpy")
+CACHE_DIR = None  # set by the window: ready-made icon sizes are kept here, so the next start is quicker
 
 PICTURE_TYPES = [("Pictures", "*.png *.jpg *.jpeg *.gif *.bmp *.webp *.tif *.tiff *.ico"),
                  ("All files", "*.*")]
@@ -109,11 +115,31 @@ def store(path, dest):
 
 
 def photo(tk_module, path, size, master=None):
-    """A Tk picture of the stored picture, fitted into size x size (None if it can't be read)."""
+    """A Tk picture of the stored picture, fitted into size x size (None if it can't be read).
+
+    Each size made once is kept in CACHE_DIR (named after the picture's contents), and later read
+    straight by Tk, without loading OpenCV."""
+    cached = None
+    if CACHE_DIR:
+        try:
+            with open(path, "rb") as f:
+                key = hashlib.sha1(f.read()).hexdigest()[:20]
+            cached = os.path.join(CACHE_DIR, f"{key}_{int(size)}.png")
+            if os.path.isfile(cached):
+                return tk_module.PhotoImage(master=master, file=cached)
+        except (OSError, tk_module.TclError):
+            cached = None
     img = load(path)
     if img is None:
         return None
     ok, buf = cv2.imencode(".png", fit(img, size))
     if not ok:
         return None
+    if cached:
+        try:
+            os.makedirs(CACHE_DIR, exist_ok=True)
+            with open(cached, "wb") as f:
+                f.write(buf.tobytes())
+        except OSError:
+            pass
     return tk_module.PhotoImage(master=master, data=base64.b64encode(buf.tobytes()).decode("ascii"))

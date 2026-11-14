@@ -15,8 +15,9 @@ EXCLUDE_FILES = ("opencv_videoio_ffmpeg",)
 a = Analysis(
     [entry],
     pathex=[here],
-    datas=[(os.path.join(here, "retry_default.png"), "."), (os.path.join(here, "default_logo.png"), ".")],
-    hiddenimports=["pynput.keyboard._win32", "pynput.mouse._win32"],
+    datas=[(os.path.join(here, "retry_default.png"), "."), (os.path.join(here, "default_logo.png"), "."),
+           (os.path.join(here, "completed_default.png"), ".")],
+    hiddenimports=["image_watch", "lazy", "pynput.keyboard._win32", "pynput.mouse._win32"],
     excludes=EXCLUDE_MODULES,
 )
 a.binaries = [b for b in a.binaries if not os.path.basename(b[0]).lower().startswith(EXCLUDE_FILES)]

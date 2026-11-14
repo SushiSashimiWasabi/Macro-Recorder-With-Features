@@ -92,8 +92,11 @@ def page_html(link, port):
  #player {{ position: fixed; inset: 0; width: 100%; height: 100%; border: 0; }}
  #msg {{ position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
         padding: 20px; color: #ddd; font: 15px "Segoe UI", sans-serif; text-align: center; }}
+ #osd {{ position: fixed; left: 50%; top: 14px; transform: translateX(-50%); padding: 6px 14px;
+        background: rgba(17, 17, 20, .85); color: #f1f1f4; font: bold 14px "Segoe UI", sans-serif;
+        border-radius: 8px; display: none; pointer-events: none; z-index: 10; }}
 </style></head>
-<body><div id="player"></div><div id="msg"></div>
+<body><div id="player"></div><div id="msg"></div><div id="osd"></div>
 <script>
  var link = {info};
  var player;
@@ -101,6 +104,38 @@ def page_html(link, port):
  function report() {{ fetch("/size?h=" + Math.round(innerHeight * devicePixelRatio)).catch(function () {{}}); }}
  addEventListener("resize", report); report(); setInterval(report, 700);
  function say(text) {{ var m = document.getElementById("msg"); m.textContent = text; m.style.display = "flex"; }}
+ // the app's video keys: skip, volume, speed, play / pause, another video (shown for a moment at the top)
+ var osdTimer = null;
+ function osd(text) {{
+   var o = document.getElementById("osd"); o.textContent = text; o.style.display = "block";
+   clearTimeout(osdTimer); osdTimer = setTimeout(function () {{ o.style.display = "none"; }}, 1200);
+ }}
+ function clock(t) {{ t = Math.max(0, Math.floor(t)); var m = Math.floor(t / 60), s = t % 60;
+   return m + ":" + (s < 10 ? "0" : "") + s; }}
+ function doCommand(c, v) {{
+   if (!player || !player.getPlayerState) return;
+   try {{
+     if (c === "seek") {{ var t = Math.max(0, player.getCurrentTime() + v); player.seekTo(t, true);
+       osd((v > 0 ? "+" : "") + v + " s   " + clock(t)); }}
+     else if (c === "volume") {{ var n = Math.max(0, Math.min(100, Math.round(player.getVolume() + v)));
+       player.setVolume(n); if (n > 0 && player.isMuted()) player.unMute(); osd("Volume " + n + "%"); }}
+     else if (c === "mute") {{ if (player.isMuted()) {{ player.unMute(); osd("Sound on"); }}
+       else {{ player.mute(); osd("Muted"); }} }}
+     else if (c === "pause") {{ if (player.getPlayerState() === 1) {{ player.pauseVideo(); osd("Paused"); }}
+       else {{ player.playVideo(); osd("Playing"); }} }}
+     else if (c === "speed") {{ var rates = player.getAvailablePlaybackRates() || [1];
+       var i = rates.indexOf(player.getPlaybackRate()); i = Math.max(0, Math.min(rates.length - 1, i + v));
+       player.setPlaybackRate(rates[i]); osd("Speed " + rates[i] + "x"); }}
+     else if (c === "load") {{ document.getElementById("msg").style.display = "none";
+       player.loadVideoById({{ videoId: v.video, startSeconds: v.start || 0 }}); osd(v.label || "Next video"); }}
+   }} catch (e) {{}}
+ }}
+ function pollCommands() {{
+   fetch("/cmd").then(function (r) {{ return r.json(); }}).then(function (list) {{
+     list.forEach(function (c) {{ doCommand(c[0], c[1]); }});
+   }}).catch(function () {{}});
+ }}
+ setInterval(pollCommands, 200);
  function onYouTubeIframeAPIReady() {{
    var vars = {{ autoplay: 1, playsinline: 1, rel: 0, origin: {origin} }};
    if (link.start) vars.start = link.start;
@@ -132,6 +167,7 @@ class _Server:
 
     def __init__(self):
         self.page = b""
+        self.commands = []  # the video keys pressed, waiting for the page to fetch them
         self.inner_height = 0  # the page's height in screen pixels, as the page reports it
         self.reported_at = 0.0
         outer = self
@@ -145,6 +181,16 @@ class _Server:
                     outer.reported_at = time.time()
                     self.send_response(204)
                     self.end_headers()
+                    return
+                if path == "/cmd":
+                    body = json.dumps(outer.commands).encode("utf-8")
+                    outer.commands = []
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
                     return
                 if path not in ("/", "/index.html"):
                     self.send_error(404)
@@ -281,6 +327,13 @@ class VideoOverlay:
         self.tuck = 0          # how far the browser's own title bar is pushed up out of sight
         self.last_size = (0, 0)
         self.moved_at = 0.0
+
+    def command(self, name, value=0):
+        """A video key: "seek" (seconds), "volume" (+/- percent), "mute", "pause", "speed" (+1 / -1),
+        "load" ({"video", "start", "label"}). The page picks it up within a fifth of a second."""
+        if self.server is not None:
+            self.server.commands.append([name, value])
+            del self.server.commands[:-20]
 
     # ------------------------------------------------------------ open / close
 
@@ -555,6 +608,14 @@ class MacVideoOverlay:
     def _screen_h(self):
         import AppKit
         return AppKit.NSScreen.screens()[0].frame().size.height
+
+    def command(self, name, value=0):
+        if self.web is not None:
+            try:
+                self.web.evaluateJavaScript_completionHandler_(
+                    f"doCommand({json.dumps(name)}, {json.dumps(value)})", None)
+            except Exception:
+                pass
 
     def is_open(self):
         return self.panel is not None and bool(self.panel.isVisible())

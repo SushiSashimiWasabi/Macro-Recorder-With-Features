@@ -26,6 +26,7 @@ class Imported:
         self.source = source      # name of the program the file came from
         self.events = events
         self.screen = screen      # (width, height) the macro was recorded on, if known
+        self.program = None       # {"exe", "title", "client": [x, y, w, h]} if known
         self.skipped = 0          # lines or steps that couldn't be converted
         self.notes = []           # short sentences for the user
 
@@ -167,6 +168,9 @@ def import_luvmacro(text):
     window = platform.get("window") or {}
     if window.get("width") and window.get("height"):
         result.screen = (window["width"], window["height"])
+        if isinstance(window.get("x"), int) and isinstance(window.get("y"), int):
+            # where the game window's inside was on the screen (for "Fit to the game window")
+            result.program = {"client": [window["x"], window["y"], window["width"], window["height"]]}
     return result
 
 
@@ -334,11 +338,18 @@ class _AhkConverter:
         self.t = 0.0
         self.pos = None
         self.stopped = False
+        self.vars = {}  # number variables (x := 100, Random, ...)
+        self.key_step = AHK_STEP  # SetKeyDelay
+        self.mouse_step = AHK_STEP  # SetMouseDelay
+
+    def note(self, text):
+        if text not in self.result.notes:
+            self.result.notes.append(text)
 
     def emit(self, ev):
         ev["t"] = round(self.t, 4)
         self.result.events.append(ev)
-        self.t += AHK_STEP
+        self.t += self.key_step if ev["type"] == "key" else self.mouse_step
         if len(self.result.events) > MAX_EVENTS:
             raise ImportError_("This script makes too many actions to convert (it may loop too often).")
 
@@ -404,9 +415,9 @@ def _ahk_parse_block(lines, i):
         line = lines[i]
         if line == "}":
             return stmts, i + 1
-        m = re.match(r"^loop\b[\s,(]*(\d*)\s*\)?\s*(\{?)\s*$", line, re.I)
-        if m:
-            count = int(m.group(1)) if m.group(1) else None
+        m = re.match(r"^loop\b[\s,(]*([%\w\s+*/-]*?)\s*\)?\s*(\{?)\s*$", line, re.I)
+        if m and not re.match(r"^loop\s*,?\s*(files|parse|read|reg)\b", line, re.I):
+            count = m.group(1).strip() or None
             i += 1
             if not m.group(2):
                 if i < len(lines) and lines[i] == "{":
@@ -442,7 +453,15 @@ def _ahk_run(stmts, conv):
             count = stmt[1]
             if count is None:
                 count = 1
-                conv.result.notes.append("A \"Loop\" with no count was played once. Use Loop forever instead.")
+                conv.note("A \"Loop\" without a count was played once. Turn on Repeat continuously to keep "
+                          "it going.")
+            else:
+                value = _ahk_number(count, conv)
+                if value is None:
+                    count = 1
+                    conv.note("A \"Loop\" count couldn't be worked out, so it was played once.")
+                else:
+                    count = max(0, int(value))
             for _ in range(count):
                 _ahk_run(stmt[2], conv)
         elif stmt[0] == "block":
@@ -455,7 +474,13 @@ _IGNORED = {"#noenv", "#singleinstance", "#persistent", "#warn", "#requires", "#
             "#include", "#ifwinactive", "#hotif", "sendmode", "setkeydelay", "setmousedelay",
             "setdefaultmousespeed", "coordmode", "setworkingdir", "setbatchlines", "setwindelay",
             "setcontroldelay", "settitlematchmode", "detecthiddenwindows", "processsetpriority",
-            "process", "winactivate", "winwaitactive", "tooltip", "soundbeep", "critical"}
+            "process", "winactivate", "winwaitactive", "tooltip", "soundbeep", "critical", "keywait",
+            "global", "local", "static", "#hotkeyinterval", "#maxhotkeysperinterval", "listlines",
+            "setcapslockstate", "setnumlockstate", "setscrolllockstate", "blockinput", "traytip", "menu",
+            "a_traymenu", "persistent", "settimer", "pause", "suspend", "reload", "msgbox",
+            "winwait", "winmaximize", "winrestore", "winminimize", "run", "fileappend", "outputdebug"}
+_CONDITIONS = ("if", "else", "while", "imagesearch", "pixelsearch", "pixelgetcolor", "ifwinactive",
+               "ifwinexist", "getkeystate", "until", "for", "try", "catch", "switch", "case")
 
 
 def _ahk_line(line, conv):
@@ -472,6 +497,8 @@ def _ahk_line(line, conv):
     if re.match(r"^\w+:$", line):  # label
         return
 
+    if _ahk_assign(line, conv):
+        return
     m = re.match(r"^([#\w]+)\s*\((.*)\)\s*$", line)  # v2 call: Send("x")
     if m:
         cmd, args = m.group(1), m.group(2)
@@ -488,14 +515,55 @@ def _ahk_line(line, conv):
         if conv.result.events:
             conv.stopped = True
         return
-    if low in _IGNORED or low.startswith("#"):
+    if low in ("setkeydelay", "setmousedelay"):
+        delay = _ahk_number(_split_args(args)[0] if args else "", conv)
+        if delay is not None:
+            step = max(0.0, delay / 1000.0) if delay >= 0 else 0.0
+            if low == "setkeydelay":
+                conv.key_step = step
+            else:
+                conv.mouse_step = step
         return
-    if low == "sleep":
-        try:
-            conv.t += float(_unquote(args)) / 1000.0
-        except ValueError:
+    if low == "random":
+        a = _split_args(args)
+        lo, hi = (_ahk_number(a[1], conv) if len(a) > 1 else 0), (_ahk_number(a[2], conv) if len(a) > 2 else 0)
+        if a and a[0]:
+            conv.vars[a[0].lower()] = ((lo or 0) + (hi or 0)) / 2
+            conv.note("Random numbers were set to the middle of their range.")
+        return
+    if low == "dllcall" and "mouse_event" in args.lower():
+        nums = [v for v in re.findall(r"-?\d+|\w+", args.split("mouse_event", 1)[1])
+                if not re.fullmatch(r"(?i)u?int|uptr|ptr|int64|short", v)]
+        vals = [_ahk_number(v, conv) for v in nums]
+        if len(vals) >= 3 and vals[0] == 1 and vals[1] is not None and vals[2] is not None:
+            conv.emit({"type": "move_rel", "dx": int(vals[1]), "dy": int(vals[2])})
+        else:
             res.skipped += 1
         return
+    if low in _CONDITIONS:
+        conv.note("Conditions (if, while, ImageSearch, PixelSearch, ...) can't be converted: the actions "
+                  "inside them play every time. Picture watch can do some of what ImageSearch does.")
+        return
+    if low in _IGNORED or low.startswith("#"):
+        if low in ("settimer", "msgbox", "run"):
+            conv.note(f"{cmd} lines were left out.")
+        return
+    if low == "sleep":
+        delay = _ahk_number(args, conv)
+        if delay is None:
+            res.skipped += 1
+        else:
+            conv.t += max(0.0, delay) / 1000.0
+        return
+    if low in ("controlsend", "controlclick"):
+        conv.note("ControlSend / ControlClick were played as normal keys and clicks (to the window in front).")
+        a = _split_args(args)
+        if low == "controlsend":
+            _ahk_send(a[1] if len(a) > 1 else a[0], conv)
+        else:
+            _ahk_click(" ".join(x for x in a[1:2] if x) or "", conv)
+        return
+    args = _ahk_expand(args, conv)
     if low in ("send", "sendinput", "sendevent", "sendplay", "sendraw", "sendtext"):
         _ahk_send(_unquote(args), conv, raw=low in ("sendraw", "sendtext"))
         return
@@ -525,6 +593,88 @@ def _ahk_line(line, conv):
             res.skipped += 1
         return
     res.skipped += 1
+
+
+def _ahk_number(text, conv):
+    """A number from a literal, a variable or a simple sum like (x + 50) * 2; None if it isn't one."""
+    t = str(text).strip()
+    if t.startswith("% "):
+        t = t[2:]
+    t = re.sub(r"%(\w+)%", lambda m: str(conv.vars.get(m.group(1).lower(), m.group(0))), t)
+    t = _unquote(t)
+
+    def var(m):
+        name = m.group(0).lower()
+        return str(conv.vars[name]) if name in conv.vars else m.group(0)
+    t = re.sub(r"[A-Za-z_]\w*", var, t)
+    if not re.fullmatch(r"[\d\s.+\-*/()]+", t) or not re.search(r"\d", t):
+        return None
+    try:
+        return _arith(t)
+    except Exception:
+        return None
+
+
+def _arith(text):
+    """Works out a sum like (12 + 3) * 2 / 5 (numbers, + - * / and brackets only; no ** powers)."""
+    import ast
+    import operator
+    ops = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv}
+
+    def ev(node):
+        if isinstance(node, ast.Expression):
+            return ev(node.body)
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+            return float(node.value)
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+            v = ev(node.operand)
+            return -v if isinstance(node.op, ast.USub) else v
+        if isinstance(node, ast.BinOp) and type(node.op) in ops:
+            return ops[type(node.op)](ev(node.left), ev(node.right))
+        raise ValueError("not a simple sum")
+    return ev(ast.parse(text, mode="eval"))
+
+
+def _ahk_assign(line, conv):
+    """x := 100, x = 100 (old style), x += 5, x -= 5, x := Random(1, 9). True if it was one."""
+    m = re.match(r"^([A-Za-z_]\w*)\s*(:=|=|\+=|-=|\*=)\s*(.*)$", line)
+    if not m or m.group(1).lower() in ("send", "sleep", "click", "loop"):
+        return False
+    name, op, expr = m.group(1).lower(), m.group(2), m.group(3).strip()
+    r = re.match(r"(?i)^random\s*\(\s*([^,]*),\s*([^)]*)\)$", expr)
+    if r:
+        lo, hi = _ahk_number(r.group(1), conv), _ahk_number(r.group(2), conv)
+        value = ((lo or 0) + (hi or 0)) / 2
+        conv.note("Random numbers were set to the middle of their range.")
+    else:
+        value = _ahk_number(expr, conv)
+    if value is None:
+        conv.vars.pop(name, None)  # text or something else: not a number this converter can use
+        return True
+    old = conv.vars.get(name, 0)
+    conv.vars[name] = {"+=": old + value, "-=": old - value, "*=": old * value}.get(op, value)
+    return True
+
+
+def _ahk_expand(args, conv):
+    """Put the values of %variables% (and "% expression" arguments) into a command's arguments."""
+    args = re.sub(r"%(\w+)%", lambda m: _num_text(conv.vars.get(m.group(1).lower()), m.group(0)), args)
+    parts = []
+    for part in args.split(","):
+        st = part.strip()
+        if st.startswith("% ") or (re.fullmatch(r"[A-Za-z_]\w*(\s*[-+*/]\s*[\w.]+)*", st) and
+                                   st.split()[0].lower() in conv.vars):
+            value = _ahk_number(st, conv)
+            if value is not None:
+                part = _num_text(value, part)
+        parts.append(part)
+    return ",".join(parts)
+
+
+def _num_text(value, fallback):
+    if value is None:
+        return fallback
+    return str(int(value)) if float(value).is_integer() else str(value)
 
 
 def _unquote(s):
@@ -608,6 +758,8 @@ _MODIFIERS = {"^": 0xA2, "!": 0xA4, "+": 0xA0, "#": 0x5B}
 
 
 def _ahk_send(text, conv, raw=False):
+    if text.lower().startswith("{blind}"):
+        text = text[7:]
     if text.lower().startswith("{raw}") or text.lower().startswith("{text}"):
         raw = True
         text = text.split("}", 1)[1]
@@ -726,7 +878,9 @@ def import_file(path):
             return import_luvmacro(text)
         except (ValueError, KeyError, TypeError, AttributeError) as exc:
             raise ImportError_(f"This .luvmacro file looks damaged ({exc}).")
-    if ext == ".mcr" or re.search(r"^\s*(DELAY|Keyboard|Mouse)\s*:", text, re.M | re.I):
+    if ext in (".ahk", ".ah2"):
+        return import_ahk(text)
+    if ext == ".mcr" or re.search(r"^\s*(DELAY\s*:\s*\d|Keyboard\s*:|Mouse\s*:)", text, re.M | re.I):
         return import_jitbit(text)
     if ext in (".ahk", ".ah2", ".txt") or re.search(r"^\s*(Send\w*|Sleep|Click|MouseMove|MouseClick)\b", text, re.M | re.I):
         return import_ahk(text)
@@ -741,4 +895,75 @@ def _decode(raw):
             continue
         if "\x00" not in text:
             return text
+    return None
+
+
+# ---------------------------------------------------------------- saving as AutoHotkey
+
+def export_ahk(events, name="macro"):
+    """An AutoHotkey v2 script that plays the macro once (Esc stops it). Times are kept with Sleep."""
+    lines = [
+        f"; {name}: made with Macro Recorder. Needs AutoHotkey v2 (autohotkey.com).",
+        "; Run it to play the macro once. Esc stops it.",
+        "#Requires AutoHotkey v2.0",
+        "#SingleInstance Force",
+        'SendMode "Event"',
+        "SetKeyDelay -1, -1",
+        "SetMouseDelay -1",
+        'CoordMode "Mouse", "Screen"',
+        "",
+    ]
+    last = 0.0
+    names = {"left": "Left", "right": "Right", "middle": "Middle", "x1": "X1", "x2": "X2"}
+    for ev in events:
+        gap = int(round((ev.get("t", last) - last) * 1000))
+        if gap > 0:
+            lines.append(f"Sleep {gap}")
+        last = ev.get("t", last)
+        kind = ev.get("type")
+        if kind == "move":
+            lines.append(f"MouseMove {ev['x']}, {ev['y']}, 0")
+        elif kind == "move_rel":
+            lines.append(f'DllCall("mouse_event", "UInt", 1, "Int", {int(ev["dx"])}, "Int", {int(ev["dy"])}, '
+                         '"UInt", 0, "UPtr", 0)')
+        elif kind == "click":
+            where = f"{ev['x']} {ev['y']} " if "x" in ev else ""
+            lines.append(f'Click "{where}{names.get(ev["button"], "Left")} {"Down" if ev["pressed"] else "Up"}"')
+        elif kind == "scroll":
+            where = f"{ev['x']} {ev['y']} " if "x" in ev else ""
+            dy, dx = int(ev.get("dy", 0)), int(ev.get("dx", 0))
+            if dy:
+                lines.append(f'Click "{where}{"WheelUp" if dy > 0 else "WheelDown"} {abs(dy)}"')
+            if dx:
+                lines.append(f'Click "{where}{"WheelRight" if dx > 0 else "WheelLeft"} {abs(dx)}"')
+        elif kind == "key":
+            vk = _export_vk(ev.get("key", {}))
+            if vk is None:
+                lines.append("; (a key that has no Windows key code was left out)")
+            else:
+                lines.append(f'Send "{{vk{vk:02X} {"down" if ev["pressed"] else "up"}}}"')
+        elif kind == "wait_picture":
+            lines.append("; (a \"Wait for a picture\" step was left out: AutoHotkey can't do it this way)")
+    lines += ["ExitApp", "", "Esc::ExitApp", ""]
+    return "\r\n".join(lines)
+
+
+def _export_vk(key):
+    if "vk" in key:
+        return int(key["vk"])
+    special = key.get("special")
+    if special:
+        names = {"shift": 0xA0, "shift_l": 0xA0, "shift_r": 0xA1, "ctrl": 0xA2, "ctrl_l": 0xA2, "ctrl_r": 0xA3,
+                 "alt": 0xA4, "alt_l": 0xA4, "alt_r": 0xA5, "alt_gr": 0xA5, "cmd": 0x5B, "cmd_l": 0x5B,
+                 "cmd_r": 0x5C, "space": 0x20, "enter": 0x0D, "tab": 0x09, "esc": 0x1B, "backspace": 0x08,
+                 "delete": 0x2E, "insert": 0x2D, "home": 0x24, "end": 0x23, "page_up": 0x21, "page_down": 0x22,
+                 "up": 0x26, "down": 0x28, "left": 0x25, "right": 0x27, "caps_lock": 0x14, "menu": 0x5D,
+                 "num_lock": 0x90, "print_screen": 0x2C, "scroll_lock": 0x91, "pause": 0x13}
+        if special in names:
+            return names[special]
+        m = re.fullmatch(r"f(\d{1,2})", special)
+        if m:
+            return 0x6F + int(m.group(1))
+    if key.get("char"):
+        return char_to_vk(key["char"])[0]
     return None

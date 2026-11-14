@@ -7,8 +7,9 @@ here = os.path.abspath(SPECPATH)
 a = Analysis(
     [os.path.join(here, "macro_recorder.py")],
     pathex=[here],
-    datas=[(os.path.join(here, "retry_default.png"), "."), (os.path.join(here, "default_logo.png"), ".")],
-    hiddenimports=["pynput.keyboard._darwin", "pynput.mouse._darwin", "WebKit", "AppKit", "Foundation", "certifi"],
+    datas=[(os.path.join(here, "retry_default.png"), "."), (os.path.join(here, "default_logo.png"), "."),
+           (os.path.join(here, "completed_default.png"), ".")],
+    hiddenimports=["image_watch", "lazy", "pynput.keyboard._darwin", "pynput.mouse._darwin", "WebKit", "AppKit", "Foundation", "certifi"],
 )
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="MacroRecorder", console=False)

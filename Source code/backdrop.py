@@ -21,13 +21,12 @@ import time
 import tkinter as tk
 from tkinter import ttk
 
-try:
-    import cv2
-    import numpy as np
-except ImportError:  # pragma: no cover
-    cv2 = np = None
+import lazy
 
-AVAILABLE = cv2 is not None
+# loaded the first time a picture is shown (the app starts sooner without a background picture)
+AVAILABLE = lazy.available("cv2", "numpy")
+cv2 = lazy.module("cv2") if AVAILABLE else None
+np = lazy.module("numpy") if AVAILABLE else None
 
 PICTURE_TYPES = [("Pictures", "*.png *.jpg *.jpeg *.bmp *.webp *.tif *.tiff *.gif"),
                  ("Animated pictures", "*.gif"), ("All files", "*.*")]
