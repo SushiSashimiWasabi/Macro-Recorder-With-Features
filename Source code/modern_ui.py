@@ -211,6 +211,7 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
         self.mac_prev.pack(side="left", padx=(10, 0))
         self.mac_label = tk.Label(sw, bg=PANEL, fg=MUTED, font=F_SMALL, width=34)
         self.mac_label.pack(side="left", padx=4)
+        self.mac_label.bind("<Button-1>", self._mac_label_clicked)
         self.mac_next = link(sw, "▶", lambda: self.step_macro(1), bg=PANEL, fg=TEXT, font=(FAMILY, 11))
         self.mac_next.pack(side="left")
         self.mac_remove = link(sw, "Remove", self.remove_macro_from_list, bg=PANEL)
@@ -814,6 +815,21 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
         lib[:] = [p for p in lib if isinstance(p, str) and p]
         return lib
 
+    def _forget_deleted_macros(self):
+        """Take macros whose file was deleted off the list (so the row doesn't count a macro that
+        isn't there any more). A file whose folder can't be reached right now (an unplugged drive)
+        stays. Looked at most every 3 seconds."""
+        now = time.monotonic()
+        if now - getattr(self, "macros_checked", -10.0) < 3.0:
+            return
+        self.macros_checked = now
+        lib = self.macro_list()
+        kept = [p for p in lib if os.path.isfile(p) or not os.path.isdir(os.path.dirname(p))]
+        if len(kept) != len(lib):
+            diag.info(f"Took {len(lib) - len(kept)} deleted macro file(s) off the saved macros list")
+            lib[:] = kept
+            core.save_settings(self.settings)
+
     def _list_index(self, path):
         key = os.path.normcase(os.path.abspath(path)) if path else None
         for i, p in enumerate(self.macro_list()):
@@ -825,23 +841,30 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
         """Put an opened or saved macro in the list (the oldest one goes when it's full)."""
         if not path or self._list_index(path) is not None:
             return
+        self.macros_checked = -10.0
+        self._forget_deleted_macros()
         lib = self.macro_list()
         lib.append(os.path.abspath(path))
         del lib[:-MAX_MACROS]
         self._save_settings()
 
     def _show_macro_list(self, busy=False):
+        self._forget_deleted_macros()
         lib = self.macro_list()
         i = self._list_index(self.current_file)
+        only = i is None and len(lib) == 1 and not busy  # one saved macro, not open: click its name
         if i is not None:
             name = os.path.splitext(os.path.basename(lib[i]))[0]
             text = f"{i + 1} of {len(lib)}:  {short(name, 28)}"
+        elif only:
+            text = "Click to open:  " + short(os.path.splitext(os.path.basename(lib[0]))[0], 18)
         elif lib:
             text = f"{len(lib)} saved  ·  this one isn't in the list"
         else:
             text = "macros you open or save show up here"
-        self.mac_label.config(text=text)
-        arrows = len(lib) > (0 if i is None else 1) and not busy
+        self.mac_label.config(text=text, cursor="hand2" if only else "arrow")
+        self.mac_label_opens = only
+        arrows = len(lib) > 1 and not busy  # (nothing to switch to with one macro or none)
         for a, sym in ((self.mac_prev, "◀"), (self.mac_next, "▶")):
             a.config(text=sym if arrows else "", cursor="hand2" if arrows else "arrow")
         rem = i is not None and not busy
@@ -849,6 +872,10 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
 
     def _has_unsaved_macro(self):
         return bool(self.events) and (self.current_file is None or getattr(self, "unsaved", False))
+
+    def _mac_label_clicked(self, _e=None):
+        if getattr(self, "mac_label_opens", False):
+            self.step_macro(1)
 
     def step_macro(self, d):
         """◀ / ▶: open the previous or next saved macro."""

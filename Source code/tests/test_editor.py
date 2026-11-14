@@ -239,6 +239,36 @@ ed.close()
 pump()
 check("closes", not ed.win.winfo_exists())
 
+# the Saved macros row: a deleted file is forgotten, arrows only with more than one macro
+def row():
+    app.macros_checked = -10.0
+    app._refresh()
+    return app.mac_label.cget("text"), app.mac_prev.cget("text"), app.mac_next.cget("text")
+
+
+gone = os.path.join(tmp, "deleted.macro")
+app.settings["macro_library"] = [gone]  # (its file doesn't exist)
+app.events, app.actions, app.current_file = [], None, None
+text, prev, nxt = row()
+check("saved macros: a deleted file isn't counted", app.macro_list() == [] and prev == "" and nxt == ""
+      and "show up here" in text, (text, prev, nxt))
+app.settings["macro_library"] = [gone]
+app.load(p2, quiet=True)
+text, prev, nxt = row()
+check("saved macros: the first opened macro is 1 of 1, no arrows", text.startswith("1 of 1") and prev == ""
+      and nxt == "", (text, prev, nxt))
+app.load(new_path, quiet=True)
+text, prev, nxt = row()
+check("saved macros: with two, arrows show", text.startswith("2 of 2") and prev == "◀" and nxt == "▶",
+      (text, prev, nxt))
+app.settings["macro_library"] = [p2]
+app.events, app.actions, app.current_file = [], None, None
+text, prev, nxt = row()
+check("saved macros: one saved, none open: click its name, no arrows", text.startswith("Click to open")
+      and prev == "" and nxt == "", (text, prev, nxt))
+app._mac_label_clicked()
+check("saved macros: clicking the name opens it", app.current_file == p2 and row()[0].startswith("1 of 1"))
+
 # the countdown before recording, with the timer at the top of the screen
 app.rec_ready_var.set(1)
 app._save_settings()

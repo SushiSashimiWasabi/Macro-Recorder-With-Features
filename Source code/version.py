@@ -1,12 +1,18 @@
 # The app's version. Raising it (and pushing to main) makes GitHub publish a new Release,
 # which every copy of the app offers to install when it starts.
-APP_VERSION = "2.6.2"
+APP_VERSION = "2.6.3"
 
 # Every version, newest first: (version, the day it was finalized, changes). The newest is shown once after an update;
 # Settings > About > What's new shows them all. Each change is one paragraph (shown as a bullet).
 # Version numbers started at 2.1 (the first one that could update itself); the earlier steps have
 # names instead.
 HISTORY = [
+    ("2.6.3", "15 November 2026", [
+        "Fixed: the Saved macros row counted a macro whose file had been deleted, so the first macro you "
+        "opened showed as number 2. Deleted files are now taken off the list by themselves.",
+        "The ◀ ▶ arrows only show when the list has more than one macro. With one saved macro that "
+        "isn't open, click its name in the row to open it.",
+    ]),
     ("2.6.2", "14 November 2026", [
         "Recorded events: in a long recording, a change redraws only the rows after it (much quicker near "
         "the end of the list).",
