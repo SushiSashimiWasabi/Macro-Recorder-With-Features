@@ -44,7 +44,7 @@ pump()
 
 
 def shown():
-    return [b.cget("text") for b in (app.btn_undo, app.btn_redo, app.btn_reset) if b.winfo_ismapped()]
+    return [b.cget("text") for b in (app.btn_undo, app.btn_redo, app.btn_reset) if b.winfo_manager()]
 
 
 check("nothing changed: only Done", app.btn_done.cget("text") == "Done" and shown() == [])

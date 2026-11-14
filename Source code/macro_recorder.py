@@ -281,11 +281,40 @@ MAX_GLIDE = 10.0  # seconds
 MAX_EXPANDED = 2_000_000  # actions
 
 
-def expand_moves(events, step=0.01):
+MAX_NESTING = 50  # groups inside groups, in a macro file
+
+
+def expand_steps(steps):
+    """expand_moves() for every recorded part of a macro made of steps, with one limit for the whole
+    file (MAX_EXPANDED actions), so many parts can't add up to more. A file that goes over it, or
+    whose groups are nested more than MAX_NESTING deep, raises ValueError."""
+    total = 0
+
+    def go(actions, depth):
+        nonlocal total
+        if depth > MAX_NESTING:
+            raise ValueError("its groups are nested too deeply")
+        for a in actions:
+            if not isinstance(a, dict):
+                continue
+            if a.get("kind") == "recorded" and isinstance(a.get("events"), list):
+                a["events"] = expand_moves(a["events"], budget=MAX_EXPANDED - total)
+                total += len(a["events"])
+                if total > MAX_EXPANDED:
+                    raise ValueError("it has too many actions")
+            if isinstance(a.get("actions"), list):
+                go(a["actions"], depth + 1)
+    go(steps, 0)
+    return steps
+
+
+def expand_moves(events, step=0.01, budget=None):
     """Puts back the positions simplify_moves() left out: a move marked "s" is reached from the
-    move before it in steps of `step` seconds, as a real mouse would have reported them."""
+    move before it in steps of `step` seconds, as a real mouse would have reported them.
+    budget: at most how many actions the result may have (MAX_EXPANDED at most)."""
     if not any(isinstance(ev, dict) and ev.get("s") for ev in events):
         return events
+    budget = MAX_EXPANDED if budget is None else max(0, min(MAX_EXPANDED, budget))
     import math
 
     def number(v):
@@ -302,7 +331,7 @@ def expand_moves(events, step=0.01):
             # a file from somewhere else can't make the app run out of memory: a glide is at most
             # MAX_GLIDE seconds (a real one is far shorter) and a macro at most MAX_EXPANDED actions
             n = int(round(span / step)) if 0 < span <= MAX_GLIDE else 0  # (round: 0.3 / 0.01 is 29.999...)
-            n = min(n, max(0, MAX_EXPANDED - len(out)))
+            n = min(n, max(0, budget - len(out)))
             for k in range(1, n):
                 f = k * step / span
                 out.append({"type": "move", "x": round(A["x"] + (C["x"] - A["x"]) * f),
@@ -2563,8 +2592,16 @@ class MacroRecorder:
             return False
         imported = None
         self.file_data = {}
+        steps = None
         try:
             events, screen = self._read_own_file(path)
+            raw = self.file_data.get("actions")
+            if isinstance(raw, list) and raw and all(isinstance(a, dict) for a in raw):
+                # a macro with steps made in Edit (its recorded parts may be stored in a smaller form)
+                try:
+                    steps = expand_steps(raw)
+                except (ValueError, RecursionError) as exc:
+                    return fail(f"Couldn't open that file: {exc}.")
         except Exception as own_error:
             # not one of ours: try the formats of other macro recorders
             try:
@@ -2594,12 +2631,7 @@ class MacroRecorder:
         self.macro_program = program if isinstance(program, dict) else None
         self.events = events
         self.actions = None
-        steps = self.file_data.get("actions") if imported is None else None
-        if isinstance(steps, list) and steps and all(isinstance(a, dict) for a in steps):
-            # a macro with steps made in Edit (its recorded parts may be stored in a smaller form)
-            for a, _lst, _i, _p in workflow.walk(steps):
-                if a.get("kind") == "recorded" and isinstance(a.get("events"), list):
-                    a["events"] = expand_moves(a["events"])
+        if steps:
             self.set_steps(steps)
         self.current_file = path
         diag.info(f"Opened a macro: {len(events)} actions" + (f" ({imported.source})" if imported else ""))

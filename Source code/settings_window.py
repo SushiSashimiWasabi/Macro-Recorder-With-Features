@@ -567,7 +567,7 @@ class SettingsWindowMixin:
         changed = self.settings_saved_state is not None and self._page_settings() != self.settings_saved_state
         if changed:
             self.btn_done.config(text="Apply")
-            if not self.btn_reset.winfo_ismapped():
+            if not self.btn_reset.winfo_manager():
                 self.btn_reset.pack(side="right", padx=(0, 8), after=self.btn_done)
                 self.btn_redo.pack(side="right", padx=(0, 8), after=self.btn_reset)
                 self.btn_undo.pack(side="right", padx=(0, 8), after=self.btn_redo)
@@ -575,7 +575,7 @@ class SettingsWindowMixin:
             # everything undone: Done again, but Redo stays so the changes can be put back
             self.btn_done.config(text="Done")
             self.btn_reset.pack_forget()
-            if not self.btn_redo.winfo_ismapped():
+            if not self.btn_redo.winfo_manager():
                 self.btn_redo.pack(side="right", padx=(0, 8), after=self.btn_done)
                 self.btn_undo.pack(side="right", padx=(0, 8), after=self.btn_redo)
         else:

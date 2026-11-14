@@ -80,5 +80,23 @@ check("ahk: a saved script reads back", len(r2.events) >= len(r.events))
 open(path, "w").write("x := 9**9**9\nSleep x\nSend a\n")
 check("ahk: no huge sums", importers.import_file(path) is not None)
 
+# a macro file made of steps can't add up to more than MAX_EXPANDED actions, or nest groups too deep
+glide = [{"type": "move", "x": 0, "y": 0, "t": 0.0}, {"type": "move", "x": 100, "y": 0, "t": 9.0, "s": 1}]
+many = [{"kind": "recorded", "events": [dict(e) for e in glide]} for _ in range(3000)]
+try:
+    core.expand_steps(many)
+    check("steps file: one limit for all its parts", False)
+except ValueError:
+    check("steps file: one limit for all its parts", True)
+deep = cur = {"kind": "repeat", "actions": []}
+for _ in range(core.MAX_NESTING + 5):
+    cur["actions"].append({"kind": "repeat", "actions": []})
+    cur = cur["actions"][0]
+try:
+    core.expand_steps([deep])
+    check("steps file: groups nested too deep refused", False)
+except ValueError:
+    check("steps file: groups nested too deep refused", True)
+
 print()
 print(f"{sum(ok for _, ok in results)} of {len(results)} passed")

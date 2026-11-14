@@ -38,10 +38,7 @@ def read_macro(path):
         if data.get("format") != "luvmacro":
             steps = data.get("actions")
             if isinstance(steps, list) and steps and all(isinstance(a, dict) for a in steps):
-                for a, _l, _i, _p in workflow.walk(steps):
-                    if a.get("kind") == "recorded" and isinstance(a.get("events"), list):
-                        a["events"] = core.expand_moves(a["events"])
-                return workflow.ensure_ids(steps), data
+                return workflow.ensure_ids(core.expand_steps(steps)), data
             events = data.get("events")
             if not isinstance(events, list):
                 raise ValueError("this isn't a macro file")
