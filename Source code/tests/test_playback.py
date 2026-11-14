@@ -214,7 +214,7 @@ check("open again: not offered twice", len(asked) == 1)
 app.settings["fit_to"] = "window"
 app.fit_var.set(modern_ui.FIT_TO["window"])
 window_tools.client_rect = lambda h: (100, 50, 1280, 720) if h == 111 else None
-evs = app._events_for_play((1920, 1080))
+evs = app._events_for_play((1920, 1080))[0]["events"]  # (the macro's one recorded step)
 check("fit to window: used the game's window", evs[0]["x"] == round(100 + 640 + (10 - 960) * (720 / 1080)), evs[0])
 app.settings["fit_to"] = "screen"
 

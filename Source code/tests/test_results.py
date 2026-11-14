@@ -36,8 +36,8 @@ app = modern_ui.ModernMacroRecorder(root)
 app.kb_listener.stop()
 app.mouse_listener.stop()
 root.withdraw()
-check("built-in MISSION COMPLETED picture added on first start",
-      len(app.result_pictures) == 1 and app.result_pictures[0]["kind"] == "win")
+check("built-in MISSION COMPLETED and MISSION FAILED pictures added on first start",
+      sorted(p["kind"] for p in app.result_pictures) == ["loss", "win"])
 sent = []
 app._replay_event = lambda e, hk, hb: sent.append(e)
 for name in ("showwarning", "showinfo", "showerror"):
@@ -143,6 +143,23 @@ app.settings["discord_title"] = "{macro} #{run}"
 app.settings["discord_message"] = "𝐒𝐭𝐚𝐭𝐮𝐬 {status} {completed}"
 content, card = app._run_card("win", app.session.values(""))
 check("discord: own text and title", card["title"].endswith("#3") and card["description"].endswith("1/3"), card)
+
+# ping when a divine fragment drops (also when Ping says Never, and with "After each run" off)
+app.settings.update(discord_ping_when="never", discord_runs=False, discord_ping_fragments=True)
+cards.clear()
+app.session.add("win", 100, 0)
+app._run_finished(4, "done")
+check("fragment ping: no drop, no card (After each run off)", cards == [], cards)
+app.session.add("win", 100, 2)
+app._run_finished(5, "done")
+check("fragment ping: a drop sends the card with the ping", len(cards) == 1 and cards[0][0] == "<@42>",
+      [c[0] for c in cards])
+app.settings.update(discord_ping_fragments=False, discord_runs=True)
+cards.clear()
+app.session.add("win", 100, 1)
+app._run_finished(6, "done")
+check("fragment ping off: card without ping", len(cards) == 1 and cards[0][0] == "", [c[0] for c in cards])
+app.settings.update(discord_ping_when="problems")
 
 # a real HTTP post with an embed and a picture
 got = []

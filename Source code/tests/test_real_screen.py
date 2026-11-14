@@ -84,6 +84,34 @@ cur["img"] = blank
 c.result_state = {}
 check("blank screen: unknown", c._run_result(0) == "unknown")
 
+# MISSION FAILED: with both built-in pictures, a failed screen is a loss and a completed one a win
+part_f = cv2.imread(os.path.join(src, "tests", "data", "failed_screen_part.png"))
+failed = np.full((1440, 2560, 3), 20, np.uint8)
+failed[240:240 + part_f.shape[0], 560:560 + part_f.shape[1]] = part_f
+
+
+def make_both():
+    a2 = make_app()
+    a2.result_pictures.append(core.SavedPicture(os.path.join(src, core.BUILTIN_LOSS_PICTURE), file="y",
+                                                screen_h=core.BUILTIN_LOSS_PICTURE_SCREEN_H, kind="loss"))
+    a2.settings["results_match"] = core.RESULTS_MATCH_DEFAULT
+    a2.result_matchers = a2._build_result_matchers()
+    return a2
+
+
+d = make_both()
+cur["img"] = failed
+check("MISSION FAILED screen: loss", d._run_result(0) == "loss")
+d.result_state = {}
+cur["img"] = shot
+check("then a MISSION COMPLETED screen: win", d._run_result(0) == "win")
+d.result_state = {}
+cur["img"] = failed
+check("and a failed one again: loss", d._run_result(0) == "loss")
+e = make_both()
+cur["img"] = shot
+check("completed first (fresh): win", e._run_result(0) == "win")
+
 # divine fragments
 check("fragments on the whole screen: 1", drops.count_frames(shot)[0] == 1)
 cur["img"] = shot

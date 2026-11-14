@@ -57,10 +57,13 @@ class ResultsMixin:
         self._save_result_pictures()
         self._show_result_pictures()
 
-    def add_builtin_result(self):
+    BUILTINS = {stats.WIN: (core.BUILTIN_WIN_PICTURE, core.BUILTIN_WIN_PICTURE_SCREEN_H),
+                stats.LOSS: (core.BUILTIN_LOSS_PICTURE, core.BUILTIN_LOSS_PICTURE_SCREEN_H)}
+
+    def add_builtin_result(self, kind=stats.WIN):
         try:
-            self._add_result_picture(image_watch.load_image(core.resource_path(core.BUILTIN_WIN_PICTURE)),
-                                     stats.WIN, core.BUILTIN_WIN_PICTURE_SCREEN_H)
+            name, screen_h = self.BUILTINS[kind]
+            self._add_result_picture(image_watch.load_image(core.resource_path(name)), kind, screen_h)
         except Exception as exc:
             messagebox.showerror("Macro Recorder", f"Couldn't add the built-in picture:\n{exc}",
                                  parent=self.settings_win)
@@ -97,7 +100,7 @@ class ResultsMixin:
             messagebox.showinfo("Macro Recorder", "Add a picture first.", parent=self.settings_win)
             return
         self._save_settings()
-        need = self.settings.get("results_match", 85)
+        need = self.settings.get("results_match", core.RESULTS_MATCH_DEFAULT)
         lines = []
         try:
             screen = self._hide_own_window(image_watch.grab_screen(), image_watch.screen_origin())
@@ -115,14 +118,22 @@ class ResultsMixin:
 
     def _load_result_pictures_first(self):
         """At start: the result pictures (read when first used). On the very first start, the
-        built-in MISSION COMPLETED picture is added, ready to use."""
-        if "result_pictures" not in self.settings and image_watch is not None:
-            try:
-                self.result_pictures = []
-                self._add_result_picture(image_watch.load_image(core.resource_path(core.BUILTIN_WIN_PICTURE)),
-                                         stats.WIN, core.BUILTIN_WIN_PICTURE_SCREEN_H)
-            except Exception as exc:
-                diag.error("Couldn't add the built-in result picture", exc)
+        built-in MISSION COMPLETED and MISSION FAILED pictures are added, ready to use; a copy that
+        already had result pictures gets the MISSION FAILED one once, if it has no "failed" picture."""
+        first = "result_pictures" not in self.settings
+        if image_watch is not None and (first or not self.settings.get("builtin_failed_added")):
+            self._load_result_pictures()
+            kinds = [stats.WIN, stats.LOSS] if first else []
+            if not first and not any(p["kind"] == stats.LOSS for p in self.result_pictures):
+                kinds = [stats.LOSS]
+            for kind in kinds:
+                try:
+                    name, screen_h = self.BUILTINS[kind]
+                    self._add_result_picture(image_watch.load_image(core.resource_path(name)), kind, screen_h)
+                except Exception as exc:
+                    diag.error("Couldn't add a built-in result picture", exc)
+            self.settings["builtin_failed_added"] = True
+            core.save_settings(self.settings)
         self._load_result_pictures()
 
     def _build_results_tab(self, f):
@@ -143,10 +154,10 @@ class ResultsMixin:
             b1.pack(side="left")
             b2.pack(side="left", padx=6)
             self.result_buttons += [b1, b2]
-            if kind == stats.WIN:
-                b3 = ttk.Button(row, text="Add built-in MISSION COMPLETED", command=self.add_builtin_result)
-                b3.pack(side="left")
-                self.result_buttons.append(b3)
+            b3 = ttk.Button(row, text="Add built-in " + ("MISSION COMPLETED" if kind == stats.WIN else "MISSION FAILED"),
+                            command=lambda k=kind: self.add_builtin_result(k))
+            b3.pack(side="left")
+            self.result_buttons.append(b3)
         row = self._row(f, "Match", "%  (80-90 suits most pictures)")
         ttk.Spinbox(row, from_=50, to=99, width=4, textvariable=self.results_match_var,
                     command=self._save_settings).pack(side="right")

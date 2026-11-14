@@ -412,6 +412,7 @@ class SettingsWindowMixin:
         self._save_settings()
         self.settings_saved_state = self._page_settings()
         self.settings_history = []
+        self.settings_redo = []
         self.pictures_seen = None
         self._note_pictures()
         self._show_settings_buttons()
@@ -510,7 +511,7 @@ class SettingsWindowMixin:
                      "check_updates", "background_animate", "settings_background_per_page",
                      "app_icon_file", "app_logo_file", "app_logo_same", "record_camera", "pause_when_away",
                      "away_stop_seconds", "switch_to_program", "fit_to", "discord_enabled", "discord_webhook",
-                     "discord_runs", "discord_screenshot", "discord_stops", "watch_limit_count",
+                     "discord_runs", "discord_ping_fragments", "discord_screenshot", "discord_stops", "watch_limit_count",
                      "watch_limit_seconds", "watch_shift_lock", "watch_save_with_macro", "discord_name",
                      "discord_ping", "discord_ping_when", "discord_capture", "discord_title", "discord_content",
                      "discord_message", "results_enabled", "drops_enabled", "simplify_moves", "results_match", "result_pictures")
@@ -557,6 +558,7 @@ class SettingsWindowMixin:
             prev = last
             self.settings_history.append((prev, now))
             del self.settings_history[:-100]
+            self.settings_redo = []  # a new change: what was undone can't be redone any more
         self._show_settings_buttons()
         if again:
             self.settings_watch_job = self.root.after(2000, self._watch_settings)
@@ -567,12 +569,22 @@ class SettingsWindowMixin:
             self.btn_done.config(text="Apply")
             if not self.btn_reset.winfo_ismapped():
                 self.btn_reset.pack(side="right", padx=(0, 8), after=self.btn_done)
-                self.btn_undo.pack(side="right", padx=(0, 8), after=self.btn_reset)
+                self.btn_redo.pack(side="right", padx=(0, 8), after=self.btn_reset)
+                self.btn_undo.pack(side="right", padx=(0, 8), after=self.btn_redo)
+        elif self.settings_redo:
+            # everything undone: Done again, but Redo stays so the changes can be put back
+            self.btn_done.config(text="Done")
+            self.btn_reset.pack_forget()
+            if not self.btn_redo.winfo_ismapped():
+                self.btn_redo.pack(side="right", padx=(0, 8), after=self.btn_done)
+                self.btn_undo.pack(side="right", padx=(0, 8), after=self.btn_redo)
         else:
             self.btn_done.config(text="Done")
             self.btn_undo.pack_forget()
+            self.btn_redo.pack_forget()
             self.btn_reset.pack_forget()
         self.btn_undo.config(state="normal" if self.settings_history else "disabled")
+        self.btn_redo.config(state="normal" if self.settings_redo else "disabled")
 
     def _done_or_apply(self):
         self._save_settings()
@@ -586,6 +598,7 @@ class SettingsWindowMixin:
         self._save_settings()
         self.settings_saved_state = self._page_settings()
         self.settings_history = []
+        self.settings_redo = []
         self._forget_removed_pictures()
         self._show_settings_buttons()
 
@@ -593,14 +606,24 @@ class SettingsWindowMixin:
         """Back to how the settings were before the last change."""
         if not self.settings_history:
             return
-        before, _after = self.settings_history.pop()
+        before, after = self.settings_history.pop()
+        self.settings_redo.append((before, after))
         self._put_page_settings(before)
+
+    def redo_settings_change(self):
+        """Put back the last change Undo took back."""
+        if not self.settings_redo:
+            return
+        before, after = self.settings_redo.pop()
+        self.settings_history.append((before, after))
+        self._put_page_settings(after)
 
     def reset_settings_changes(self):
         """Back to how the settings were when the window opened (or Apply was last pressed)."""
         if self.settings_saved_state is None:
             return
         self.settings_history = []
+        self.settings_redo = []
         self._put_page_settings(self.settings_saved_state)
 
     def _put_page_settings(self, state):
@@ -653,10 +676,11 @@ class SettingsWindowMixin:
                 (self.away_var, bool(s.get("pause_when_away", True))),
                 (self.away_stop_var, core.int_setting(s, "away_stop_seconds", 0, 0, 3600)),
                 (self.switch_prog_var, bool(s.get("switch_to_program", True))),
-                (self.fit_var, FIT_TO.get(s.get("fit_to"), FIT_TO["screen"])),
+                (self.fit_var, FIT_TO.get(s.get("fit_to"), FIT_TO["window"])),
                 (self.discord_var, bool(s.get("discord_enabled", False))),
                 (self.discord_url_var, str(s.get("discord_webhook", ""))),
                 (self.discord_runs_var, bool(s.get("discord_runs", True))),
+                (self.discord_ping_drop_var, bool(s.get("discord_ping_fragments", False))),
                 (self.discord_shot_var, bool(s.get("discord_screenshot", True))),
                 (self.discord_stop_var, bool(s.get("discord_stops", True))),
                 (self.watch_limit_var, core.int_setting(s, "watch_limit_count", 10, 0, 1000)),
@@ -669,7 +693,7 @@ class SettingsWindowMixin:
                 (self.results_var, bool(s.get("results_enabled", True))),
                 (self.drops_var, bool(s.get("drops_enabled", True))),
                 (self.simplify_var, bool(s.get("simplify_moves", False))),
-                (self.results_match_var, core.int_setting(s, "results_match", 85, 50, 99))):
+                (self.results_match_var, core.int_setting(s, "results_match", core.RESULTS_MATCH_DEFAULT, 50, 99))):
             var.set(value)
         cap = str(s.get("discord_capture", "screen"))
         self.discord_capture_var.set(CAPTURE_CHOICES["program"] if cap.startswith("program:")

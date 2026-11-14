@@ -34,6 +34,8 @@ class DiscordMixin:
         box.pack(side="right")
         box.bind("<<ComboboxSelected>>", lambda e: (box.selection_clear(), self._save_settings()))
         self._entry(row, self.discord_ping_var, 16).pack(side="right", padx=(0, 6), ipady=2)
+        self._switch_row(f, "Ping when a divine fragment drops", self.discord_ping_drop_var,
+                         "also when Ping says Never", info=self.PING_DROP_HELP)
         self._section(f, "WHEN")
         self._switch_row(f, "After each run", self.discord_runs_var, "a card with the run's results")
         self._switch_row(f, "When playback stops", self.discord_stop_var, "finished, stopped or a problem")
@@ -65,6 +67,11 @@ class DiscordMixin:
         "the person or role > Copy ID. Several are fine, separated by spaces.\n\n"
         "Every message: each run and each stop. Only failed runs and stops: when a run is lost or the "
         "macro stops. Never: no ping.")
+
+    PING_DROP_HELP = (
+        "After a run where divine fragments were counted (Settings > Results > Count divine fragments), "
+        "its card is sent with the ping, whatever the Ping box says about when to ping.\n\n"
+        "The card is sent even if \"After each run\" is off.")
 
     def _entry(self, parent, var, width):
         e = tk.Entry(parent, textvariable=var, bg=FIELD, fg=TEXT, font=F_SMALL, relief="flat", width=width,
@@ -102,14 +109,22 @@ class DiscordMixin:
 
     def _screenshot(self):
         """The screenshot for Discord, taken right now as chosen in Settings > Discord (a picture; the
-        sending thread packs it as JPG, so the macro isn't held up)."""
-        return discord_notify.grab(self.settings.get("discord_capture", "screen"),
-                                   (self.macro_program or {}).get("exe"))
+        sending thread packs it as JPG, so the macro isn't held up). This app's own windows (the main
+        window, the timer at the top, the video) are left out of it, so it shows only the game."""
+        hidden = window_tools.hide_own_windows_from_capture(True)
+        try:
+            if hidden:
+                time.sleep(0.06)  # (Windows needs a moment to take them out of the picture)
+            return discord_notify.grab(self.settings.get("discord_capture", "screen"),
+                                       (self.macro_program or {}).get("exe"))
+        finally:
+            if hidden:
+                window_tools.hide_own_windows_from_capture(False)
 
-    def _ping_for(self, problem):
+    def _ping_for(self, problem, dropped=False):
         s = self.settings
         when = s.get("discord_ping_when", "problems")
-        if when == "always" or (when == "problems" and problem):
+        if when == "always" or (when == "problems" and problem) or (dropped and s.get("discord_ping_fragments")):
             return str(s.get("discord_ping", "")).strip()
         return ""
 
@@ -128,10 +143,12 @@ class DiscordMixin:
     def _run_finished(self, count, how):
         """After each run (on the playback thread): the run's results to Discord."""
         s = self.settings
-        if not (s.get("discord_enabled") and s.get("discord_runs", True)):
+        dropped = bool(self.session.fragments and self.session.fragments[-1] > 0)
+        if not (s.get("discord_enabled") and (s.get("discord_runs", True)
+                                              or (dropped and s.get("discord_ping_fragments")))):
             return
         status = self.session.runs[-1][0] if self.session.runs else stats.UNKNOWN
-        values = self.session.values(self._ping_for(status == stats.LOSS))
+        values = self.session.values(self._ping_for(status == stats.LOSS, dropped))
         content, card = self._run_card(status, values)
         # taken now, before the macro goes on (clicks Retry, starts over)
         png = self._screenshot() if s.get("discord_screenshot", True) else None

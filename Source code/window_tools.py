@@ -200,3 +200,27 @@ def set_thread_priority(level):
         kernel32.SetThreadPriority(kernel32.GetCurrentThread(), int(level))
     except Exception:
         pass
+
+
+def hide_own_windows_from_capture(hide):
+    """Make this app's own windows (main window, timer at the top, Settings, video...) invisible to
+    screenshots (hide=True), or visible again. Screenshots then show what's behind them, like the game.
+    Windows 10 (2004) and newer; elsewhere nothing happens. Returns how many windows were changed."""
+    if not IS_WIN:
+        return 0
+    import os as _os
+    own = _os.getpid()
+    changed = []
+    try:
+        user32.SetWindowDisplayAffinity.argtypes = [wintypes.HWND, wintypes.DWORD]
+
+        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        def callback(hwnd, _):
+            if pid_of(hwnd) == own and user32.IsWindowVisible(hwnd):
+                if user32.SetWindowDisplayAffinity(hwnd, 0x11 if hide else 0):  # WDA_EXCLUDEFROMCAPTURE / NONE
+                    changed.append(hwnd)
+            return True
+        user32.EnumWindows(callback, 0)
+    except Exception:
+        pass
+    return len(changed)

@@ -1,12 +1,29 @@
 # The app's version. Raising it (and pushing to main) makes GitHub publish a new Release,
 # which every copy of the app offers to install when it starts.
-APP_VERSION = "2.5"
+APP_VERSION = "2.6"
 
 # Every version, newest first: (version, the day it was finalized, changes). The newest is shown once after an update;
 # Settings > About > What's new shows them all. Each change is one paragraph (shown as a bullet).
 # Version numbers started at 2.1 (the first one that could update itself); the earlier steps have
 # names instead.
 HISTORY = [
+    ("2.6", "14 November 2026", [
+        "A new Edit window: your saved macros on the left, the chosen macro's actions in the middle and the "
+        "chosen action's details on the right. Add action (waits, key presses, typing, clicks, mouse moves, "
+        "scrolling, Wait for a picture, If / Repeat / Retry groups, Start over, Stop, notes), Duplicate, Remove "
+        "and More (move up / down, copy / paste, into / out of a group, group, ungroup, turn off), with shortcuts.",
+        "Change a macro's name (its file name) in Edit, with Undo, Redo, Reset and Apply that light up once "
+        "something changed.",
+        "In Edit, record keys and mouse straight into a macro, or copy another saved macro's actions into it "
+        "(at the start, after the chosen action or at the end), and hold a click or key press for as long as "
+        "you choose.",
+        "Recorded events: Add action (key press, typing, click, mouse move, scroll) and Record here put new "
+        "actions anywhere in a recording, and the actions after them move later to make room.",
+        "Settings has Redo too, next to Undo, Reset and Apply.",
+        "Discord: \"Ping when a divine fragment drops\" pings you on the card of a run that dropped one.",
+        "MISSION FAILED is built in: failed runs count as losses instead of Unknown.",
+        "Fit clicks to the game window is the default, so macros work in fullscreen and in a window.",
+    ]),
     ("2.5", "14 November 2026", [
         "Fixed: Results counted every run as Unknown when MISSION COMPLETED showed a little bigger or smaller "
         "on screen than the picture. Every size is now looked for until it's found, and the size it was found "

@@ -36,6 +36,7 @@ except ImportError:  # not on Windows
 import diag
 import importers
 import stats
+import macro_steps as workflow
 import platform_keys
 import raw_mouse
 import window_tools
@@ -165,6 +166,10 @@ BUILTIN_PICTURE_SCREEN_H = 1080
 # AOT:R's gold "MISSION COMPLETED" title (Kong's picture), the built-in "mission completed" picture
 BUILTIN_WIN_PICTURE = "completed_default.png"
 BUILTIN_WIN_PICTURE_SCREEN_H = 1440
+# and its gold "MISSION FAILED" title, the built-in "mission failed" picture (also taken at 1440p)
+BUILTIN_LOSS_PICTURE = "failed_default.png"
+BUILTIN_LOSS_PICTURE_SCREEN_H = 1440
+RESULTS_MATCH_DEFAULT = 80  # the real titles score about 85-92 %, the other title about 55-66 %
 
 
 def resource_path(name):
@@ -272,18 +277,32 @@ def simplify_moves(events, tolerance=1.0):
     return out
 
 
+MAX_GLIDE = 10.0  # seconds
+MAX_EXPANDED = 2_000_000  # actions
+
+
 def expand_moves(events, step=0.01):
     """Puts back the positions simplify_moves() left out: a move marked "s" is reached from the
     move before it in steps of `step` seconds, as a real mouse would have reported them."""
-    if not any(ev.get("s") for ev in events):
+    if not any(isinstance(ev, dict) and ev.get("s") for ev in events):
         return events
+    import math
+
+    def number(v):
+        return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
     out = []
     last_move = None
     for ev in events:
-        if ev.get("type") == "move" and ev.get("s") and last_move is not None:
+        if not isinstance(ev, dict):
+            continue
+        if ev.get("type") == "move" and ev.get("s") and last_move is not None and \
+                all(number(q.get(k)) for q in (last_move, ev) for k in ("t", "x", "y")):
             A, C = last_move, ev
             span = C["t"] - A["t"]
-            n = int(round(span / step))  # (round: 0.3 / 0.01 is 29.999...)
+            # a file from somewhere else can't make the app run out of memory: a glide is at most
+            # MAX_GLIDE seconds (a real one is far shorter) and a macro at most MAX_EXPANDED actions
+            n = int(round(span / step)) if 0 < span <= MAX_GLIDE else 0  # (round: 0.3 / 0.01 is 29.999...)
+            n = min(n, max(0, MAX_EXPANDED - len(out)))
             for k in range(1, n):
                 f = k * step / span
                 out.append({"type": "move", "x": round(A["x"] + (C["x"] - A["x"]) * f),
@@ -574,6 +593,12 @@ class MacroRecorder:
         self.macro_screen = None  # (w, h) the current macro was made on; None = unknown
         # the program the macro was recorded in: {"exe", "title", "client": [x, y, w, h]} or None
         self.macro_program = None
+        # the macro as steps (Edit window); None = just self.events (one recorded step)
+        self.actions = None
+        # set by the Edit window: the next recording goes to it (callback(events)) instead of
+        # replacing the open macro
+        self.record_into = None
+        self.record_saved = None
         self.window_samples = {}  # while recording: window -> [times seen, its info]
         self.raw_mouse = None  # reads camera movement while recording (Windows)
         self.camera_dx = self.camera_dy = 0
@@ -1267,15 +1292,30 @@ class MacroRecorder:
             self.recording = False
             self.paused = False
             self._stop_camera()
+            if self.record_into is not None:
+                # recorded for the Edit window: the open macro comes back as it was
+                recorded, done = self.events, self.record_into
+                (self.events, self.actions, self.current_file, self.macro_screen, self.macro_program) = \
+                    self.record_saved
+                self.record_into = self.record_saved = None
+                self._show_made_for()
+                diag.info(f"Recording for the Edit window stopped: {len(recorded)} actions")
+                self._refresh()
+                self.root.after(0, lambda: done(recorded))
+                return
             self.macro_program = self._recorded_program()
             diag.info(f"Recording stopped: {len(self.events)} actions"
                       + (f", program {self.macro_program['exe']}" if self.macro_program else ""))
         else:
-            if self.events and not messagebox.askyesno(
+            if self.record_into is not None:
+                self.record_saved = (self.events, self.actions, self.current_file, self.macro_screen,
+                                     self.macro_program)
+            elif self.events and not messagebox.askyesno(
                 "Macro Recorder", "Start a new recording? The current one will be replaced."
             ):
                 return
             self.events = []
+            self.actions = None
             self.current_file = None
             self.macro_screen = (self.screen_w, self.screen_h)  # recorded on this screen
             self.macro_program = None
@@ -1462,7 +1502,7 @@ class MacroRecorder:
     # ------------------------------------------------------------ playback
 
     def play(self):
-        if self.recording or self.playing or not self.events or self.capture_callback is not None:
+        if self.recording or self.playing or not (self.events or self.actions) or self.capture_callback is not None:
             return
         try:
             repeats = max(1, int(self.repeat_var.get()))
@@ -1476,7 +1516,7 @@ class MacroRecorder:
         if play_on is None or not self._read_made_for():
             return
         # move mouse positions from the size the macro was made for to the size it's played on
-        events = self._events_for_play(play_on)
+        events = self._events_for_play(play_on)  # (the macro's steps, fitted to this screen)
         try:
             self.wait_matchers = self._make_wait_matchers(events)
         except Exception as exc:
@@ -1529,7 +1569,7 @@ class MacroRecorder:
         self.play_note = ""
         self.play_bg = bg
         self._refresh()
-        diag.info(f"Playing: {len(events)} actions, speed {speed:g}, "
+        diag.info(f"Playing: {workflow.count_events(events)} recorded actions in {len(events)} step(s), speed {speed:g}, "
                   + ("loop" if loop else f"{repeats} time(s)") + (", picture watch" if watch else "")
                   + (", background window" if bg else ""))
         threading.Thread(target=self._play_worker,
@@ -1567,21 +1607,40 @@ class MacroRecorder:
                             diag.error("A result picture couldn't be used", exc)
         return matchers
 
+    def macro_steps(self):
+        """The macro as steps (one recorded step when it was never edited into more)."""
+        return self.actions if self.actions else workflow.from_events(self.events)
+
+    def set_steps(self, actions):
+        """Replace the macro with these steps (from the Edit window)."""
+        actions = workflow.ensure_ids(actions)
+        if workflow.is_simple(actions):
+            self.actions = None
+            self.events = actions[0]["events"]
+        else:
+            self.actions = actions
+            self.events = workflow.all_events(actions)
+
     def _events_for_play(self, play_on):
-        """The macro's actions with mouse positions fitted to this screen, or to the game window
+        """The macro's steps with mouse positions fitted to this screen, or to the game window
         when Settings > Playback > Fit to says so (and the macro knows its window)."""
         self.fit_note = ""
-        if self.settings.get("fit_to") == "window":
+        fit = None
+        if self.settings.get("fit_to", "window") == "window":
             src = (self.macro_program or {}).get("client")
             dst = self._game_client_rect()
             if src and dst and len(src) == 4 and src[3] > 0:
                 if tuple(src) == tuple(dst):
-                    return [dict(ev) for ev in self.events]
-                self.fit_note = "fitted to the game window"
-                return scale_events_rect(self.events, src, dst)
-            self.fit_note = ("the game window wasn't found, so it's fitted to the screen" if src
-                             else "this macro doesn't know its window, so it's fitted to the screen")
-        return scale_events(self.events, self.macro_screen, play_on)
+                    fit = lambda evs: [dict(ev) for ev in evs]  # noqa: E731
+                else:
+                    self.fit_note = "fitted to the game window"
+                    fit = lambda evs: scale_events_rect(evs, src, dst)  # noqa: E731
+            else:
+                self.fit_note = ("the game window wasn't found, so it's fitted to the screen" if src
+                                 else "this macro doesn't know its window, so it's fitted to the screen")
+        if fit is None:
+            fit = lambda evs: scale_events(evs, self.macro_screen, play_on)  # noqa: E731
+        return workflow.map_points(self.macro_steps(), fit)
 
     def _game_client_rect(self):
         """Where the inside of the game's window is now: the macro's program if it's open, else the
@@ -1594,24 +1653,36 @@ class MacroRecorder:
                 wins = [fg]
         return window_tools.client_rect(wins[0]) if wins else None
 
-    def _make_wait_matchers(self, events):
-        """Pictures of the "Wait for a picture" steps, ready to look for (by step number)."""
+    def _make_wait_matchers(self, program):
+        """The pictures of "Wait for a picture" steps and of If / Retry conditions, ready to look for
+        (by the id of the dict that holds the picture)."""
         found = {}
-        for i, ev in enumerate(events):
-            if ev.get("type") != "wait_picture":
+        holders = []
+        for a, _lst, _i, _p in workflow.walk(program):
+            if a.get("off"):
                 continue
+            kind = a.get("kind")
+            if kind == "wait_picture":
+                holders.append(a)
+            elif kind in ("if", "retry"):
+                holders.append(a.get("condition", {}))
+            elif kind == "recorded":
+                holders.extend(ev for ev in a.get("events", []) if ev.get("type") == "wait_picture")
+        for n, h in enumerate(holders, start=1):
+            if not h.get("png"):
+                raise ValueError(f"a picture step or condition ({n}) has no picture yet: choose one in Edit")
             if image_watch is None:
                 raise ValueError("this copy was built without picture support")
             import base64
 
             import numpy as np
 
-            data = np.frombuffer(base64.b64decode(ev["png"]), np.uint8)
+            data = np.frombuffer(base64.b64decode(h["png"]), np.uint8)
             img = image_watch.cv2.imdecode(data, image_watch.cv2.IMREAD_COLOR)
             if img is None:
-                raise ValueError(f"step {i + 1} has a broken picture")
-            found[i] = image_watch.Matcher(img, picked_screen_h=ev.get("screen_h"), ignore_background=True,
-                                           screen_h=self.screen_h)
+                raise ValueError(f"picture {n} is broken")
+            found[id(h)] = image_watch.Matcher(img, picked_screen_h=h.get("screen_h"), ignore_background=True,
+                                               screen_h=self.screen_h)
         return found
 
     def stop_playback(self):
@@ -1746,6 +1817,7 @@ class MacroRecorder:
         seen = threading.Event()  # the watched-for picture showed up
         watch_done = threading.Event()
         restarts = []  # when picture watch started the macro over (for the runaway limit)
+        starts_over = []  # when a "Start over" step ran (the same kind of limit)
         count = 0
         try:
             # "get ready" countdown; Stop cancels it
@@ -1769,36 +1841,20 @@ class MacroRecorder:
                     self._set_note(f"Playing run {count + 1}{total}{watching}...")
                 start = self._play_clock()
                 self.run_began = (time.perf_counter(), start)
-                for i, ev in enumerate(events):
-                    target = start + ev["t"] / speed
-                    # wait in small steps so Stop (F12) and the picture are noticed quickly
-                    while True:
-                        if self.stop_play.is_set():
-                            return
-                        if seen.is_set():
-                            break
-                        if away is not None and away(held_keys, held_buttons):
-                            return  # waited too long for the game to come back
-                        remaining = target - self._play_clock()
-                        if remaining <= 0:
-                            break
-                        if remaining > 0.002:
-                            time.sleep(min(remaining - 0.0015, 0.02))
-                        else:
-                            time.sleep(0)  # the last 2 ms: check the clock closely (steadier quick taps)
-                    if seen.is_set():
-                        break  # the picture showed up: this run is over
-                    if ev["type"] == "wait_picture":
-                        before = self._play_clock()
-                        result = self._wait_for_picture(i, ev, bg, held_keys, held_buttons, away)
-                        if result == "stop":
-                            return
-                        start += self._play_clock() - before  # the rest keeps its timing after the wait
-                        continue
-                    if bg is not None:
-                        self._replay_event_bg(bg, ev, held_keys)
-                    else:
-                        self._replay_event(ev, held_keys, held_buttons)
+                ctx = {"speed": speed, "bg": bg, "held": (held_keys, held_buttons), "seen": seen, "away": away}
+                result = self._run_steps(events, ctx)
+                if result == "stop":
+                    return
+                if result == "restart":
+                    now = time.perf_counter()
+                    starts_over[:] = [t for t in starts_over if now - t < 60] + [now]
+                    if len(starts_over) > 10:
+                        self.stop_reason = ("Stopped: a \"Start over\" step ran more than 10 times in 60 s. "
+                                            "Something is probably stuck.")
+                        diag.error(self.stop_reason)
+                        return
+                    self._release_held(bg, held_keys, held_buttons)
+                    continue  # from step 1 again (the same run)
                 if watch is not None:
                     self._release_held(bg, held_keys, held_buttons)
                     last_run = not loop and count + 1 >= repeats
@@ -1914,7 +1970,7 @@ class MacroRecorder:
             return max(seen)[1]
         # not seen by the watcher yet: look at the screen once more, now
         try:
-            need = self.settings.get("results_match", 85) / 100.0
+            need = self.settings.get("results_match", RESULTS_MATCH_DEFAULT) / 100.0
             # only around the spots where result pictures were seen before (about 0.01 s, so Retry
             # isn't held up); the whole screen only while no result picture was ever found
             whole = not any(self._kinds_found().values())
@@ -1983,7 +2039,8 @@ class MacroRecorder:
                 # than the picture, and then only matches at that exact size
                 score, _ = m.find(screen, good_enough=need, quick=True)
                 if score < need and m.last_rect is None:
-                    if every_size and not getattr(m, "fallback", False):
+                    main_size = getattr(m, "factor", 1.0) == (getattr(m, "picture", {}) or {}).get("found_factor", 1.0)
+                    if every_size and main_size:  # (the other two sizes are covered by the watcher's turns)
                         score, _ = m.find(screen, good_enough=need)
                     elif not every_size:
                         turn = getattr(m, "size_turn", 0)
@@ -2018,7 +2075,7 @@ class MacroRecorder:
     def _result_worker(self, matchers, done):
         """While playing: notice when a "mission completed" or "mission failed" picture appears
         (about every 1.5 s). Each time one appears counts once, for the run that's going on."""
-        need = self.settings.get("results_match", 85) / 100.0
+        need = self.settings.get("results_match", RESULTS_MATCH_DEFAULT) / 100.0
         window_tools.set_thread_priority(-1)  # never in the way of playback's timing
         checks = 0
         try:
@@ -2063,6 +2120,186 @@ class MacroRecorder:
                     done.wait(max(0.5, 1.5 - took, took))
         except Exception as exc:
             diag.error("Result pictures: watching the screen failed", exc)
+
+    # ------------------------------------------------------------ running the steps
+
+    def _run_steps(self, steps, ctx):
+        """Play a list of steps. Returns "ok", "picture" (picture watch saw its picture: this run is
+        over), "stop" (stop the macro) or "restart" (start the macro again from step 1)."""
+        for a in steps:
+            if self.stop_play.is_set():
+                return "stop"
+            if ctx["seen"].is_set():
+                return "picture"
+            if a.get("off"):
+                continue
+            result = self._run_step(a, ctx)
+            if result != "ok":
+                return result
+        return "ok"
+
+    def _run_step(self, a, ctx):
+        kind = a.get("kind")
+        held_keys, held_buttons = ctx["held"]
+        bg = ctx["bg"]
+        if kind == "recorded":
+            return self._play_events(a.get("events", []), ctx)
+        if kind == "wait":
+            return self._pause(float(a.get("seconds", 0)) / ctx["speed"], ctx)
+        if kind == "note":
+            return "ok"
+        if kind == "stop":
+            self.stop_reason = None
+            return "stop"
+        if kind == "restart":
+            return "restart"
+        if kind == "repeat":
+            for _ in range(max(0, int(a.get("times", 1)))):
+                result = self._run_steps(a.get("actions", []), ctx)
+                if result != "ok":
+                    return result
+            return "ok"
+        if kind == "if":
+            if self._condition_true(a.get("condition", {})):
+                return self._run_steps(a.get("actions", []), ctx)
+            return "ok"
+        if kind == "retry":
+            tries = max(1, int(a.get("tries", 3)))
+            for n in range(tries):
+                result = self._run_steps(a.get("actions", []), ctx)
+                if result != "ok":
+                    return result
+                if self._condition_true(a.get("condition", {}), wait=2.0):
+                    return "ok"
+                self._set_note(f"Retry: try {n + 2} of {tries}...") if n + 1 < tries else None
+            return "ok"
+        if kind == "wait_picture":
+            return "stop" if self._wait_for_picture(a, bg, held_keys, held_buttons, ctx["away"]) == "stop" else "ok"
+        # one-off actions: done as recorded events would be
+        for ev in self._step_events(a):
+            if bg is not None:
+                self._replay_event_bg(bg, ev, held_keys)
+            else:
+                self._replay_event(ev, held_keys, held_buttons)
+            if ev.get("pause"):
+                result = self._pause(ev["pause"], ctx)
+                if result != "ok":
+                    return result
+        return "ok"
+
+    @staticmethod
+    def _step_events(a):
+        """The events a key / type / click / move / scroll step plays (with "pause" after some)."""
+        kind = a.get("kind")
+        out = []
+        if kind == "key":
+            mode = a.get("mode", "press")
+            key = a.get("key", {})
+            if mode == "down":
+                out.append({"type": "key", "key": key, "pressed": True})
+            elif mode == "up":
+                out.append({"type": "key", "key": key, "pressed": False})
+            else:
+                hold = max(0.03, float(a.get("hold", 0) or 0))  # how long the key stays down
+                for _ in range(max(1, int(a.get("times", 1)))):
+                    out.append({"type": "key", "key": key, "pressed": True, "pause": hold})
+                    out.append({"type": "key", "key": key, "pressed": False, "pause": 0.03})
+        elif kind == "type":
+            delay = max(0.0, float(a.get("delay", 0.02)))
+            for ch in str(a.get("text", "")):
+                key = {"char": ch} if ch not in "\n\r\t" else {"special": {"\n": "enter", "\r": "enter",
+                                                                             "\t": "tab"}[ch]}
+                if ch == " ":
+                    key = {"special": "space"}
+                out.append({"type": "key", "key": key, "pressed": True})
+                out.append({"type": "key", "key": key, "pressed": False, "pause": delay})
+        elif kind == "click":
+            x, y, button, mode = a.get("x", 0), a.get("y", 0), a.get("button", "left"), a.get("mode", "click")
+            out.append({"type": "move", "x": x, "y": y, "pause": 0.03})
+            presses = {"click": [True, False], "double": [True, False, True, False], "down": [True],
+                       "up": [False]}.get(mode, [True, False])
+            hold = max(0.04, float(a.get("hold", 0) or 0)) if mode == "click" else 0.04  # how long it's held
+            for pressed in presses:
+                out.append({"type": "click", "x": x, "y": y, "button": button, "pressed": pressed,
+                            "pause": hold if pressed else 0.04})
+        elif kind == "move":
+            out.append({"type": "move", "x": a.get("x", 0), "y": a.get("y", 0)})
+        elif kind == "scroll":
+            out.append({"type": "scroll", "dx": 0, "dy": int(a.get("amount", 0))})
+        return out
+
+    def _pause(self, seconds, ctx):
+        """Wait (playback's clock, so Pause works), noticing Stop, picture watch and the game leaving."""
+        end = self._play_clock() + max(0.0, seconds)
+        while True:
+            if self.stop_play.is_set():
+                return "stop"
+            if ctx["seen"].is_set():
+                return "picture"
+            if ctx["away"] is not None and ctx["away"](*ctx["held"]):
+                return "stop"
+            left = end - self._play_clock()
+            if left <= 0:
+                return "ok"
+            time.sleep(min(left, 0.02))
+
+    def _play_events(self, events, ctx):
+        """Recorded events, each at its own time from the start of this step."""
+        speed, bg, seen, away = ctx["speed"], ctx["bg"], ctx["seen"], ctx["away"]
+        held_keys, held_buttons = ctx["held"]
+        start = self._play_clock()
+        for ev in events:
+            target = start + ev["t"] / speed
+            # wait in small steps so Stop (F12) and the picture are noticed quickly
+            while True:
+                if self.stop_play.is_set():
+                    return "stop"
+                if seen.is_set():
+                    return "picture"
+                if away is not None and away(held_keys, held_buttons):
+                    return "stop"  # waited too long for the game to come back
+                remaining = target - self._play_clock()
+                if remaining <= 0:
+                    break
+                if remaining > 0.002:
+                    time.sleep(min(remaining - 0.0015, 0.02))
+                else:
+                    time.sleep(0)  # the last 2 ms: check the clock closely (steadier quick taps)
+            if ev["type"] == "wait_picture":
+                before = self._play_clock()
+                if self._wait_for_picture(ev, bg, held_keys, held_buttons, away) == "stop":
+                    return "stop"
+                start += self._play_clock() - before  # the rest keeps its timing after the wait
+                continue
+            if bg is not None:
+                self._replay_event_bg(bg, ev, held_keys)
+            else:
+                self._replay_event(ev, held_keys, held_buttons)
+        return "ok"
+
+    def _condition_true(self, condition, wait=0.0):
+        """Whether an If / Retry condition holds now ("shows": the picture is on screen, or isn't).
+        wait: look again for up to that many seconds before saying it doesn't."""
+        matcher = self.wait_matchers.get(id(condition))
+        if matcher is None:
+            return not condition.get("shows", True)
+        need = max(0.5, min(0.99, condition.get("match", 85) / 100.0))
+        deadline = time.perf_counter() + wait
+        while True:
+            try:
+                screen = self._hide_own_window(image_watch.grab_screen(), image_watch.screen_origin())
+                score, _ = matcher.find(screen, good_enough=need, quick=matcher.last_rect is not None)
+                if score < need and matcher.last_rect is None:
+                    score, _ = matcher.find(screen, good_enough=need)
+            except Exception as exc:
+                diag.error("Couldn't check a condition's picture", exc)
+                score = 0.0
+            shows = score >= need
+            if shows == bool(condition.get("shows", True)):
+                return True
+            if time.perf_counter() >= deadline or self.stop_play.is_set():
+                return False
+            self.stop_play.wait(0.25)
 
     def _run_finished(self, count, how):
         """One run of the macro is over (how: "end" = it played to the end, "picture" = picture watch).
@@ -2173,10 +2410,10 @@ class MacroRecorder:
 
     # ------------------------------------------------------------ "Wait for a picture" steps
 
-    def _wait_for_picture(self, index, ev, bg, held_keys, held_buttons, away):
+    def _wait_for_picture(self, ev, bg, held_keys, held_buttons, away):
         """A step that waits until a picture shows on screen (up to its time limit), then maybe clicks
         it. Returns "stop" when the macro should stop, else "go on"."""
-        matcher = self.wait_matchers.get(index)
+        matcher = self.wait_matchers.get(id(ev))
         if matcher is None:
             return "go on"
         need = max(0.5, min(0.99, ev.get("match", 85) / 100.0))
@@ -2219,6 +2456,8 @@ class MacroRecorder:
 
     def _replay_event(self, ev, held_keys, held_buttons):
         kind = ev["type"]
+        if kind == "wait_picture":
+            return
         if kind == "move":
             self.mouse_ctrl.position = (ev["x"], ev["y"])
         elif kind == "move_rel":
@@ -2354,6 +2593,14 @@ class MacroRecorder:
         program = imported.program if imported is not None else self.file_data.get("program")
         self.macro_program = program if isinstance(program, dict) else None
         self.events = events
+        self.actions = None
+        steps = self.file_data.get("actions") if imported is None else None
+        if isinstance(steps, list) and steps and all(isinstance(a, dict) for a in steps):
+            # a macro with steps made in Edit (its recorded parts may be stored in a smaller form)
+            for a, _lst, _i, _p in workflow.walk(steps):
+                if a.get("kind") == "recorded" and isinstance(a.get("events"), list):
+                    a["events"] = expand_moves(a["events"])
+            self.set_steps(steps)
         self.current_file = path
         diag.info(f"Opened a macro: {len(events)} actions" + (f" ({imported.source})" if imported else ""))
         self._refresh()
@@ -2430,6 +2677,7 @@ class MacroRecorder:
     def clear(self):
         if self.events and messagebox.askyesno("Macro Recorder", "Clear the current recording?"):
             self.events = []
+            self.actions = None
             self.current_file = None
             self.macro_screen = None
             self.macro_program = None

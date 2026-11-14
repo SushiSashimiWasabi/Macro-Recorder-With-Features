@@ -18,13 +18,14 @@ made of parts, each in its own file:
 from ui_common import *  # noqa: F401,F403
 from discord_ui import DiscordMixin
 from edit_window import EditWindowMixin
+from macro_editor import MacroEditorMixin
 from results_ui import ResultsMixin
 from settings_pages import SettingsPagesMixin
 from settings_window import SettingsWindowMixin
 from video_ui import VideoMixin
 
 
-class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, SettingsWindowMixin, EditWindowMixin, VideoMixin, core.MacroRecorder):
+class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, SettingsWindowMixin, MacroEditorMixin, EditWindowMixin, VideoMixin, core.MacroRecorder):
     def __init__(self, root, preview=False):
         self.preview = preview
         self.sub_note = "Record something, or open a macro"
@@ -88,11 +89,12 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
         self.away_var = tk.BooleanVar(value=bool(s.get("pause_when_away", True)))
         self.away_stop_var = tk.IntVar(value=core.int_setting(s, "away_stop_seconds", 0, 0, 3600))
         self.switch_prog_var = tk.BooleanVar(value=bool(s.get("switch_to_program", True)))
-        self.fit_var = tk.StringVar(value=FIT_TO.get(s.get("fit_to"), FIT_TO["screen"]))
+        self.fit_var = tk.StringVar(value=FIT_TO.get(s.get("fit_to"), FIT_TO["window"]))
         # messages to your own Discord channel (a webhook link)
         self.discord_var = tk.BooleanVar(value=bool(s.get("discord_enabled", False)))
         self.discord_url_var = tk.StringVar(value=str(s.get("discord_webhook", "")))
         self.discord_runs_var = tk.BooleanVar(value=bool(s.get("discord_runs", True)))
+        self.discord_ping_drop_var = tk.BooleanVar(value=bool(s.get("discord_ping_fragments", False)))
         self.discord_shot_var = tk.BooleanVar(value=bool(s.get("discord_screenshot", True)))
         self.discord_stop_var = tk.BooleanVar(value=bool(s.get("discord_stops", True)))
         self.discord_name_var = tk.StringVar(value=str(s.get("discord_name", "Macro Recorder")))
@@ -108,7 +110,7 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
         self.drops_var = tk.BooleanVar(value=bool(s.get("drops_enabled", True)))
         if s.get("discord_message") in stats.OLD_DEFAULT_MESSAGES:
             s["discord_message"] = stats.DEFAULT_MESSAGE  # (the default text, now with divine fragments)
-        self.results_match_var = tk.IntVar(value=core.int_setting(s, "results_match", 85, 50, 99))
+        self.results_match_var = tk.IntVar(value=core.int_setting(s, "results_match", core.RESULTS_MATCH_DEFAULT, 50, 99))
         self.session_var = tk.StringVar(value="Nothing played yet.")
         self.alltime_var = tk.StringVar(value="")
         self.discord_status_var = tk.StringVar(value="")
@@ -335,7 +337,7 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
         self.card_pause.update_card("Resume" if self.paused or play_paused else "Pause", k["pause"],
                                     enabled=self.recording or (self.playing and self.countdown_left == 0),
                                     active=self.paused or play_paused)
-        self.card_play.update_card("Play", k["play"], enabled=not busy and bool(self.events),
+        self.card_play.update_card("Play", k["play"], enabled=not busy and bool(self.events or self.actions),
                                    active=self.playing)
         self.card_stop.update_card("Stop", k["stop"], enabled=self.playing)
 
@@ -406,6 +408,7 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
             s["discord_enabled"] = bool(self.discord_var.get())
             s["discord_webhook"] = self.discord_url_var.get().strip()
             s["discord_runs"] = bool(self.discord_runs_var.get())
+            s["discord_ping_fragments"] = bool(self.discord_ping_drop_var.get())
             s["discord_screenshot"] = bool(self.discord_shot_var.get())
             s["discord_stops"] = bool(self.discord_stop_var.get())
             s["discord_name"] = self.discord_name_var.get().strip()[:80]
@@ -451,7 +454,14 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
 
     def toggle_record(self):
         was = self.recording
+        into_editor = self.record_into is not None
         super().toggle_record()
+        if into_editor:  # (recording for the Edit window: the open macro's name stays)
+            self._sound("record_start" if self.recording else "record_stop")
+            self.sub_note = "Recording for the Edit window: press Record again to stop" if self.recording \
+                else "The recording was put in the Edit window"
+            self._refresh()
+            return
         if self.recording and not was:
             self.name_var.set("Recording " + datetime.datetime.now().strftime("%Y-%m-%d %H.%M"))
             self._sound("record_start")
@@ -504,7 +514,7 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
         return True
 
     def play(self):
-        if self.recording or self.playing or not self.events or self.capture_callback is not None:
+        if self.recording or self.playing or not (self.events or self.actions) or self.capture_callback is not None:
             return
         if not self._check_program():
             return
@@ -835,6 +845,7 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
                 self._refresh()
                 return
         self.events = []
+        self.actions = None
         self.current_file = None
         self.macro_screen = None
         self.unsaved = False
@@ -867,7 +878,7 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
         self._refresh()
 
     def save(self):
-        if not self.events:
+        if not (self.events or self.actions):
             messagebox.showinfo("Macro Recorder", "Nothing to save yet. Record something first.")
             return
         name = "".join(c for c in self.name_var.get().strip() if c not in '\\/:*?"<>|') or "my_macro"
@@ -885,6 +896,12 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
             events = core.simplify_moves(events)  # (put back in full when the file is opened)
         data = {"app": "macro_recorder", "version": core.FILE_VERSION, "name": self.name_var.get().strip(),
                 "events": events}
+        if self.actions:
+            # the steps made in Edit; "events" above keeps every recorded part for older versions
+            steps = self.actions
+            if self.settings.get("simplify_moves", False):
+                steps = workflow.map_points(steps, core.simplify_moves)
+            data["actions"] = steps
         if self.macro_screen:
             data["screen"] = {"width": self.macro_screen[0], "height": self.macro_screen[1]}
         if self.macro_program:

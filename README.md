@@ -15,7 +15,7 @@ customized.
 | `Complete build version\MacroRecorder.exe` | The finished app, always the newest build. This is the one to use and send to friends. |
 | `Previous version\MacroRecorder.exe` | The build before the newest one, kept by `build.bat` to go back to if needed. |
 | `saved macro file\` | Your own macros. |
-| `Source code\` | The Python code: `macro_recorder.py` (recording and playback), `modern_ui.py` (the window; its parts are `ui_common.py`, `settings_pages.py`, `settings_window.py`, `discord_ui.py`, `results_ui.py`, `edit_window.py`, `video_ui.py`), `backdrop.py` (background pictures), `sounds.py`, `background.py`, `importers.py` (other programs' macros, saving as .ahk), `image_watch.py` (finding pictures), `stats.py` (results), `discord_notify.py`, `text_styles.py`, `raw_mouse.py` (camera), `window_tools.py`, `diag.py` (log and report), `lazy.py`; `requirements.txt`, and `bg_test.py` for testing background playback. |
+| `Source code\` | The Python code: `macro_recorder.py` (recording and playback), `modern_ui.py` (the window; its parts are `ui_common.py`, `settings_pages.py`, `settings_window.py`, `discord_ui.py`, `results_ui.py`, `edit_window.py`, `macro_editor.py`, `video_ui.py`), `macro_steps.py` (macros made of steps), `backdrop.py` (background pictures), `sounds.py`, `background.py`, `importers.py` (other programs' macros, saving as .ahk), `image_watch.py` (finding pictures), `stats.py` (results), `discord_notify.py`, `text_styles.py`, `raw_mouse.py` (camera), `window_tools.py`, `diag.py` (log and report), `lazy.py`; `requirements.txt`, and `bg_test.py` for testing background playback. |
 | `build.bat` | Builds a new `MacroRecorder.exe` from the source code. |
 | `run.bat` | Runs the app straight from the source code, without building. |
 | `build_mac.sh`, `run_mac.sh` | The same two for a Mac (they only work on a Mac). |
@@ -129,13 +129,23 @@ on the Background page switches the movement off altogether. To keep it light fo
 **Frame rate** (5 to 30 pictures a second, default 15), **Only animate the window you're looking at**
 and **Pause while another window is in front** (like the game), both on at first.
 
-**Edit...** lists every action of the macro with its time. Select rows and **Remove selected**
-(or press Delete), **Remove all mouse moves**, or **Cut the wait at the start**. **Add a wait...**
-puts a pause before the selected row, **Change the wait...** sets the time between the selected row
-and the one before it, and **Wait for a picture...** adds a step that stops the macro until a picture
-shows on screen (taken from the screen or a file), up to a time limit, and can click it; if it
-doesn't show, the macro goes on or stops (your choice). Double-click such a step to change it. Then
-**Apply**, and Save afterwards to keep the changes in the file.
+**Edit...** opens the Edit window: your saved macros on the left, the chosen macro's actions in
+the middle and the chosen action's details on the right. **Add action** adds waits, key presses
+(held as long as you choose), typing, clicks (also held), mouse moves, scrolling, **Wait for a
+picture**, **If** / **Repeat** / **Retry** groups, **Start over**, **Stop** and notes. **Record keys
+and mouse...** records straight into the macro, and **Insert another macro...** copies a saved
+macro's actions in; both ask where they go (the start, after the chosen action or the end).
+**Duplicate**, **Remove** and **More** (move, copy / paste, group, ungroup, turn off) show once you
+pick an action. The macro's name box renames its file. **Undo**, **Redo**, **Reset** and **Apply**
+light up once something changed.
+
+A recorded part has **Edit the recorded events...**: every recorded action with its time. Select
+rows and **Remove selected** (or press Delete), **Remove all mouse moves**, or **Cut the wait at the
+start**. **Add action** (a key press, typing, a click, a mouse move or a scroll) and **Record
+here...** put new actions anywhere in the recording, and the actions after them move later to make
+room. **Add a wait...** puts a pause before the selected row, **Change the wait...** sets the time
+between the selected row and the one before it, and **Wait for a picture...** adds a step that stops
+the macro until a picture shows on screen, up to a time limit, and can click it. Then **Apply**.
 
 **Game camera (Shift Lock):** with **Record game camera movement** on (Settings > Recording,
 Windows only), the app also reads how far the mouse itself moves while the game hides the pointer
@@ -157,7 +167,8 @@ Discord card has the streak, win rate, completed/runs, failed/runs and run times
 **Discord:** in Settings > Discord, paste a webhook link of a channel on your own server (Channel
 settings > Integrations > Webhooks > New Webhook > Copy Webhook URL) and switch it on. After each run
 you get a results card, and a short summary when playback stops. Choose the name it posts as, who to
-ping (`@everyone`, `<@your user ID>`) and when (every message, only failed runs and stops, or never),
+ping (`@everyone`, `<@your user ID>`) and when (every message, only failed runs and stops, or never; **Ping when a divine fragment
+drops** pings you on that run's card too),
 and what the screenshot shows (main screen, all screens, the game's window or any program's window).
 **Edit the message...** opens its own window (resize it by its edges; it remembers its size): the
 line above the card, the title and the text, with Discord's formatting buttons (bold, italic,
@@ -359,7 +370,6 @@ In **Settings > General**, pick other keys you don't use in the game.
 ## Ideas for later
 
 - A hotkey for each saved macro.
-- More step types in Edit (conditions, repeat a part).
 
 ## License
 

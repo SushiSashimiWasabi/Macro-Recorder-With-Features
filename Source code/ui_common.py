@@ -39,6 +39,7 @@ import stats
 import text_styles
 import video_overlay
 import window_tools
+import macro_steps as workflow
 from macro_recorder import (HOTKEY_ACTIONS, IS_MAC, IS_WIN, SCREEN_TARGET, SPEED_PRESETS, background,
                             format_speed, hotkey_name, image_watch, parse_speed)
 

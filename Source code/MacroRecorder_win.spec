@@ -16,7 +16,8 @@ a = Analysis(
     [entry],
     pathex=[here],
     datas=[(os.path.join(here, "retry_default.png"), "."), (os.path.join(here, "default_logo.png"), "."),
-           (os.path.join(here, "completed_default.png"), ".")],
+           (os.path.join(here, "completed_default.png"), "."),
+           (os.path.join(here, "failed_default.png"), ".")],
     hiddenimports=["image_watch", "lazy", "pynput.keyboard._win32", "pynput.mouse._win32"],
     excludes=EXCLUDE_MODULES,
 )

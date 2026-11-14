@@ -1,4 +1,6 @@
-"""The Edit window: the list of a macro's actions, waits and "Wait for a picture" steps.
+"""The list of a recorded step's events (from the Edit window: "Edit the recorded events…"):
+remove some, remove all mouse moves, cut the wait at the start, add or change waits, and "Wait for a
+picture" inside the recording.
 
 Part of the dark window: ModernMacroRecorder (modern_ui.py) inherits this class.
 """
@@ -6,22 +8,155 @@ Part of the dark window: ModernMacroRecorder (modern_ui.py) inherits this class.
 from ui_common import *  # noqa: F401,F403  (colours, fonts, widgets, tk, core, the other modules)
 
 
+MANUAL_KINDS = (("key", "Key press…"), ("type", "Type text…"), ("click", "Mouse click…"),
+                ("move", "Mouse move…"), ("scroll", "Scroll…"))
+MANUAL_TITLES = dict(MANUAL_KINDS)
+
+
 class EditWindowMixin:
-    def open_editor(self):
-        if self.recording or self.playing:
-            return
-        if not self.events:
-            messagebox.showinfo("Macro Recorder", "There's nothing to edit yet. Record or open a macro first.")
-            return
-        if self.edit_win is not None and self.edit_win.winfo_exists():
-            self.edit_win.lift()
-            return
-        events = [dict(ev) for ev in self.events]
-        win = tk.Toplevel(self.root, bg=BG)
-        self.edit_win = win
-        win.title(f"Edit - {self.name_var.get().strip() or 'new macro'}")
+    def _manual_event_dialog(self, events_win, editor_win, kind, where_choices, on_done):
+        """Ask for one key press / typing / click / move / scroll and where it goes:
+        on_done(action, where), the action as the Edit window's steps have it."""
+        from macro_editor import key_from_id
+
+        win = tk.Toplevel(events_win, bg=BG)
+        win.title(MANUAL_TITLES[kind].rstrip("…"))
+        win.transient(events_win)
         win.attributes("-topmost", True)
-        win.geometry("600x580")
+        win.resizable(False, False)
+        body = tk.Frame(win, bg=BG)
+        body.pack(fill="both", padx=18, pady=14)
+        a = workflow.new_action(kind)
+        fields = {}
+
+        def line(text):
+            r = tk.Frame(body, bg=BG)
+            r.pack(fill="x", pady=(6, 0))
+            tk.Label(r, text=text, bg=BG, fg=TEXT, font=F_BASE).pack(side="left")
+            return r
+
+        def entry(text, key, value, width=8):
+            var = tk.StringVar(value=f"{value:g}" if isinstance(value, (int, float)) else str(value))
+            tk.Entry(line(text), textvariable=var, bg=FIELD, fg=TEXT, font=F_BASE, relief="flat",
+                     insertbackground=TEXT, width=width).pack(side="right", ipady=2)
+            fields[key] = var
+            return var
+
+        def combo(text, key, options, value):
+            var = tk.StringVar(value=options[value])
+            ttk.Combobox(line(text), width=16, state="readonly", textvariable=var,
+                         values=list(options.values())).pack(side="right")
+            fields[key] = (var, options)
+
+        def point_rows():
+            x = entry("X (from the left of the screen)", "x", 0)
+            y = entry("Y (from the top)", "y", 0)
+
+            def pick():
+                def picked(px, py):
+                    x.set(str(px))
+                    y.set(str(py))
+                    win.lift()
+                self._pick_point(win, picked, hidden=(events_win, editor_win))
+            r = tk.Frame(body, bg=BG)
+            r.pack(fill="x", pady=(6, 0))
+            ttk.Button(r, text="Pick the spot on the screen…", command=pick).pack(side="left")
+
+        if kind == "key":
+            r = line("Key")
+            badge = tk.Label(r, text=workflow.key_text(a["key"]), bg=BADGE, fg=TEXT, font=(FAMILY, 10, "bold"), padx=10, pady=2)
+
+            def capture():
+                badge.config(text="Press a key…", fg=AMBER)
+
+                def got(key_id):
+                    self.capture_callback = None
+                    if not win.winfo_exists():
+                        return
+                    if key_id and key_id != "esc":
+                        a["key"] = key_from_id(key_id)
+                    badge.config(text=workflow.key_text(a["key"]), fg=TEXT)
+                self.capture_callback = got
+            link(r, "Change", capture).pack(side="right")
+            badge.pack(side="right", padx=(0, 10))
+            combo("What to do", "mode", {"press": "Press it", "down": "Hold it down", "up": "Let go of it"},
+                  "press")
+            entry("How many times", "times", 1)
+            entry("Hold for (seconds, 0 = quick)", "hold", 0)
+        elif kind == "type":
+            tk.Label(body, text="Text to type", bg=BG, fg=TEXT, font=F_BASE, anchor="w").pack(fill="x")
+            text = tk.Text(body, height=4, width=40, bg=FIELD, fg=TEXT, insertbackground=TEXT, relief="flat",
+                           font=F_BASE, wrap="word")
+            text.pack(fill="x", pady=(4, 0))
+            entry("Time between letters (seconds)", "delay", 0.02)
+        elif kind == "click":
+            point_rows()
+            combo("Button", "button", {"left": "Left", "right": "Right", "middle": "Middle"}, "left")
+            combo("Click", "mode", {"click": "Click", "double": "Double-click", "down": "Hold down",
+                                    "up": "Let go"}, "click")
+            entry("Hold for (seconds, 0 = quick)", "hold", 0)
+        elif kind == "move":
+            point_rows()
+        elif kind == "scroll":
+            combo("Direction", "dir", {"down": "Down", "up": "Up"}, "down")
+            entry("How many notches", "amount", 3)
+        where_names = dict(where_choices)
+        where_var = tk.StringVar(value=where_choices[0][0])
+        ttk.Combobox(line("Put it"), width=22, state="readonly", textvariable=where_var,
+                     values=list(where_names)).pack(side="right")
+
+        def number(key, cast, low, high):
+            value = cast(float(fields[key].get().replace(",", ".")))
+            return max(low, min(high, value))
+
+        def picked_value(key):
+            var, options = fields[key]
+            return next(k for k, v in options.items() if v == var.get())
+
+        def ok():
+            try:
+                if kind == "key":
+                    a.update(mode=picked_value("mode"), times=number("times", int, 1, 1000),
+                             hold=number("hold", float, 0, 3600))
+                elif kind == "type":
+                    a.update(text=text.get("1.0", "end-1c"), delay=number("delay", float, 0, 5))
+                    if not a["text"]:
+                        self.boxes.showinfo("Add action", "Type the text first.", parent=win)
+                        return
+                elif kind in ("click", "move"):
+                    a.update(x=number("x", int, -100000, 100000), y=number("y", int, -100000, 100000))
+                    if kind == "click":
+                        a.update(button=picked_value("button"), mode=picked_value("mode"),
+                                 hold=number("hold", float, 0, 3600))
+                elif kind == "scroll":
+                    notches = number("amount", int, 1, 1000)
+                    a["amount"] = notches if picked_value("dir") == "up" else -notches
+            except (ValueError, tk.TclError):
+                self.boxes.showinfo("Add action", "Type numbers in the boxes.", parent=win)
+                return
+            close()
+            on_done(a, where_names[where_var.get()])
+
+        def close():
+            self.capture_callback = None
+            win.destroy()
+
+        bottom = tk.Frame(win, bg=BG)
+        bottom.pack(fill="x", padx=18, pady=(0, 14))
+        ttk.Button(bottom, text="Add", style="Accent.TButton", width=8, command=ok).pack(side="right")
+        ttk.Button(bottom, text="Cancel", width=8, command=close).pack(side="right", padx=6)
+        win.protocol("WM_DELETE_WINDOW", close)
+        dark_title_bar(win)
+        win.focus_force()
+        return win
+
+    def _events_window(self, parent, events, on_done):
+        """Change a recorded step's events; on_done(events) gets them when Apply is pressed."""
+        win = tk.Toplevel(parent, bg=BG)
+        win.transient(parent)
+        win.title("Recorded events - Macro Recorder")
+        win.attributes("-topmost", True)
+        win.geometry("620x640")
         win.minsize(460, 360)
         dark_title_bar(win)
 
@@ -143,19 +278,101 @@ class EditWindowMixin:
                 show_row(i)
             self._picture_step_dialog(win, replace, events[i])
 
+        def where_choices():
+            choices = []
+            if selected_index() is not None:
+                choices += [("After the selected row", "after"), ("Before the selected row", "before")]
+            return choices + [("At the end", "end"), ("At the start", "start")]
+
+        def insert_block(block, length, where):
+            """Put timed events (their "t" counted from 0, lasting `length` s) in the list; the
+            events after them move later by that much."""
+            if not block:
+                return
+            i = selected_index()
+            if where == "start" or not events:
+                pos, start, shift = 0, (events[0]["t"] if events else 0.0), length
+            elif where == "before" and i is not None:
+                pos, start, shift = i, events[i]["t"], length
+            elif where == "after" and i is not None:
+                last = max(int(r) for r in tree.selection())
+                pos, start, shift = last + 1, events[last]["t"] + 0.03, length + 0.03
+            else:
+                pos, start, shift = len(events), events[-1]["t"] + 0.1, 0.0
+            for ev in events[pos:]:
+                ev["t"] = round(ev["t"] + shift, 4)
+            for k, ev in enumerate(block):
+                ev["t"] = round(start + ev["t"], 4)
+                events.insert(pos + k, ev)
+            fill()
+            rows = [str(pos + k) for k in range(len(block))]
+            tree.selection_set(rows)
+            tree.see(rows[-1])
+            tree.see(rows[0])
+
+        def add_action(kind):
+            def done(action, where):
+                block, t = [], 0.0
+                for ev in self._step_events(action):
+                    ev = dict(ev)
+                    pause = ev.pop("pause", 0.0)
+                    ev["t"] = t
+                    block.append(ev)
+                    t += pause
+                insert_block(block, max(0.03, t), where)
+            self._manual_event_dialog(win, parent, kind, where_choices(), done)
+
+        def add_menu():
+            menu = tk.Menu(win, tearoff=False, bg=PANEL, fg=TEXT, activebackground=ACCENT,
+                           activeforeground="white", bd=0, font=F_BASE)
+            for kind, label in MANUAL_KINDS:
+                menu.add_command(label=label, command=lambda k=kind: add_action(k))
+            menu.tk_popup(add_btn.winfo_rootx(), add_btn.winfo_rooty() + add_btn.winfo_height())
+
+        def record_here():
+            """Record keys and mouse now and put the recording in this list."""
+            if self.recording or self.playing:
+                return
+            choices = where_choices() + [("Cancel", None)]
+            where = self.boxes.askchoice(
+                "Record here", "Where should the new recording go?\n\nAfter you choose, recording starts at "
+                f"once. Press the Record key ({core.hotkey_name(self.hotkeys['record'])}) again to stop it; this "
+                "window then comes back.", choices, default=choices[0][1], parent=win)
+            if where is None:
+                return
+
+            def done(recorded):
+                for w in (parent, win):
+                    try:
+                        w.deiconify()
+                    except tk.TclError:
+                        pass
+                win.lift()
+                if not recorded or not win.winfo_exists():
+                    return
+                first = recorded[0]["t"]
+                block = [dict(ev, t=round(ev["t"] - first, 4)) for ev in recorded]
+                insert_block(block, block[-1]["t"] + 0.05, where)
+            self.record_into = done
+            win.withdraw()
+            parent.withdraw()
+            self.toggle_record()
+
         def apply():
             if not events:
-                messagebox.showinfo("Macro Recorder", "That would leave the macro empty. Use Clear in "
-                                    "Settings > Recording for that.", parent=win)
+                messagebox.showinfo("Macro Recorder", "That would leave the step empty. Remove the step "
+                                    "instead.", parent=win)
                 return
-            self.events = events
-            self.unsaved = True
-            self.sub_note = "Macro edited (Save… to keep the changes in the file)"
             win.destroy()
-            self._refresh()
+            on_done(events)
 
+        tools0 = tk.Frame(win, bg=BG)
+        tools0.pack(fill="x", padx=14, pady=(8, 0))
+        add_btn = ttk.Button(tools0, text="Add action ▾", style="Accent.TButton", command=add_menu)
+        add_btn.pack(side="left")
+        ttk.Button(tools0, text="Record here…", command=record_here).pack(side="left", padx=6)
         tools = tk.Frame(win, bg=BG)
-        tools.pack(fill="x", padx=14, pady=(8, 0))
+        tools.pack(fill="x", padx=14, pady=(6, 0))
         ttk.Button(tools, text="Remove selected", command=remove_selected).pack(side="left")
         ttk.Button(tools, text="Remove all mouse moves", command=remove_moves).pack(side="left", padx=6)
         ttk.Button(tools, text="Cut the wait at the start", command=trim_start).pack(side="left")
@@ -167,8 +384,9 @@ class EditWindowMixin:
         b.pack(side="left")
         if image_watch is None:
             b.config(state="disabled")
-        tk.Label(win, text="New steps go before the selected row. Double-click a \"Wait for a picture\" "
-                           "step to change it.", bg=BG, fg=DIM, font=F_SMALL, anchor="w").pack(
+        tk.Label(win, text="Added actions and recordings go where you choose; waits and pictures go before "
+                           "the selected row. Double-click a \"Wait for a picture\" step to change it.",
+                 bg=BG, fg=DIM, font=F_SMALL, anchor="w", justify="left", wraplength=560).pack(
             fill="x", padx=14, pady=(6, 0))
         tree.bind("<Delete>", lambda e: remove_selected())
         tree.bind("<Double-1>", edit_step)
@@ -178,6 +396,8 @@ class EditWindowMixin:
         ttk.Button(bottom, text="Apply", style="Accent.TButton", command=apply).pack(side="right")
         ttk.Button(bottom, text="Cancel", command=win.destroy).pack(side="right", padx=6)
         fill()
+        win.tree, win.add_action, win.record_here, win.apply = tree, add_action, record_here, apply  # (for tests)
+        return win
 
     def _picture_step_dialog(self, parent, on_done, step=None):
         """The options of a "Wait for a picture" step: its picture (taken from the screen or a file),

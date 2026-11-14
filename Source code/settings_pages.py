@@ -71,6 +71,8 @@ class SettingsPagesMixin:
         self.btn_done.pack(side="right")
         self.btn_reset = ttk.Button(bottom, text="Reset", width=8, command=self.reset_settings_changes)
         self.btn_undo = ttk.Button(bottom, text="Undo", width=8, command=self.undo_settings_change)
+        self.btn_redo = ttk.Button(bottom, text="Redo", width=8, command=self.redo_settings_change)
+        self.settings_redo = []  # changes taken back with Undo, newest last (Redo puts them back)
         self.settings_history = []  # earlier states of the page settings, oldest first
         self.settings_saved_state = None  # the state at the last Apply (or when the window opened)
         self.settings_watch_job = None
