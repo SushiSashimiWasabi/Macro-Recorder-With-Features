@@ -710,7 +710,11 @@ class SettingsPagesMixin:
         "pointer jump between the saved positions).")
 
     def _build_recording_tab(self, f):
-        self._section(f, "MOUSE", first=True)
+        self._section(f, "BEFORE RECORDING", first=True)
+        row = self._row(f, "Countdown", "seconds to switch to the game (0 = start at once)")
+        ttk.Spinbox(row, from_=0, to=600, width=5, textvariable=self.rec_ready_var,
+                    command=self._save_settings).pack(side="right")
+        self._section(f, "MOUSE")
         self._switch_row(f, "Record mouse movement", self.rec_moves_var,
                          "off = only clicks, scrolls and keys")
         self._switch_row(f, "Record game camera movement", self.camera_var, "Shift Lock, right-click turning",
@@ -742,7 +746,7 @@ class SettingsPagesMixin:
         ttk.Spinbox(row, from_=0, to=600, width=5, textvariable=self.ready_var,
                     command=self._save_settings).pack(side="right")
         self._switch_row(f, "Timer at the top of the screen", self.overlay_var,
-                         "countdown, then how long it's been playing")
+                         "countdown, then how long it's been playing or recording")
         self._switch_row(f, "Offer to switch to the macro's game", self.switch_prog_var,
                          "when you press Play here", info=self.SWITCH_HELP)
         self._section(f, "WHILE PLAYING")

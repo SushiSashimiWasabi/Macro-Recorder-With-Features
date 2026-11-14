@@ -458,12 +458,12 @@ class PlayOverlay:
         except Exception:
             pass
 
-    def show(self, state, clock, note, color, keys=None):
+    def show(self, state, clock, note, color, keys=None, stop_word="Stop"):
         """keys: {"pause": "F10", "stop": "F12"} shows which keys pause and stop; None hides them.
         Called 4 times a second: it only redraws when something shown changed, and puts itself back
         on top every 2 seconds (in case the game covered it)."""
         now = time.monotonic()
-        shown = (state, clock, note, color, tuple(sorted(keys.items())) if keys else None)
+        shown = (state, clock, note, color, tuple(sorted(keys.items())) if keys else None, stop_word)
         if shown == getattr(self, "last_shown", None) and self.win.state() != "withdrawn":
             if now - getattr(self, "last_raised", 0.0) >= 2.0:
                 self.last_raised = now
@@ -479,7 +479,9 @@ class PlayOverlay:
             for action, (badge, text) in self.key_labels.items():
                 badge.config(text=keys[action])
                 if action == "pause":
-                    text.config(text="Resume" if state == "Paused" else "Pause")
+                    text.config(text="Resume" if state.endswith("aused") else "Pause")
+                else:
+                    text.config(text=stop_word)
             self.keys_row.pack(padx=14, pady=(2, 8))
         else:
             self.keys_row.pack_forget()

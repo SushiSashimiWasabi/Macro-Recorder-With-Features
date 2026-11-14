@@ -30,6 +30,7 @@ shot[240:240 + part.shape[0], 560:560 + part.shape[1]] = part  # where it was on
 blank = np.full((1440, 2560, 3), 20, np.uint8)
 cur = {"img": shot}
 iw.grab_screen = lambda sct=None, region=None: cur["img"].copy()
+iw.grab_part = lambda x0, y0, x1, y1: (cur["img"][y0:y1, x0:x1].copy(), (x0, y0))
 picture = os.path.join(src, core.BUILTIN_WIN_PICTURE)
 
 
@@ -118,6 +119,14 @@ cur["img"] = shot
 c.result_matchers[0].last_rect = (910, 284, 746, 74)
 check("fragments in the OBTAINED row: 1", c._count_drops() == 1)
 check("fragments on a blank screen: 0", drops.count_frames(blank)[0] == 0)
+# a full OBTAINED row is wider than the title: a fragment in the last slot (past the title's end) counts too
+fx, fy, fw, fh = drops.count_frames(shot)[1][0]
+wide = shot.copy()
+nx = int(910 + 1.2 * 746)
+wide[fy:fy + fh, nx:nx + fw] = shot[fy:fy + fh, fx:fx + fw]
+cur["img"] = wide
+check("fragments: one in the row's last slot counts too", c._count_drops() == 2)
+cur["img"] = shot
 for dy in (1, 3, 5):
     check(f"fragments, screen moved {dy} px: 1", drops.count_frames(shot[dy:], full_height=1440)[0] == 1)
 

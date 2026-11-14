@@ -101,6 +101,7 @@ def screen_now(sct=None, region=None):
 
 
 image_watch.grab_screen = screen_now
+image_watch.grab_part = lambda x0, y0, x1, y1: (screen_now()[y0:y1, x0:x1].copy(), (x0, y0))
 orig_set_note = app._set_note
 
 

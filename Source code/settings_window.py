@@ -505,7 +505,7 @@ class SettingsWindowMixin:
 
     # settings the Settings window's pages change (the ones Undo and Reset put back)
     PAGE_SETTINGS = ("hotkeys", "status_bar", "always_on_top", "record_mouse_moves", "mouse_detail",
-                     "ready_seconds", "play_overlay", "play_resolution", "video_click_through", "video_opacity",
+                     "ready_seconds", "record_ready_seconds", "play_overlay", "play_resolution", "video_click_through", "video_opacity",
                      "watch_enabled", "watch_ignore_bg", "watch_click", "watch_wait", "watch_match",
                      "watch_end_wait", "watch_pictures", "sounds", "sound_volume", "sound_choices",
                      "check_updates", "background_animate", "settings_background_per_page",
@@ -655,6 +655,7 @@ class SettingsWindowMixin:
                 (self.rec_moves_var, bool(s.get("record_mouse_moves", True))),
                 (self.detail_var, detail if detail in MOUSE_DETAIL else "Smooth"),
                 (self.ready_var, core.int_setting(s, "ready_seconds", 3, 0, 600)),
+                (self.rec_ready_var, core.int_setting(s, "record_ready_seconds", 3, 0, 600)),
                 (self.overlay_var, bool(s.get("play_overlay", True))),
                 (self.video_through_var, through if through in VIDEO_THROUGH else VIDEO_THROUGH[0]),
                 (self.video_opacity_var, core.int_setting(s, "video_opacity", 100, 20, 100)),

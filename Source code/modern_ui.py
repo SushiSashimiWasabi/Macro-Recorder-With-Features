@@ -58,6 +58,7 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
         self.loop_var = tk.BooleanVar(value=bool(s.get("loop", True)))
         self.speed_var = tk.StringVar(value=format_speed(parse_speed(s.get("speed", 1)) or 1.0))
         self.ready_var = tk.IntVar(value=core.int_setting(s, "ready_seconds", 3, 0, 600))
+        self.rec_ready_var = tk.IntVar(value=core.int_setting(s, "record_ready_seconds", 3, 0, 600))
         self.target_windows = []
         self.target_var = tk.StringVar(value=SCREEN_TARGET)
         self.name_var = tk.StringVar(value="")  # empty until a macro is opened or saved
@@ -307,7 +308,10 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
     def _refresh(self):
         if not hasattr(self, "card_play") or not hasattr(self, "key_badges"):
             return  # still building the window
-        if self.recording:
+        if self.record_countdown_left > 0:
+            state, color = f"Recording in {self.record_countdown_left}…", AMBER
+            sub = "Switch to the game window now (press Record again to cancel)"
+        elif self.recording:
             state, color = ("Recording paused", AMBER) if self.paused else ("Recording", RED)
             sub = "Press Record again when you're done" if not self.paused else "Press Pause again to go on"
         elif self.playing and self.countdown_left > 0:
@@ -331,8 +335,9 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
 
         k = {action: hotkey_name(self.hotkeys[action]) for action in HOTKEY_ACTIONS}
         busy = self.recording or self.playing
-        self.card_record.update_card("Stop rec." if self.recording else "Record", k["record"],
-                                     enabled=not self.playing, active=self.recording)
+        self.card_record.update_card("Stop rec." if self.recording else (
+            "Cancel" if self.record_countdown_left > 0 else "Record"), k["record"],
+            enabled=not self.playing, active=self.recording or self.record_countdown_left > 0)
         play_paused = self.playing and self.play_paused_at is not None
         self.card_pause.update_card("Resume" if self.paused or play_paused else "Pause", k["pause"],
                                     enabled=self.recording or (self.playing and self.countdown_left == 0),
@@ -398,6 +403,10 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
             s["mouse_detail"] = self.detail_var.get()
             s["record_camera"] = bool(self.camera_var.get())
             s["simplify_moves"] = bool(self.simplify_var.get())
+            try:
+                s["record_ready_seconds"] = max(0, min(600, int(self.rec_ready_var.get())))
+            except (tk.TclError, ValueError):
+                pass
             s["pause_when_away"] = bool(self.away_var.get())
             try:
                 s["away_stop_seconds"] = max(0, min(3600, int(self.away_stop_var.get())))
@@ -454,21 +463,37 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
 
     def toggle_record(self):
         was = self.recording
+        counting = self.record_countdown_left > 0
         into_editor = self.record_into is not None
         super().toggle_record()
-        if into_editor:  # (recording for the Edit window: the open macro's name stays)
-            self._sound("record_start" if self.recording else "record_stop")
-            self.sub_note = "Recording for the Edit window: press Record again to stop" if self.recording \
-                else "The recording was put in the Edit window"
+        if self.record_countdown_left > 0 and not counting:  # the countdown before recording started
+            self._tick_overlay()
+            return
+        if counting and not self.recording and self.record_countdown_left == 0:  # cancelled
+            self.sub_note = "Recording cancelled"
+            if self.overlay is not None:
+                self.overlay.hide()
             self._refresh()
             return
-        if self.recording and not was:
-            self.name_var.set("Recording " + datetime.datetime.now().strftime("%Y-%m-%d %H.%M"))
-            self._sound("record_start")
-        elif was and not self.recording:
-            self.sub_note = f"Recorded {len(self.events)} actions"
+        if was and not self.recording:
             self._sound("record_stop")
+            self.sub_note = "The recording was put in the Edit window" if into_editor \
+                else f"Recorded {len(self.events)} actions"
+            self._finish_overlay(recording=True)
             self._refresh()
+
+    def _record_countdown_tick(self, seconds_left):
+        self._sound("countdown")
+
+    def _recording_began(self):
+        """After the countdown: the start sound, the name, and the timer at the top of the screen."""
+        self._sound("record_start")
+        if self.record_into is not None:  # (recording for the Edit window: the open macro's name stays)
+            self.sub_note = "Recording for the Edit window: press Record again to stop"
+        else:
+            self.name_var.set("Recording " + datetime.datetime.now().strftime("%Y-%m-%d %H.%M"))
+        if self.overlay_job is None:
+            self._tick_overlay()
 
     def _on_move(self, x, y):
         if not self._capturing() or not self.settings.get("record_mouse_moves", True) or self._camera_turning():
@@ -598,10 +623,15 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
     def _picture_seen(self):
         self._sound("picture_seen")
 
+    def _recording_clock(self):
+        """How long it has been recording (the time paused not counted)."""
+        now = self.pause_started if self.paused else time.perf_counter()
+        return max(0.0, now - self.start_time - self.paused_total)
+
     def _tick_overlay(self):
-        """Keep the top-of-screen timer up to date while playing (every quarter second)."""
+        """Keep the top-of-screen timer up to date while playing or recording (every quarter second)."""
         self.overlay_job = None
-        if not self.playing:
+        if not (self.playing or self.recording or self.record_countdown_left > 0):
             return
         if not self.overlay_var.get():
             if self.overlay is not None:
@@ -611,7 +641,18 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
                 self.overlay = PlayOverlay(self.root, self.screen_w)
             name = self.name_var.get()
             keys = {a: hotkey_name(self.hotkeys[a]) for a in ("pause", "stop")}
-            if self.countdown_left > 0:
+            rec_keys = {"pause": hotkey_name(self.hotkeys["pause"]), "stop": hotkey_name(self.hotkeys["record"])}
+            what = "Recording for the Edit window" if self.record_into is not None else "Recording a new macro"
+            if self.record_countdown_left > 0:
+                self.overlay.show("Recording in", str(self.record_countdown_left), what, AMBER)
+            elif self.recording:
+                clock = format_clock(self._recording_clock())
+                note = f"{what}  ·  {len(self.events)} actions"
+                if self.paused:
+                    self.overlay.show("Rec. paused", clock, note, AMBER, rec_keys, stop_word="Stop rec.")
+                else:
+                    self.overlay.show("Recording", clock, note, RED, rec_keys, stop_word="Stop rec.")
+            elif self.countdown_left > 0:
                 self.overlay.show("Starting in", str(self.countdown_left), name, AMBER, keys)
             else:
                 if self.play_began is None:
@@ -626,7 +667,18 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
                     self.overlay.show("Playing", clock, note, ACCENT, keys)
         self.overlay_job = self.root.after(250, self._tick_overlay)
 
-    def _finish_overlay(self):
+    def _finish_overlay(self, recording=False):
+        if recording:
+            if self.overlay_job is not None:
+                self.root.after_cancel(self.overlay_job)
+                self.overlay_job = None
+            if self.overlay is None or not self.overlay_var.get():
+                return
+            took = format_clock(self.events[-1]["t"] if self.events else 0.0)
+            self.overlay.show("Recorded", took, f"{len(self.events)} actions", GREEN)
+            self.root.after(4000, lambda: None if (self.playing or self.recording or self.record_countdown_left)
+                            else self.overlay.hide())
+            return
         if self.overlay is None or not self.overlay_var.get() or self.play_began is None:
             if self.overlay is not None:
                 self.overlay.hide()

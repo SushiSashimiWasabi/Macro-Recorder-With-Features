@@ -20,6 +20,17 @@ OLD_DEFAULT_MESSAGES = [(
     "**Win rate**\n{winrate}\n"
     "**Average run**\n{average}\n"
     "**Total runtime**\n{total}\n"
+    "**Macro**\n{macro}"), (
+    "**Status**\n{status}\n"
+    "**Win streak**\n{streak}\n"
+    "**Run duration**\n{duration}\n"
+    "**Completed**\n{completed} runs\n"
+    "**Failed**\n{failed} runs\n"
+    "**Unknown results**\n{unknown}\n"
+    "**Win rate**\n{winrate}\n"
+    "**Average run**\n{average}\n"
+    "**Total runtime**\n{total}\n"
+    "**Divine fragments**\n{fragments_total} in total (+{fragments} this run, {fragments_session} this session)\n"
     "**Macro**\n{macro}")]
 
 DEFAULT_MESSAGE = (
@@ -32,7 +43,7 @@ DEFAULT_MESSAGE = (
     "**Win rate**\n{winrate}\n"
     "**Average run**\n{average}\n"
     "**Total runtime**\n{total}\n"
-    "**Divine fragments**\n{fragments_total} in total (+{fragments} this run, {fragments_session} this session)\n"
+    "**Divine fragments**\n{fragments_total} in total (+{fragments} this run, +{fragments_session} this session)\n"
     "**Macro**\n{macro}")
 
 PLACEHOLDERS = [

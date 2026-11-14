@@ -1,12 +1,24 @@
 # The app's version. Raising it (and pushing to main) makes GitHub publish a new Release,
 # which every copy of the app offers to install when it starts.
-APP_VERSION = "2.6"
+APP_VERSION = "2.6.1"
 
 # Every version, newest first: (version, the day it was finalized, changes). The newest is shown once after an update;
 # Settings > About > What's new shows them all. Each change is one paragraph (shown as a bullet).
 # Version numbers started at 2.1 (the first one that could update itself); the earlier steps have
 # names instead.
 HISTORY = [
+    ("2.6.1", "14 November 2026", [
+        "Fixed: while playing, the game's pointer didn't follow the macro's mouse moves until you moved the "
+        "real mouse. Moves are now sent as real mouse input, which games like Roblox notice.",
+        "A countdown before recording starts, like before playing (Settings > Recording > Countdown; Record "
+        "again cancels it), and the timer at the top of the screen also shows while recording.",
+        "Fixed: a mouse button could stay held down for a whole run when the click on Record got into the "
+        "recording.",
+        "Divine fragments in the first or last slot of a full OBTAINED row are counted too, and the Discord "
+        "card says \"+1 this run, +1 this session\".",
+        "Discord's \"The game's window\" screenshot shows only the game for macros from other recorders too "
+        "(like .luvmacro).",
+    ]),
     ("2.6", "14 November 2026", [
         "A new Edit window: your saved macros on the left, the chosen macro's actions in the middle and the "
         "chosen action's details on the right. Add action (waits, key presses, typing, clicks, mouse moves, "

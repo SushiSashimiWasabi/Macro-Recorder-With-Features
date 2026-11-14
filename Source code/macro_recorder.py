@@ -118,6 +118,31 @@ def scale_events(events, src, dst):
     return out
 
 
+def drop_stray_clicks(events):
+    """Leave out mouse button presses that were never let go of in the recording (and lets go that
+    were never pressed). They happen when the click that started or stopped recording was half
+    caught (like pressing the Record button): played back, that button would stay held down
+    the whole run."""
+    held = {}  # button -> index of its press
+    drop = set()
+    for i, ev in enumerate(events):
+        if not isinstance(ev, dict) or ev.get("type") != "click":
+            continue
+        button = ev.get("button")
+        if ev.get("pressed"):
+            if button in held:
+                drop.add(held[button])  # pressed again without a let go in between
+            held[button] = i
+        elif button in held:
+            del held[button]
+        else:
+            drop.add(i)
+    drop.update(held.values())
+    if not drop:
+        return events
+    return [ev for i, ev in enumerate(events) if i not in drop]
+
+
 def scale_events_rect(events, src, dst):
     """Copy of events with mouse positions moved from one game window to another.
 
@@ -529,6 +554,41 @@ def button_from_name(name):
     return mouse.Button[name]
 
 
+_virtual_screen = [0.0, None]  # [when asked, (x, y, w, h) of all screens together]
+
+
+def _all_screens():
+    now = time.monotonic()
+    if _virtual_screen[1] is None or now - _virtual_screen[0] > 2.0:
+        import ctypes
+
+        u = ctypes.windll.user32
+        _virtual_screen[:] = [now, tuple(u.GetSystemMetrics(i) for i in (76, 77, 78, 79))]
+    return _virtual_screen[1]
+
+
+def move_to(mouse_ctrl, x, y):
+    """Put the mouse at x, y (screen pixels) the way a real mouse gets there. Windows: as mouse input
+    (SendInput, absolute over all screens), which games like Roblox notice and draw their pointer
+    for; only setting the cursor position (SetCursorPos) moves it without the game seeing it, so
+    its pointer stayed where it was until the real mouse moved. Then the exact pixel is set too."""
+    x, y = int(x), int(y)
+    if IS_WIN:
+        try:
+            import ctypes
+
+            u = ctypes.windll.user32
+            vx, vy, vw, vh = _all_screens()
+            if vw > 1 and vh > 1:
+                nx = round((x - vx) * 65535 / (vw - 1))
+                ny = round((y - vy) * 65535 / (vh - 1))
+                # MOVE | ABSOLUTE | VIRTUALDESK
+                u.mouse_event(0x0001 | 0x8000 | 0x4000, max(0, min(65535, nx)), max(0, min(65535, ny)), 0, 0)
+        except Exception:
+            pass
+    mouse_ctrl.position = (x, y)
+
+
 def move_relative(mouse_ctrl, dx, dy, held_buttons=()):
     """Nudge the mouse by dx, dy like a real mouse does. Games that lock the cursor (camera turning)
     only react to this kind of movement, not to setting the cursor position."""
@@ -628,6 +688,8 @@ class MacroRecorder:
         # replacing the open macro
         self.record_into = None
         self.record_saved = None
+        self.record_countdown_left = 0  # seconds left before recording starts
+        self.record_countdown_job = None
         self.window_samples = {}  # while recording: window -> [times seen, its info]
         self.raw_mouse = None  # reads camera movement while recording (Windows)
         self.camera_dx = self.camera_dy = 0
@@ -995,7 +1057,9 @@ class MacroRecorder:
         return None
 
     def _refresh(self):
-        if self.recording:
+        if self.record_countdown_left > 0:
+            state = f"Get ready... recording starts in {self.record_countdown_left}"
+        elif self.recording:
             state = "Recording paused" if self.paused else "Recording..."
         elif self.playing and self.countdown_left > 0:
             state = f"Get ready... starting in {self.countdown_left}"
@@ -1317,13 +1381,16 @@ class MacroRecorder:
     def toggle_record(self):
         if self.playing:
             return
+        if self.record_countdown_left > 0:  # Record pressed again during the countdown: don't record
+            self._cancel_record_countdown()
+            return
         if self.recording:
             self.recording = False
             self.paused = False
             self._stop_camera()
             if self.record_into is not None:
                 # recorded for the Edit window: the open macro comes back as it was
-                recorded, done = self.events, self.record_into
+                recorded, done = drop_stray_clicks(self.events), self.record_into
                 (self.events, self.actions, self.current_file, self.macro_screen, self.macro_program) = \
                     self.record_saved
                 self.record_into = self.record_saved = None
@@ -1333,30 +1400,85 @@ class MacroRecorder:
                 self.root.after(0, lambda: done(recorded))
                 return
             self.macro_program = self._recorded_program()
+            n = len(self.events)
+            self.events = drop_stray_clicks(self.events)
+            if len(self.events) != n:
+                diag.info(f"Left out {n - len(self.events)} mouse press(es) that were never let go of")
             diag.info(f"Recording stopped: {len(self.events)} actions"
                       + (f", program {self.macro_program['exe']}" if self.macro_program else ""))
         else:
-            if self.record_into is not None:
-                self.record_saved = (self.events, self.actions, self.current_file, self.macro_screen,
-                                     self.macro_program)
-            elif self.events and not messagebox.askyesno(
+            if self.record_into is None and self.events and not messagebox.askyesno(
                 "Macro Recorder", "Start a new recording? The current one will be replaced."
             ):
                 return
-            self.events = []
-            self.actions = None
-            self.current_file = None
-            self.macro_screen = (self.screen_w, self.screen_h)  # recorded on this screen
-            self.macro_program = None
-            self.window_samples = {}
-            self._show_made_for()
-            self.paused = False
-            self.paused_total = 0.0
-            self.start_time = time.perf_counter()
-            self.recording = True
-            self._add_held_buttons()
-            self._start_camera()
-            diag.info("Recording started" + (" with camera movement" if self.raw_mouse else ""))
+            seconds = self._record_ready_seconds()
+            if seconds > 0:
+                self._start_record_countdown(seconds)
+                return
+            self._begin_recording()
+            return
+        self._refresh()
+
+    def _record_ready_seconds(self):
+        """The countdown before recording starts (Settings > Recording; 0 = at once)."""
+        return int_setting(self.settings, "record_ready_seconds", 3, 0, 600)
+
+    def _start_record_countdown(self, seconds):
+        self.record_countdown_left = seconds
+        diag.info(f"Recording starts in {seconds} s")
+        self._record_countdown_tick(seconds)
+        self._refresh()
+        self.record_countdown_job = self.root.after(1000, self._record_countdown_next)
+
+    def _record_countdown_next(self):
+        self.record_countdown_job = None
+        if self.record_countdown_left <= 0:
+            return
+        self.record_countdown_left -= 1
+        if self.record_countdown_left <= 0:
+            self._begin_recording()
+            return
+        self._record_countdown_tick(self.record_countdown_left)
+        self._refresh()
+        self.record_countdown_job = self.root.after(1000, self._record_countdown_next)
+
+    def _cancel_record_countdown(self):
+        if self.record_countdown_job is not None:
+            self.root.after_cancel(self.record_countdown_job)
+            self.record_countdown_job = None
+        self.record_countdown_left = 0
+        diag.info("Recording cancelled during the countdown")
+        done, self.record_into = self.record_into, None
+        if done is not None:  # (the Edit window gets nothing, and comes back)
+            self.root.after(0, lambda: done([]))
+        self._refresh()
+
+    def _record_countdown_tick(self, seconds_left):
+        """Each second of the countdown before recording (the dark window plays a sound)."""
+
+    def _recording_began(self):
+        """Recording has really started (after the countdown)."""
+
+    def _begin_recording(self):
+        self.record_countdown_left = 0
+        if self.record_into is not None:
+            self.record_saved = (self.events, self.actions, self.current_file, self.macro_screen,
+                                 self.macro_program)
+        self.events = []
+        self.actions = None
+        self.current_file = None
+        self.macro_screen = (self.screen_w, self.screen_h)  # recorded on this screen
+        self.macro_program = None
+        self.window_samples = {}
+        self._show_made_for()
+        self.paused = False
+        self.paused_total = 0.0
+        self.start_time = time.perf_counter()
+        self.recording = True
+        self._add_held_buttons()
+        self._start_camera()
+        diag.info("Recording started" + (" with camera movement" if self.raw_mouse else ""))
+        self._recording_began()
         self._refresh()
 
     def _add_held_buttons(self):
@@ -1531,7 +1653,8 @@ class MacroRecorder:
     # ------------------------------------------------------------ playback
 
     def play(self):
-        if self.recording or self.playing or not (self.events or self.actions) or self.capture_callback is not None:
+        if self.recording or self.playing or self.record_countdown_left > 0 or not (self.events or self.actions) \
+                or self.capture_callback is not None:
             return
         try:
             repeats = max(1, int(self.repeat_var.get()))
@@ -1669,7 +1792,8 @@ class MacroRecorder:
                                  else "this macro doesn't know its window, so it's fitted to the screen")
         if fit is None:
             fit = lambda evs: scale_events(evs, self.macro_screen, play_on)  # noqa: E731
-        return workflow.map_points(self.macro_steps(), fit)
+        # (older recordings may hold a mouse button down the whole run: see drop_stray_clicks)
+        return workflow.map_points(self.macro_steps(), lambda evs: fit(drop_stray_clicks(evs)))
 
     def _game_client_rect(self):
         """Where the inside of the game's window is now: the macro's program if it's open, else the
@@ -1750,7 +1874,7 @@ class MacroRecorder:
 
     def _click_at(self, x, y):
         """Left-click a spot like a person would: move there, nudge so the game sees the mouse, click."""
-        self.mouse_ctrl.position = (x, y)
+        move_to(self.mouse_ctrl, x, y)
         time.sleep(0.05)
         move_relative(self.mouse_ctrl, 1, 0)
         time.sleep(0.05)
@@ -1855,6 +1979,7 @@ class MacroRecorder:
                 if self.stop_play.wait(1.0):
                     return
             self._set_countdown(0)
+            self.play_game_exe = self._game_exe_now()
             away = self._away_watcher(bg)
             if self.result_matchers:
                 self.result_state = {}
@@ -1976,11 +2101,14 @@ class MacroRecorder:
             title = next((m.last_rect for m in list(self.result_matchers) if m.last_rect is not None), None)
             if title is not None:
                 x, y, w, h = title
-                x0, x1 = max(0, int(x - 0.15 * w)), min(self.screen_w, int(x + 1.15 * w))
+                # (the panel is about 1.4 times as wide as its title; a full OBTAINED row reaches its
+                # sides, so a little more than the panel is taken)
+                x0, x1 = max(0, int(x - 0.45 * w)), min(self.screen_w, int(x + 1.45 * w))
                 y0, y1 = max(0, int(y + h)), min(self.screen_h, int(y + 14 * h))
-                screen = self._hide_own_window(image_watch.grab_screen(None, (x0, y0, x1, y1)),
-                                               image_watch.screen_origin())
-                screen = screen[y0:y1, x0:x1]
+                if x1 - x0 < 1 or y1 - y0 < 1:
+                    return 0
+                screen, origin = image_watch.grab_part(x0, y0, x1, y1)
+                screen = self._hide_own_window(screen, origin)
             else:
                 screen = self._hide_own_window(image_watch.grab_screen(), image_watch.screen_origin())
             count, _rects = drops.count_frames(screen, full_height=self.screen_h)
@@ -2336,6 +2464,19 @@ class MacroRecorder:
 
     # ------------------------------------------------------------ the game must stay in front
 
+    def _game_exe_now(self):
+        """The game being played: the macro's program, else the program in front as playing starts
+        (not this app), else the last game a macro was recorded or played in. Remembered for next time."""
+        exe = (self.macro_program or {}).get("exe")
+        if not exe:
+            fg = window_tools.foreground()
+            if fg and window_tools.pid_of(fg) != os.getpid():
+                exe = window_tools.exe_of(fg)
+        if exe:
+            self.settings["last_game_exe"] = exe
+            return exe
+        return self.settings.get("last_game_exe")
+
     def _game_windows(self):
         """The windows that count as "the game" while playing: the macro's program if it's open,
         else whatever is in front when playing starts (unless that's this app). None = don't check."""
@@ -2488,13 +2629,13 @@ class MacroRecorder:
         if kind == "wait_picture":
             return
         if kind == "move":
-            self.mouse_ctrl.position = (ev["x"], ev["y"])
+            move_to(self.mouse_ctrl, ev["x"], ev["y"])
         elif kind == "move_rel":
             move_relative(self.mouse_ctrl, ev["dx"], ev["dy"], held_buttons)
         elif kind == "click":
             button = button_from_name(ev["button"])
-            if "x" in ev:
-                self.mouse_ctrl.position = (ev["x"], ev["y"])
+            if "x" in ev and self.mouse_ctrl.position != (ev["x"], ev["y"]):
+                move_to(self.mouse_ctrl, ev["x"], ev["y"])
             if ev["pressed"]:
                 self.mouse_ctrl.press(button)
                 held_buttons.add(button)
@@ -2502,8 +2643,8 @@ class MacroRecorder:
                 self.mouse_ctrl.release(button)
                 held_buttons.discard(button)
         elif kind == "scroll":
-            if "x" in ev:
-                self.mouse_ctrl.position = (ev["x"], ev["y"])
+            if "x" in ev and self.mouse_ctrl.position != (ev["x"], ev["y"]):
+                move_to(self.mouse_ctrl, ev["x"], ev["y"])
             self.mouse_ctrl.scroll(ev["dx"], ev["dy"])
         elif kind == "key":
             key = data_to_key(ev["key"])

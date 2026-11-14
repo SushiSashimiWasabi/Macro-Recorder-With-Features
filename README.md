@@ -77,7 +77,9 @@ Before playing you can set:
 **Timer at the top of the screen:** while a macro plays, a small box at the top middle of your main
 screen shows the countdown, then "Playing" with how long it's been going, the run number, and the
 keys that pause and stop it. It stays there even when the app is minimized, and clicks go straight
-through it (on Windows). Turn it off in Settings > Playback.
+through it (on Windows). Turn it off in Settings > Playback. It shows while recording too: the
+countdown before recording starts (Settings > Recording > Countdown; press Record again to cancel),
+then "Recording" with the time and the number of actions.
 
 **Video over the game:** paste a YouTube video link into the **Video** row (under Saved macros)
 and click **Show**. Playlists aren't supported, only single videos (the red note under the row). The video plays with sound in a small window that always stays on
@@ -98,7 +100,7 @@ it's holding and waits; press it again to carry on from the same spot.
 
 **Settings** (top right) has tabs:
 - **General:** hotkeys, status bar, keep the window on top, link .macro files.
-- **Recording:** record mouse movement or not (clicks keep their position either way), **Record
+- **Recording:** the countdown before recording, record mouse movement or not (clicks keep their position either way), **Record
   game camera movement** (see below), how detailed (Smooth, Normal, Light, under Advanced), and Clear.
 - **Playback:** countdown, top-of-screen timer, **Offer to switch to the macro's game**, **Pause if
   the game isn't in front**, Screen size with **Fit clicks to**, and under Advanced: Play into and the

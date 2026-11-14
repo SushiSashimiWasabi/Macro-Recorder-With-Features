@@ -116,7 +116,8 @@ class DiscordMixin:
             if hidden:
                 time.sleep(0.06)  # (Windows needs a moment to take them out of the picture)
             return discord_notify.grab(self.settings.get("discord_capture", "screen"),
-                                       (self.macro_program or {}).get("exe"))
+                                       (self.macro_program or {}).get("exe") or getattr(self, "play_game_exe", None)
+                                       or self.settings.get("last_game_exe"))
         finally:
             if hidden:
                 window_tools.hide_own_windows_from_capture(False)

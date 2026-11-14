@@ -184,7 +184,8 @@ took = run_play([evs[0], step2, evs[2]])
 check("wait step: stop when it doesn't show", app.stop_reason and "didn't show" in app.stop_reason, app.stop_reason)
 
 # save / open: program and pictures inside the macro
-app.events = [{"type": "click", "x": 10, "y": 10, "button": "left", "pressed": True, "t": 0.0}]
+app.events = [{"type": "click", "x": 10, "y": 10, "button": "left", "pressed": True, "t": 0.0},
+              {"type": "click", "x": 10, "y": 10, "button": "left", "pressed": False, "t": 0.1}]
 app.macro_program = {"exe": "Game.exe", "title": "Game", "client": [0, 0, 1920, 1080]}
 app.watch_pictures = [{"img": pic.copy(), "file": "p.png", "screen_h": 1080}]
 app.settings["watch_save_with_macro"] = True
@@ -280,6 +281,18 @@ discord_notify.post(url, "with picture", discord_notify.screenshot_png())
 check("discord: plain message", got and got[0][0] == "application/json" and b"hello" in got[0][1])
 check("discord: screenshot attached", len(got) > 1 and got[1][0].startswith("multipart/") and b"\xff\xd8" in got[1][1])
 srv.shutdown()
+
+# mouse moves are sent as real mouse input (so games draw their pointer there), on the exact pixel
+from pynput import mouse as _mouse  # noqa: E402
+_m = _mouse.Controller()
+_was = _m.position
+_m.position = (250, 150)
+time.sleep(0.05)
+if _m.position == (250, 150):  # (a test machine without a pointer that can be moved skips this)
+    core.move_to(_m, 301, 203)
+    time.sleep(0.05)
+    check("move_to: the pointer is on the spot", _m.position == (301, 203), _m.position)
+    core.move_to(_m, *_was)
 
 print()
 print(f"{sum(ok for _, ok in results)} of {len(results)} passed")

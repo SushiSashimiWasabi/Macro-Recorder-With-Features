@@ -87,6 +87,18 @@ def grab_screen(sct=None, region=None):
             sct.close()
 
 
+def grab_part(x0, y0, x1, y1):
+    """Only that part of the main screen, as its own small picture: (picture, the screen position
+    of its top-left corner). Quicker than grab_screen(region=...), which makes a screen-sized one."""
+    with mss.mss() as sct:
+        mon = primary_monitor(sct)
+        shot = sct.grab({"left": mon["left"] + x0, "top": mon["top"] + y0, "width": x1 - x0, "height": y1 - y0})
+        img = np.ascontiguousarray(np.asarray(shot)[:, :, :3])
+        if img.shape[1] != x1 - x0 or img.shape[0] != y1 - y0:  # (a Mac Retina screen)
+            img = cv2.resize(img, (x1 - x0, y1 - y0), interpolation=cv2.INTER_AREA)
+        return img, (mon["left"] + x0, mon["top"] + y0)
+
+
 def load_image(path):
     """Read a picture file (works with any characters in the path)."""
     data = np.fromfile(path, dtype=np.uint8)

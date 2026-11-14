@@ -136,14 +136,24 @@ def count_events(actions):
 def map_points(actions, fn):
     """A copy of the steps with fn(list of events) applied to every recorded action's events and to
     the spots of clicks and mouse moves (used to fit a macro to another screen or window)."""
-    out = copy.deepcopy(actions)
-    for a, _l, _i, _p in walk(out):
-        if a.get("kind") == "recorded":
-            a["events"] = fn(a.get("events", []))
-        elif a.get("kind") in ("click", "move") and "x" in a:
-            moved = fn([{"type": "move", "x": a["x"], "y": a["y"], "t": 0.0}])[0]
-            a["x"], a["y"] = moved["x"], moved["y"]
-    return out
+    def go(steps):
+        out = []
+        for a in steps:
+            kind = a.get("kind")
+            if kind == "recorded":
+                # (fn gives new events back, so they aren't copied a second time here)
+                b = {k: v for k, v in a.items() if k != "events"}
+                b["events"] = fn(a.get("events", []))
+            else:
+                b = copy.deepcopy({k: v for k, v in a.items() if k != "actions"})
+                if "actions" in a:
+                    b["actions"] = go(a["actions"]) if isinstance(a["actions"], list) else a["actions"]
+                if kind in ("click", "move") and "x" in a:
+                    moved = fn([{"type": "move", "x": a["x"], "y": a["y"], "t": 0.0}])[0]
+                    b["x"], b["y"] = moved["x"], moved["y"]
+            out.append(b)
+        return out
+    return go(actions)
 
 
 def describe(a):

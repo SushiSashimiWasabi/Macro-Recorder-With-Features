@@ -80,6 +80,13 @@ check("ahk: a saved script reads back", len(r2.events) >= len(r.events))
 open(path, "w").write("x := 9**9**9\nSleep x\nSend a\n")
 check("ahk: no huge sums", importers.import_file(path) is not None)
 
+# a mouse press that was never let go of (like the click on Record) is left out, so it isn't held all run
+L = lambda p, t: {"type": "click", "x": 1, "y": 1, "button": "left", "pressed": p, "t": t}
+stray = [L(True, 0.0), {"type": "move", "x": 5, "y": 5, "t": 0.1}, L(True, 0.5), L(False, 0.6), L(False, 0.9)]
+kept = core.drop_stray_clicks(stray)
+check("stray presses left out, the real click kept", [(e["type"], e.get("pressed")) for e in kept] ==
+      [("move", None), ("click", True), ("click", False)], kept)
+
 # a macro file made of steps can't add up to more than MAX_EXPANDED actions, or nest groups too deep
 glide = [{"type": "move", "x": 0, "y": 0, "t": 0.0}, {"type": "move", "x": 100, "y": 0, "t": 9.0, "s": 1}]
 many = [{"kind": "recorded", "events": [dict(e) for e in glide]} for _ in range(3000)]

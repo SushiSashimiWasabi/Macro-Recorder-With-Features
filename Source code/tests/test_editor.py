@@ -37,6 +37,8 @@ for name in ("showwarning", "showinfo", "showerror"):
     setattr(app.boxes, name, lambda *a, **k: None)
 app.boxes.askyesno = lambda *a, **k: True
 app.boxes.askyesnocancel = lambda *a, **k: False
+app.rec_ready_var.set(0)  # (recording starts at once; the countdown is tested at the end)
+app._save_settings()
 
 
 def pump(n=5):
@@ -236,6 +238,33 @@ check("another macro opens on the right", ed.entries[ed.current][1] == p2 and ed
 ed.close()
 pump()
 check("closes", not ed.win.winfo_exists())
+
+# the countdown before recording, with the timer at the top of the screen
+app.rec_ready_var.set(1)
+app._save_settings()
+app.overlay_var.set(True)
+app.events = [{"type": "key", "key": {"vk": 65}, "pressed": True, "t": 0.0}]
+app.toggle_record()
+pump()
+check("countdown: not recording yet", not app.recording and app.record_countdown_left == 1)
+check("countdown: shown at the top of the screen", app.overlay is not None and
+      app.overlay.state.cget("text") == "Recording in" and app.overlay.win.state() != "withdrawn")
+app.toggle_record()  # Record again: cancelled
+pump()
+check("countdown: Record again cancels it", not app.recording and app.record_countdown_left == 0
+      and len(app.events) == 1)
+app.toggle_record()
+end = time.time() + 1.6
+while time.time() < end and not app.recording:
+    pump(1)
+check("countdown: recording starts after it", app.recording and app.events == [])
+pump(15)
+check("recording: the timer says Recording", app.overlay.state.cget("text") == "Recording"
+      and app.overlay.key_labels["stop"][1].cget("text") == "Stop rec.", app.overlay.state.cget("text"))
+app._add({"type": "key", "key": {"vk": 66}, "pressed": True})
+app.toggle_record()
+pump()
+check("recording stopped: the timer says Recorded", not app.recording and app.overlay.state.cget("text") == "Recorded")
 print()
 print(f"{sum(ok for _, ok in results)} of {len(results)} passed")
 root.destroy()
