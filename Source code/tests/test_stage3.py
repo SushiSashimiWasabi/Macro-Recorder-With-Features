@@ -111,6 +111,54 @@ check("profiles: rename", app.rename_profile("Testing", "Quick test") and app.pr
       and "Testing" not in app.profiles())
 check("profiles: a name in use is refused", not app.rename_profile("Quick test", "Farming"))
 
+# backgrounds belong to a profile (2.9): which picture each window shows, darkness and so on
+import shutil  # noqa: E402
+import backdrop  # noqa: E402
+import extras_ui  # noqa: E402
+import profiles_ui  # noqa: E402
+data = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+pngs = sorted(f for f in os.listdir(data) if f.lower().endswith(".png"))[:2]
+for i, f in enumerate(pngs, 1):
+    shutil.copy(os.path.join(data, f), os.path.join(tmp, f"bg{i}.png"))
+app.settings["background_library"] = [{"file": "bg1.png", "name": "one"}, {"file": "bg2.png", "name": "two"}]
+app.settings["background_picture"] = "bg1.png"
+app.bg_main.dark_var.set(30)
+app._save_settings()
+app.switch_profile("Farming")
+app.settings["background_picture"] = "bg2.png"
+app.bg_main.dark_var.set(60)
+app._save_settings()
+app.switch_profile("Quick test")
+check("backgrounds: switching a profile brings its own picture and darkness",
+      app.bg_main.picture() == "bg1.png" and int(app.bg_main.dark_var.get()) == 30,
+      (app.bg_main.picture(), app.bg_main.dark_var.get()))
+if backdrop.AVAILABLE:
+    check("backgrounds: the window shows it at once", app.backdrop.source_key is not None
+          and app.backdrop.source_key[0].endswith("bg1.png"), app.backdrop.source_key)
+app.switch_profile("Farming")
+check("backgrounds: and back", app.bg_main.picture() == "bg2.png" and int(app.bg_main.dark_var.get()) == 60,
+      (app.bg_main.picture(), app.bg_main.dark_var.get()))
+check("backgrounds: the saved pictures stay one shared list",
+      len(app.bg_library()) == 2 and not any("background_library" in p for p in app.profiles().values()))
+check("backgrounds: how animated pictures play isn't part of a profile",
+      not profiles_ui.in_profile("background_fps") and profiles_ui.in_profile("settings_background_general_picture"))
+check("backgrounds: a shared profile never carries them",
+      not any(profiles_ui.is_background_key(k) for k in extras_ui.shareable(app.profiles()["Quick test"])))
+check("backgrounds: another profile using a picture is found",
+      app.profiles_using_background("bg1.png") == ["Quick test"], app.profiles_using_background("bg1.png"))
+app.profiles()["Old"] = {"speed": 1.0}
+app._profiles_take_background()
+check("backgrounds: a profile from before 2.9 takes the one showing now",
+      app.profiles()["Old"].get("background_picture") == "bg2.png", app.profiles()["Old"])
+app.forget_background_everywhere("bg2.png")
+check("backgrounds: a removed picture is gone from every profile",
+      app.profiles()["Old"]["background_picture"] == "" and app.profiles()["Quick test"]["background_picture"] == "bg1.png")
+del app.profiles()["Old"]
+app.settings["background_picture"] = ""
+app.bg_main.dark_var.set(40)
+app._save_settings()
+app.switch_profile("Quick test")
+
 # a macro linked to a profile switches to it when opened
 path = os.path.join(tmp, "linked.macro")
 with open(path, "w", encoding="utf-8") as f:

@@ -27,7 +27,9 @@ PING_WHEN_TEXT = {"fragment": "a divine fragment drops", "stop": "the macro stop
 
 
 def shareable(part):
-    return {k: v for k, v in part.items() if profiles_ui.in_profile(k) and k not in PRIVATE_KEYS}
+    # (backgrounds point at picture files on this PC, so they stay out of a shared profile)
+    return {k: v for k, v in part.items() if profiles_ui.in_profile(k) and k not in PRIVATE_KEYS
+            and not profiles_ui.is_background_key(k)}
 
 
 def safe_name(name):

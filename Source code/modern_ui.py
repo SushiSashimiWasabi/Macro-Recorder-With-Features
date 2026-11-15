@@ -287,6 +287,7 @@ class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, PictureWatchMixin, Setting
             skip=(self.card_record, self.card_pause, self.card_play, self.card_stop),
             lift_colors={DIM: MUTED, MUTED: "#c2c2cc"})
         self._bg_library_upgrade()
+        self._profiles_take_background()
         self.bg_main = BackgroundControls(self, "background", lambda: self.backdrop, lambda: self.root)
         # the settings window: one background for every page, or one for each page
         self.bg_per_page_var = tk.BooleanVar(value=bool(s.get("settings_background_per_page", False)))

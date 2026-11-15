@@ -28,6 +28,10 @@ HISTORY = [
         "The red line about fullscreen in Settings > Playback is gone. Instead, a short yellow note shows only "
         "for an opened macro that was recorded before 2.6 (it doesn't know its game window, so in a window "
         "its clicks may miss).",
+        "Profiles remember their background too: which picture each window shows, its darkness, fit and "
+        "part. Switching a profile (or opening a macro linked to one) swaps the background at once; the "
+        "saved pictures stay one list shared by every profile. Removing a picture another profile uses asks "
+        "first.",
     ]),
     ("2.8.1", "15 November 2026", [
         "Phone remote: /pair now works only while the Phone remote window is open on the PC, so nobody can "

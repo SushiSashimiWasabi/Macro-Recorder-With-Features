@@ -2,8 +2,9 @@
 Profile), and that a macro can be linked to, so opening the macro switches to its settings.
 
 A profile holds every setting except the ones that belong to this PC or to no profile at all
-(saved macros, all-time results, the phone remote's token and accounts, background pictures and
-the icon, window positions). Profiles live in the settings file under "profiles"; the one in use
+(saved macros, all-time results, the phone remote's token and accounts, the list of saved
+background pictures, the icon, window positions). Since 2.9 a profile does hold which background
+each window shows (and its darkness, fit and part); the picture files stay in one shared list. Profiles live in the settings file under "profiles"; the one in use
 is "profile_active" and takes each change you make while it's in use."""
 import copy
 import time
@@ -19,12 +20,22 @@ from ui_common import *  # noqa: F401,F403
 SKIP_KEYS = {"profiles", "profile_active", "macro_library", "stats_all", "last_seen_version", "last_game_exe",
              "builtin_failed_added", "check_updates", "app_icon_file", "app_logo_file", "app_logo_same",
              "video_history", "video_link", "first_start_done"}
-SKIP_PREFIXES = ("remote_", "background", "settings_background", "video_rect")
+SKIP_PREFIXES = ("remote_", "video_rect")
 SKIP_ENDINGS = ("_geometry",)
 NO_PROFILE = "(none)"
+# background options that belong to this PC, not to a profile: the saved pictures and how GIFs play
+BG_SHARED_KEYS = {"background_library", "background_animate", "background_animate_focused",
+                  "background_fps", "background_pause_others"}
+
+
+def is_background_key(key):
+    """Which background each window shows, and its darkness, fit and part (in a profile since 2.9)."""
+    return key.startswith(("background_", "settings_background")) and key not in BG_SHARED_KEYS
 
 
 def in_profile(key):
+    if key.startswith(("background", "settings_background")):
+        return is_background_key(key)
     return not (key in SKIP_KEYS or key.startswith(SKIP_PREFIXES) or key.endswith(SKIP_ENDINGS))
 
 
@@ -51,6 +62,32 @@ class ProfilesMixin:
         name = self.profile_active()
         if name:
             self.profiles()[name] = profile_part(self.settings)
+
+    def _profiles_take_background(self):
+        """Profiles made before 2.9 hold no background yet: each takes the one showing now (once), so
+        switching to it doesn't take the picture away."""
+        now = {k: copy.deepcopy(v) for k, v in self.settings.items() if is_background_key(k)}
+        changed = False
+        for part in self.profiles().values():
+            if isinstance(part, dict) and not any(is_background_key(k) for k in part):
+                part.update(copy.deepcopy(now))
+                changed = True
+        if changed:
+            core.save_settings(self.settings)
+
+    def profiles_using_background(self, name):
+        """Names of the profiles other than the one in use that show the background picture name."""
+        active = self.profile_active()
+        return [p for p, part in self.profiles().items() if p != active and isinstance(part, dict) and any(
+            is_background_key(k) and k.endswith("_picture") and v == name for k, v in part.items())]
+
+    def forget_background_everywhere(self, name):
+        """A removed background picture: no profile shows it anymore."""
+        for part in self.profiles().values():
+            if isinstance(part, dict):
+                for k in list(part):
+                    if is_background_key(k) and k.endswith("_picture") and part[k] == name:
+                        part[k] = ""
 
     def save_profile(self, name):
         """A new profile from the settings as they are now (or the same name written over)."""
@@ -172,8 +209,10 @@ class ProfilesMixin:
         "name into that macro (when you save it), so opening the macro switches to it. In a chain, each "
         "\"Play another macro\" step can name a profile too: its speed and random timing are used for "
         "that part.\n\n"
+        "Each profile also remembers its background: which picture each window shows, its darkness, "
+        "fit and part. The saved background pictures themselves are shared by every profile.\n\n"
         "Not part of a profile: saved macros, all-time results and run stats, the phone remote, "
-        "background pictures and the app icon.")
+        "the list of saved background pictures, how animated pictures play, and the app icon.")
 
     def open_profiles(self):
         parent = self.settings_win if self.settings_win is not None else self.root

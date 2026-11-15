@@ -731,9 +731,17 @@ class BackgroundControls:
         name = self.picture()
         if not name:
             return
+        others = app.profiles_using_background(name) if hasattr(app, "profiles_using_background") else []
+        also = ""
+        if others:
+            names = ", ".join(f"\"{p}\"" for p in others[:3]) + (" and more" if len(others) > 3 else "")
+            also = (f"\n\nThe profile{'s' if len(others) > 1 else ''} {names} "
+                    f"show{'' if len(others) > 1 else 's'} it too, and would have no picture.")
         if not messagebox.askyesno("Macro Recorder", f"Remove \"{self.picture_name()}\" from your saved "
-                                   "pictures?", parent=app.settings_win):
+                                   "pictures?" + also, parent=app.settings_win):
             return
+        if hasattr(app, "forget_background_everywhere"):
+            app.forget_background_everywhere(name)
         app.settings["background_library"] = [e for e in app.bg_library() if e["file"] != name]
         for key in list(app.settings):
             if key.endswith("_picture") and key.startswith(("background", "settings_background")) \
