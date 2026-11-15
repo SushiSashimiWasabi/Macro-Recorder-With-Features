@@ -61,6 +61,8 @@ sent = []
 app._replay_event = lambda e, hk, hb: sent.append((time.perf_counter(), e))
 app.root.after = (lambda real: (lambda ms, fn=None, *a: real(ms, fn, *a) if fn else real(ms)))(app.root.after)
 modern_ui.messagebox.showwarning = lambda *a, **k: None
+boxes = []  # (a real box would wait for a click that never comes)
+app.boxes.showinfo = lambda *a, **k: boxes.append(a)
 window_tools.foreground = lambda: None
 app.settings.update(pause_when_away=False, watch_enabled=False)
 app.away_var.set(False)
@@ -198,7 +200,8 @@ win.variables["runs"].set("25")
 win.variables["at"].set("soon")
 win.save()
 pump(0.1)
-check("windows: a wrong time is refused, the window stays", win.winfo_exists() and "auto_stop" not in app.settings)
+check("windows: a wrong time is refused, the window stays", win.winfo_exists() and "auto_stop" not in app.settings
+      and len(boxes) == 1, boxes)
 win.variables["at"].set("3:30")
 win.save()
 pump(0.1)
