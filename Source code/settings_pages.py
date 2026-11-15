@@ -819,7 +819,9 @@ class SettingsPagesMixin:
         "bigger or somewhere else than when the macro was recorded. Needs a macro that knows its "
         "window: recorded in this version or newer, or a .luvmacro file. Others are fitted to the screen.")
     SCREEN_SIZE_HELP = (
-        "Some macros were recorded in fullscreen, so those only work in fullscreen. "
+        "Macros recorded before 2.6 don't know their game window: played in a window, their clicks may "
+        "miss, so record them again or play them in fullscreen (a yellow note says so when one is open). "
+        "Camera turns (Shift Lock) are never fitted to the window: they turn the same in any size. "
         "The app itself works properly in windowed mode too.\n\n"
         "Macro recorded at: the screen size the macro was made on. It's filled in from the macro "
         "file and is usually right, so leave it.\n\n"
@@ -855,8 +857,9 @@ class SettingsPagesMixin:
         box.bind("<<ComboboxSelected>>", lambda e: (box.selection_clear(), self._save_settings()))
         note = tk.Frame(f, bg=BG)
         note.pack(fill="x", pady=(2, 0))
-        tk.Label(note, text="Some macros were recorded in fullscreen, so those only work in fullscreen.",
-                 bg=BG, fg=RED, font=F_SMALL, anchor="w").pack(side="left")
+        # only for an open macro that doesn't know its game window (recorded before 2.6)
+        tk.Label(note, textvariable=self.old_macro_var, bg=BG, fg=AMBER, font=F_SMALL, anchor="w",
+                 justify="left", wraplength=520).pack(side="left")
         info = link(note, "ⓘ", lambda: messagebox.showinfo("Screen size", self.SCREEN_SIZE_HELP,
                                                            parent=self.settings_win),
                     fg=MUTED, font=(FAMILY, 11))

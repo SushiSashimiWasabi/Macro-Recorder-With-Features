@@ -21,7 +21,7 @@ MAX_PACK_FILES = 80
 MAX_PACK_FILE_BYTES = 25 * 1024 * 1024
 # never shared, and never taken from a shared file: they belong to one person or one PC
 PRIVATE_KEYS = {"discord_webhook", "discord_ping", "discord_name", "discord_enabled", "discord_summary",
-                "game_closed", "watch_pictures", "result_pictures", "auto_stop"}
+                "game_closed", "watch_pictures", "result_pictures", "auto_stop", "picture_groups"}
 PING_WHEN_TEXT = {"fragment": "a divine fragment drops", "stop": "the macro stops", "loss": "a run fails",
                   "lost": "it disconnects or the game closes"}
 
@@ -164,9 +164,11 @@ class ExtrasMixin:
             main = self._pack_collect(self.current_file, found)
             pictures = []
             image_watch = core.image_watch
-            for pic in self.watch_pictures:
+            for pic in self._active_watch_pictures(self.current_file):
                 entry = core.watch_entry(pic)
                 entry.pop("seen_rect", None)
+                for k in core.GROUP_FIELDS:  # (where it's kept here, and which macros: this PC's own)
+                    entry.pop(k, None)
                 with open(os.path.join(core.watch_dir(), pic["file"]), "rb") as f:
                     found["files"]["pictures/" + safe_name(pic["file"])] = f.read()
                 if entry.get("macro"):
@@ -550,11 +552,12 @@ class ExtrasMixin:
         rate = f"{t['winrate']:.0f}%" if t["winrate"] is not None else "-"
         lines.append(("Today", f"{t['runs']} runs · {t['wins']} won · {t['losses']} failed · win rate {rate} · "
                                f"{t['fragments']} fragment{'s' if t['fragments'] != 1 else ''}"))
-        if self.watch_var.get() and self.watch_pictures:
+        active = self._active_watch_pictures()
+        if self.watch_var.get() and active:
             rules = "; ".join((p.get("name") or f"picture {i}") + ": " + action_summary(p).split("  (")[0]
-                              for i, p in enumerate(self.watch_pictures[:4], start=1))
-            lines.append(("Picture watch", f"On, {len(self.watch_pictures)} picture"
-                                           f"{'s' if len(self.watch_pictures) != 1 else ''}. {rules}"))
+                              for i, p in enumerate(active[:4], start=1))
+            lines.append(("Picture watch", f"On, {len(active)} picture"
+                                           f"{'s' if len(active) != 1 else ''}. {rules}"))
         else:
             lines.append(("Picture watch", "Off"))
         lines.append(("If the game closes", self.closed_summary()))
@@ -706,7 +709,7 @@ class ExtrasMixin:
             x = 520
             canvas.create_text(x, Y0 - 6, text="PICTURE WATCH" + ("" if self.watch_var.get() else "  (off)"),
                                fill=MUTED, font=F_SECTION, anchor="w")
-            for i, p in enumerate(self.watch_pictures[:7] if self.watch_var.get() else []):
+            for i, p in enumerate(self._active_watch_pictures()[:7] if self.watch_var.get() else []):
                 y = Y0 + 12 + i * 52
                 rounded_rect(canvas, x, y, x + 220, y + 42, 8, fill=CARD, outline=AMBER)
                 canvas.create_text(x + 10, y + 13, text="When " + short(p.get("name") or f"picture {i + 1}", 22)

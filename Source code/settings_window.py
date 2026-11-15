@@ -506,18 +506,17 @@ class SettingsWindowMixin:
 
     # ------------------------------------------------------------ Undo / Reset / Apply
 
-    # settings the Settings window's pages change (the ones Undo and Reset put back)
+    # settings the Settings window's pages change (the ones Undo and Reset put back). The pictures and
+    # options of Picture watch have their own Undo / Reset / Apply in the Picture watch window (2.9)
     PAGE_SETTINGS = ("hotkeys", "status_bar", "always_on_top", "record_mouse_moves", "mouse_detail",
-                     "ready_seconds", "record_ready_seconds", "play_overlay", "play_resolution", "video_click_through", "video_opacity",
-                     "watch_enabled", "watch_ignore_bg", "watch_click", "watch_wait", "watch_match",
-                     "watch_end_wait", "watch_pictures", "sounds", "sound_volume", "sound_choices",
+                     "ready_seconds", "record_ready_seconds", "play_overlay", "play_resolution", "video_click_through",
+                     "video_opacity", "watch_enabled", "sounds", "sound_volume", "sound_choices",
                      "check_updates", "background_animate", "settings_background_per_page",
                      "app_icon_file", "app_logo_file", "app_logo_same", "record_camera", "pause_when_away",
                      "away_stop_seconds", "switch_to_program", "fit_to", "discord_enabled", "discord_webhook",
-                     "discord_runs", "discord_ping_fragments", "discord_screenshot", "discord_stops", "watch_limit_count",
-                     "watch_limit_seconds", "watch_shift_lock", "watch_save_with_macro", "discord_name",
+                     "discord_runs", "discord_ping_fragments", "discord_screenshot", "discord_stops", "discord_name",
                      "discord_ping", "discord_ping_when", "discord_capture", "discord_title", "discord_content",
-                     "discord_message", "results_enabled", "drops_enabled", "simplify_moves", "results_match", "result_pictures",
+                     "discord_message", "results_enabled", "drops_enabled", "simplify_moves",
                      "game_closed", "auto_stop", "vary", "discord_summary", "discord_live")
 
     def _is_page_setting(self, key):

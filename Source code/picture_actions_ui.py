@@ -1,7 +1,6 @@
-"""Picture watch: what each watched picture does when it shows (Settings > Picture watch).
-
-Every picture in the list has a line saying what happens ("Start the macro over", "Play
-rejoin.macro, then start over"...) and a Change… button that opens a small window for it."""
+"""Picture watch: what each watched picture does when it shows. The options are made by
+_picture_action_form, used in the Picture watch window (picture_window.py) and in the small
+"When this picture shows" window (edit_picture_action)."""
 import os
 import time
 import tkinter as tk
@@ -14,7 +13,7 @@ import macro_steps as workflow
 
 image_watch = core.image_watch
 
-CLICK_CHOICES = {None: "The same as \"click on it\" below", True: "Yes", False: "No"}
+CLICK_CHOICES = {None: "As in General (\"Click on it\")", True: "Yes", False: "No"}
 NO_MACRO = "(choose a macro)"
 NO_PICTURE = "(no other picture)"
 
@@ -47,26 +46,7 @@ def action_summary(pic):
     return text + (f"  ({', '.join(extra)})" if extra else "")
 
 
-WATCH_WORDS_WIDTH = 300  # (pixels) what a watched picture does: longer wraps onto the next line
-
-
 class PictureActionsMixin:
-    def _show_watch_pictures(self):
-        super()._show_watch_pictures()
-        if not self.watch_pictures or not hasattr(self, "watch_list"):
-            return
-        self.watch_action_buttons = []
-        for i, pic in enumerate(self.watch_pictures):
-            name = pic.get("name")
-            # Change… right after Remove, the words last: a long name or macro name wraps onto
-            # more lines instead of pushing Change… off the side of the window
-            b = ttk.Button(self.watch_list, text="Change…", command=lambda i=i: self.edit_picture_action(i))
-            b.grid(row=i, column=2, padx=(6, 0))
-            self.watch_action_buttons.append(b)
-            words = (f"{name}:  " if name else "") + action_summary(pic)
-            hover_text(ttk.Label(self.watch_list, text=short(words, 150), wraplength=WATCH_WORDS_WIDTH,
-                                 justify="left"), words).grid(row=i, column=3, sticky="w", padx=(14, 0))
-
     def _saved_macro_paths(self):
         paths = [p for p in self.settings.get("macro_library") or [] if isinstance(p, str)]
         return [p for p in paths if os.path.isfile(p)]
@@ -91,8 +71,46 @@ class PictureActionsMixin:
             lab.pack(fill="x", pady=(0, 10))
         except Exception:
             pass
+        form = self._picture_action_form(body, pic, self.watch_pictures, win)
 
+        def save():
+            new, problem = form.read()
+            if problem:
+                self.boxes.showinfo("Picture watch", problem, parent=win)
+                return
+            for k, v in new.items():
+                if v is None or v == "":
+                    pic.pop(k, None)
+                else:
+                    pic[k] = v
+            self.capture_callback = None
+            win.destroy()
+            self._show_watch_pictures()
+            self._save_settings()
+            self._refresh()
+
+        def close():
+            self.capture_callback = None
+            win.destroy()
+
+        bottom = tk.Frame(win, bg=BG)
+        bottom.pack(fill="x", padx=18, pady=(0, 14))
+        ttk.Button(bottom, text="Save", style="Accent.TButton", width=8, command=save).pack(side="right")
+        ttk.Button(bottom, text="Cancel", width=8, command=close).pack(side="right", padx=6)
+        win.protocol("WM_DELETE_WINDOW", close)
+        dark_title_bar(win)
+        win.focus_force()
+        self.picture_action_win = win
+        win.save, win.vars = save, form.vars
+        return win
+
+    def _picture_action_form(self, body, pic, all_pictures, win, on_change=None, show_name=True,
+                             wrap=470):
+        """The options of one watched picture (name, what it does when it shows, and when), made in
+        body. Returns a form: form.read() gives (the picture's new fields, a problem to show or None),
+        form.vars its boxes. on_change() runs after anything in it was changed (None: nothing)."""
         rows = {}
+        notify = (lambda *_a: on_change()) if on_change else (lambda *_a: None)
 
         def row(key, text, tip=None):
             f = tk.Frame(body, bg=BG)
@@ -117,7 +135,7 @@ class PictureActionsMixin:
         action_box = ttk.Combobox(r, textvariable=action_var, state="readonly", width=36,
                                   values=[n for _k, n, _w in core.WATCH_ACTIONS])
         action_box.pack(side="right")
-        words = tk.Label(body, text="", bg=BG, fg=MUTED, font=F_SMALL, anchor="w", justify="left", wraplength=470)
+        words = tk.Label(body, text="", bg=BG, fg=MUTED, font=F_SMALL, anchor="w", justify="left", wraplength=wrap)
         rows["words"] = words
 
         # the macro to play / switch to / rejoin with
@@ -156,6 +174,7 @@ class PictureActionsMixin:
                 if key_id and key_id != "esc":
                     state["key"] = key_from_id(key_id)
                 badge.config(text=workflow.key_text(state["key"] or {}) if state["key"] else "none yet", fg=TEXT)
+                notify()
             self.capture_callback = got
         link(r, "Change", capture).pack(side="right")
         badge.pack(side="right", padx=(0, 10))
@@ -177,10 +196,11 @@ class PictureActionsMixin:
             image_watch.save_image(os.path.join(core.watch_dir(), file), img)
             state["confirm_file"], state["confirm_screen_h"] = file, screen_h
             show_confirm()
+            notify()
 
         def confirm_from_screen():
-            win.withdraw()
-            hidden = [w for w in (win, self.settings_win) if w is not None]
+            # (only the windows that are showing: the others mustn't pop up after picking)
+            hidden = [w for w in (win.winfo_toplevel(), self.settings_win) if w is not None and w.winfo_viewable()]
             for w in hidden:
                 w.withdraw()
             self.root.withdraw()
@@ -198,6 +218,7 @@ class PictureActionsMixin:
         def no_confirm():
             state["confirm_file"] = state["confirm_screen_h"] = None
             show_confirm()
+            notify()
         link(r, "None", no_confirm).pack(side="right")
         ttk.Button(r, text="File…", command=confirm_from_file).pack(side="right", padx=6)
         ttk.Button(r, text="From screen…", command=confirm_from_screen).pack(side="right")
@@ -218,16 +239,17 @@ class PictureActionsMixin:
         cooldown_var = tk.StringVar(value=f"{float(pic.get('cooldown') or 0):g}")
         entry(row("cooldown", "Cooldown (seconds)", "not again within this time; 0 = none"), cooldown_var, 6)
         others = {NO_PICTURE: ""}
-        for n, other in enumerate(self.watch_pictures, start=1):
-            if other is not pic:
+        for n, other in enumerate(all_pictures, start=1):
+            if other is not pic and other.get("file") != pic.get("file"):
                 others[f"{n}: {other.get('name') or 'picture ' + str(n)}"] = other["file"]
         also_now = next((label for label, file in others.items() if file and file == pic.get("also")), NO_PICTURE)
         also_var = tk.StringVar(value=also_now)
         r = row("also", "Only when this also shows")
         ttk.Combobox(r, textvariable=also_var, state="readonly", width=24, values=list(others)).pack(side="right")
 
-        order = ["name", "action", "words", "macro", "key", "seconds", "tries", "confirm", "confirm_seconds",
-                 "click", "counts", "cooldown", "also"]
+        order = (["name"] if show_name else []) + [
+            "action", "words", "macro", "key", "seconds", "tries", "confirm", "confirm_seconds",
+            "click", "counts", "cooldown", "also"]
         only_for = {"macro": core.WATCH_NEED_MACRO, "key": ("key",), "seconds": ("wait",),
                     "tries": ("recover",), "confirm": ("recover",), "confirm_seconds": ("recover",),
                     "counts": ("restart", "play", "switch", "stop")}
@@ -246,12 +268,12 @@ class PictureActionsMixin:
             if set_counts:
                 counts_var.set(action == "restart")
             words.config(text=helps.get(action, "")[:1].upper() + helps.get(action, "")[1:].rstrip(".") + ".")
-            for key in order:
+            for key in rows:
                 rows[key].pack_forget()
             for key in order:
                 if key not in only_for or action in only_for[key]:
                     rows[key].pack(fill="x", pady=4)
-        action_box.bind("<<ComboboxSelected>>", lambda e: layout(set_counts=True))
+        action_box.bind("<<ComboboxSelected>>", lambda e: (layout(set_counts=True), notify()))
         layout()
 
         def number(var, default, low, high):
@@ -260,19 +282,18 @@ class PictureActionsMixin:
             except ValueError:
                 return default
 
-        def save():
+        def read():
             action = action_key()
             macro = macros.get(macro_var.get(), "")
+            problem = None
             if action in ("play", "switch") and not macro:
-                self.boxes.showinfo("Picture watch", "Choose the macro it should play first.", parent=win)
-                return
-            if action == "key" and not state["key"]:
-                self.boxes.showinfo("Picture watch", "Choose the key it should press first (Change).", parent=win)
-                return
+                problem = "Choose the macro it should play first."
+            elif action == "key" and not state["key"]:
+                problem = "Choose the key it should press first (Change)."
             click = next(k for k, v in CLICK_CHOICES.items() if v == click_var.get())
             counts = bool(counts_var.get()) if action in only_for["counts"] else None
             new = {
-                "name": name_var.get().strip(), "action": action if action != "restart" else None,
+                "action": action if action != "restart" else None,
                 "macro": macro if action in core.WATCH_NEED_MACRO else None,
                 "key": state["key"] if action == "key" else None,
                 "seconds": number(seconds_var, 5, 0, 36000) if action == "wait" else None,
@@ -285,33 +306,22 @@ class PictureActionsMixin:
                 "confirm_screen_h": state["confirm_screen_h"] if action == "recover" else None,
                 "confirm_seconds": number(confirm_s_var, 60, 1, 3600) if action == "recover" else None,
             }
-            for k, v in new.items():
-                if v is None or v == "":
-                    pic.pop(k, None)
-                else:
-                    pic[k] = v
-            self.capture_callback = None
-            win.destroy()
-            self._show_watch_pictures()
-            self._save_settings()
-            self._refresh()
+            if show_name:
+                new["name"] = name_var.get().strip()
+            return new, problem
 
-        def close():
-            self.capture_callback = None
-            win.destroy()
+        for var in (name_var, macro_var, seconds_var, tries_var, confirm_s_var, click_var, counts_var,
+                    cooldown_var, also_var):
+            var.trace_add("write", notify)
 
-        bottom = tk.Frame(win, bg=BG)
-        bottom.pack(fill="x", padx=18, pady=(0, 14))
-        ttk.Button(bottom, text="Save", style="Accent.TButton", width=8, command=save).pack(side="right")
-        ttk.Button(bottom, text="Cancel", width=8, command=close).pack(side="right", padx=6)
-        win.protocol("WM_DELETE_WINDOW", close)
-        dark_title_bar(win)
-        win.focus_force()
-        self.picture_action_win = win
-        win.save, win.vars = save, {"action": action_var, "macro": macro_var, "name": name_var,
-                                    "cooldown": cooldown_var, "seconds": seconds_var, "counts": counts_var,
-                                    "layout": layout, "macros": macros, "state": state}
-        return win
+        class Form:
+            pass
+        form = Form()
+        form.read = read
+        form.vars = {"action": action_var, "macro": macro_var, "name": name_var, "cooldown": cooldown_var,
+                     "seconds": seconds_var, "counts": counts_var, "layout": layout, "macros": macros,
+                     "state": state, "click": click_var, "also": also_var, "tries": tries_var}
+        return form
 
     def _pictures_in_use(self):
         watch, own = super()._pictures_in_use()

@@ -101,6 +101,8 @@ class ProfilesMixin:
         self._load_result_pictures()
         self._load_page_settings()
         self._show_automation()
+        self._show_picture_summary()
+        self._picture_window_reload()
         if getattr(self, "settings_saved_state", None) is not None:
             self.settings_saved_state = self._page_settings()  # (a switch isn't something to Undo)
             self.settings_history, self.settings_redo = [], []

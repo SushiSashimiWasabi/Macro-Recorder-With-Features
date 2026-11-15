@@ -511,6 +511,9 @@ class MacroEditor:
                 lib[i] = os.path.abspath(new_path)
             elif app._list_index(new_path) is None:
                 lib.append(os.path.abspath(new_path))
+            if own and os.path.normcase(new_path) != os.path.normcase(path) and \
+                    hasattr(app, "_pictures_macro_renamed"):
+                app._pictures_macro_renamed(path, new_path)  # (pictures used only for it follow it)
             core.save_settings(app.settings)
             if is_open:
                 app.current_file = new_path

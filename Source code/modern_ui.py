@@ -22,6 +22,7 @@ from extras_ui import ExtrasMixin
 from edit_window import EditWindowMixin
 from macro_editor import MacroEditorMixin
 from picture_actions_ui import PictureActionsMixin
+from picture_window import PictureWatchMixin
 from profiles_ui import ProfilesMixin
 from remote_ui import RemoteMixin
 from results_ui import ResultsMixin
@@ -30,7 +31,7 @@ from settings_window import SettingsWindowMixin
 from video_ui import VideoMixin
 
 
-class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, SettingsPagesMixin, PictureActionsMixin, AutomationMixin, DiscordMixin, RemoteMixin, ResultsMixin, SettingsWindowMixin, MacroEditorMixin, EditWindowMixin, VideoMixin, core.MacroRecorder):
+class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, PictureWatchMixin, SettingsPagesMixin, PictureActionsMixin, AutomationMixin, DiscordMixin, RemoteMixin, ResultsMixin, SettingsWindowMixin, MacroEditorMixin, EditWindowMixin, VideoMixin, core.MacroRecorder):
     def __init__(self, root, preview=False):
         self.preview = preview
         self.sub_note = "Record something, or open a macro"
@@ -68,6 +69,7 @@ class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, SettingsPagesMixin, Pictur
         self.target_windows = []
         self.target_var = tk.StringVar(value=SCREEN_TARGET)
         self.name_var = tk.StringVar(value="")  # empty until a macro is opened or saved
+        self.old_macro_var = tk.StringVar(value="")  # the yellow note for macros recorded before 2.6
         self.sounds_var = tk.BooleanVar(value=bool(s.get("sounds", True)))
         self.player = sounds.Player()
         self.last_sound = 0.0
@@ -259,8 +261,13 @@ class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, SettingsPagesMixin, Pictur
         for b in (self.btn_save, self.btn_load, self.btn_edit):
             b.pack(side="right", padx=(6, 0))
         self.info_var = tk.StringVar()
-        tk.Label(body, textvariable=self.info_var, bg=PANEL, fg=MUTED, font=F_SMALL, anchor="w").pack(
-            anchor="w", pady=(2, 0))
+        # (width=1: a long line is cut at the window's edge instead of making the window wider; the
+        # whole line shows when the mouse is over it)
+        self.info_label = tk.Label(body, textvariable=self.info_var, bg=PANEL, fg=MUTED, font=F_SMALL, anchor="w",
+                                   width=1)
+        self.info_label.pack(fill="x", pady=(2, 0))
+        self.info_full = ""
+        hover_text(self.info_label, lambda: self.info_full)
 
         # footer: status bar + version
         foot = tk.Frame(outer, bg=BG)
@@ -269,6 +276,8 @@ class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, SettingsPagesMixin, Pictur
         self.statusbar_label.pack(side="left")
         link(foot, "About", lambda: self.open_settings("About"), fg=MUTED).pack(side="right")
         link(foot, "Dashboard", self.open_dashboard, fg=MUTED).pack(side="right", padx=(0, 10))
+        self.picture_link = link(foot, "Picture watch", lambda: self.open_picture_watch(), fg=MUTED)
+        self.picture_link.pack(side="right", padx=(0, 10))
         tk.Label(foot, text=f"v{APP_VERSION}", bg=BG, fg=DIM, font=F_SMALL).pack(side="right", padx=(0, 8))
 
         # an optional picture behind the window (Settings > Background)
@@ -368,7 +377,7 @@ class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, SettingsPagesMixin, Pictur
             parts.append(f"made for {core.format_resolution(self.macro_screen)}")
         if self.current_file and os.path.splitext(os.path.basename(self.current_file))[0] != self.name_var.get():
             parts.append(os.path.basename(self.current_file))
-        self.info_var.set("  ·  ".join(parts))
+        self._show_old_macro_note("  ·  ".join(parts))
         self._show_macro_list(busy)
 
         for b in (self.btn_save, self.btn_load, self.btn_edit, getattr(self, "btn_clear", None)):
@@ -394,7 +403,7 @@ class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, SettingsPagesMixin, Pictur
             bits = [f"{k['record']} record", f"{k['play']} play", f"{k['stop']} stop",
                     f"speed {self.speed_var.get()}"]
             if image_watch is not None and self.watch_var.get():
-                n = len(self.watch_pictures)
+                n = len(self._active_watch_pictures())
                 bits.append(f"watching {n} picture{'s' if n != 1 else ''}")
             self.statusbar_label.config(text="   ·   ".join(bits))
         else:
@@ -568,9 +577,14 @@ class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, SettingsPagesMixin, Pictur
         super().play()
         if self.playing and getattr(self, "fit_note", ""):
             self.sub_note = "Clicks " + self.fit_note
+            if self.old_macro_var.get():  # (the note shows for a moment when Play is pressed)
+                self.sub_note = self.old_macro_var.get()
         if self.playing:
             if self.settings_win is not None:
                 self.close_settings()  # its picture list must not be seen as the picture on screen
+            pictures = getattr(self, "picture_win", None)
+            if pictures is not None and pictures.alive():
+                pictures.win.withdraw()  # (the same; its changes stay: Picture watch shows it again)
             if self.edit_win is not None and self.edit_win.winfo_exists():
                 self.edit_win.destroy()
             self.stopped_by_user = False
@@ -767,15 +781,34 @@ class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, SettingsPagesMixin, Pictur
             self.root.after(50, self._offer_file_pictures)
         return ok
 
+    OLD_MACRO_NOTE = "Recorded before 2.6: in a window its clicks may miss. Record it again or play in fullscreen."
+
+    def _show_old_macro_note(self, info):
+        """The line under the macro's name: its length and size, or, for an opened macro that doesn't
+        know its game window (recorded before 2.6, so it has no window size in it), a short yellow note
+        in its place (the line keeps its height, so the window doesn't change size). The note shows in
+        Settings > Playback too."""
+        old = bool(self.current_file and (self.events or self.actions)
+                   and not (self.macro_program or {}).get("client"))
+        text = self.OLD_MACRO_NOTE if old else ""
+        if self.old_macro_var.get() != text:
+            self.old_macro_var.set(text)
+        self.info_full = f"{text}\n{info}" if old else info
+        self.info_var.set(text or info)
+        color = AMBER if old else MUTED
+        if self.info_label.cget("fg") != color:
+            self.info_label.config(fg=color)
+
     # ------------------------------------------------------------ pictures to watch for, inside .macro files
 
-    def _pictures_for_file(self):
+    def _pictures_for_file(self, path=None):
         """The pictures to watch for, to save inside a macro (Picture watch > "Save these pictures
-        inside the macros you save"): [{"png": base64 PNG, "screen_h": …}]."""
+        inside the macros you save"): [{"png": base64 PNG, "screen_h": …}]. Only the ones used for that
+        macro (path): those that are on and are for every macro or for this one."""
         if image_watch is None or not self.settings.get("watch_save_with_macro", True):
             return []
         out = []
-        for pic in self.watch_pictures:
+        for pic in self._active_watch_pictures(path):
             try:
                 out.append({"png": image_watch.png_data(pic["img"]), "screen_h": pic.get("screen_h")})
             except Exception:
@@ -1027,7 +1060,7 @@ class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, SettingsPagesMixin, Pictur
             data["vary"] = self.macro_vary
         if getattr(self, "macro_profile", None):
             data["profile"] = self.macro_profile
-        pictures = self._pictures_for_file()
+        pictures = self._pictures_for_file(path)
         if pictures:
             data["watch_pictures"] = pictures
         try:

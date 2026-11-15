@@ -345,7 +345,11 @@ check("stop when nothing plays", "Nothing is playing" in out[0][1]["content"])
 
 # a problem that would normally show a box on the PC comes back as text
 app.watch_var.set(True)
-old_pictures, app.watch_pictures = app.watch_pictures, []
+import numpy as np  # noqa: E402
+
+# (2.9: with no picture on it plays without watching, so the problem is a picture without its macro)
+old_pictures, app.watch_pictures = app.watch_pictures, [{"img": np.full((20, 20, 3), 90, np.uint8), "file": "x.png",
+                                                         "screen_h": None, "action": "play"}]
 out = run(cmd("start"))
 check("a problem at start is told in Discord, with no box on the PC", not app.playing
       and out[0][1]["content"].startswith("Couldn't start:") and "picture" in out[0][1]["content"]

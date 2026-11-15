@@ -1,12 +1,34 @@
 # The app's version. Raising it (and pushing to main) makes GitHub publish a new Release,
 # which every copy of the app offers to install when it starts.
-APP_VERSION = "2.8.1"
+APP_VERSION = "2.9"
 
 # Every version, newest first: (version, the day it was finalized, changes). The newest is shown once after an update;
 # Settings > About > What's new shows them all. Each change is one paragraph (shown as a bullet).
 # Version numbers started at 2.1 (the first one that could update itself); the earlier steps have
 # names instead.
 HISTORY = [
+    ("2.9", "(not finalized yet)", [
+        "Picture watch has its own window (Settings > Picture watch > Open Picture watch…, or Picture watch "
+        "at the bottom of the main window), made like the Edit window: groups on the left, the group's "
+        "pictures in the middle, the chosen picture's options on the right. Rename a group or picture in the "
+        "box at the top; Undo, Redo, Reset and Apply work on everything in it, and nothing is used until "
+        "Apply.",
+        "Groups: General (the options for every picture), AOT:R (the pictures that come with the app: RETRY, "
+        "Disconnected, MISSION COMPLETED and MISSION FAILED, each with an ⓘ that says what it's for), My "
+        "pictures, and groups you make. A green dot means on, red off, grey: on, but its group is off. "
+        "Built-in pictures can be turned off and reset to their built-in settings, and added into your own "
+        "groups too.",
+        "Each picture can be used for all macros or only for the macros you tick. Macros saved with their "
+        "pictures inside now carry only the pictures used for them, and the status line says how many "
+        "pictures are watched when you press Play.",
+        "The MISSION COMPLETED / FAILED pictures and the Disconnected box's options moved into Picture watch "
+        "(AOT:R); Settings > Results keeps the run stats and divine fragments.",
+        "Your pictures were sorted into the groups by themselves (the built-in ones into AOT:R, yours into My "
+        "pictures). A copy of your settings from before is in the Backups folder beside them.",
+        "The red line about fullscreen in Settings > Playback is gone. Instead, a short yellow note shows only "
+        "for an opened macro that was recorded before 2.6 (it doesn't know its game window, so in a window "
+        "its clicks may miss).",
+    ]),
     ("2.8.1", "15 November 2026", [
         "Phone remote: /pair now works only while the Phone remote window is open on the PC, so nobody can "
         "keep guessing the code while you're away. Accounts you already paired keep working as before, and "

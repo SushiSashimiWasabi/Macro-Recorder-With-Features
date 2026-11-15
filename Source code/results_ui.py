@@ -8,13 +8,12 @@ from ui_common import *  # noqa: F401,F403  (colours, fonts, widgets, tk, core, 
 
 class ResultsMixin:
     RESULTS_HELP = (
-        "While a macro plays, the app looks for these pictures on your main screen. A \"mission "
+        "While a macro plays, the app looks for the result pictures on your main screen. A \"mission "
         "completed\" picture counts the run as won, a \"mission failed\" one as lost, and a run where "
         "neither showed as unknown. The results (wins, losses, streak, win rate, run times) show in the "
         "timer at the top, here, and in the Discord messages.\n\n"
-        "The built-in picture is AOT:R's gold MISSION COMPLETED title. Add your own with Add from "
-        "screen (while it shows) or a picture file. Test now shows how well each one matches the "
-        "screen right now.")
+        "The pictures are in Picture watch: AOT:R's gold MISSION COMPLETED and MISSION FAILED titles come "
+        "with the app, and you can add your own (choose \"This picture is: MISSION COMPLETED\" for it).")
 
     DROPS_HELP = (
         "When a run ends, the app counts the divine fragments in the results screen's OBTAINED row: "
@@ -32,9 +31,13 @@ class ResultsMixin:
         if not isinstance(saved, list):
             return
         for entry in saved:
+            if not isinstance(entry, dict) or not entry.get("file"):
+                continue
             kind = entry.get("kind") if entry.get("kind") in (stats.WIN, stats.LOSS) else stats.WIN
-            pic = core.saved_picture(entry["file"], screen_h=entry.get("screen_h"), kind=kind) \
-                if isinstance(entry, dict) and entry.get("file") else None
+            fields = core.group_fields(entry)
+            if isinstance(entry.get("name"), str) and entry["name"]:
+                fields["name"] = entry["name"]
+            pic = core.saved_picture(entry["file"], screen_h=entry.get("screen_h"), kind=kind, **fields)
             if pic is None:
                 continue
             if isinstance(entry.get("found_factor"), (int, float)) and isinstance(entry.get("found_screen"), list):
@@ -46,14 +49,16 @@ class ResultsMixin:
     def _save_result_pictures(self):
         self.settings["result_pictures"] = [
             dict({"file": p["file"], "screen_h": p["screen_h"], "kind": p["kind"]},
-                 **{k: p[k] for k in ("found_factor", "found_screen", "found_step") if k in p})
+                 **{k: p[k] for k in ("found_factor", "found_screen", "found_step") if k in p},
+                 **({"name": p["name"]} if p.get("name") else {}), **core.group_fields(p))
             for p in self.result_pictures]
         self._save_settings()
 
-    def _add_result_picture(self, img, kind, screen_h=None):
+    def _add_result_picture(self, img, kind, screen_h=None, fields=None):
         name = f"result_{int(time.time() * 1000)}.png"
         image_watch.save_image(os.path.join(core.watch_dir(), name), img)
-        self.result_pictures.append({"img": img, "file": name, "screen_h": screen_h, "kind": kind})
+        self.result_pictures.append(dict({"img": img, "file": name, "screen_h": screen_h, "kind": kind},
+                                         **(fields or {})))
         self._save_result_pictures()
         self._show_result_pictures()
 
@@ -63,7 +68,9 @@ class ResultsMixin:
     def add_builtin_result(self, kind=stats.WIN):
         try:
             name, screen_h = self.BUILTINS[kind]
-            self._add_result_picture(image_watch.load_image(core.resource_path(name)), kind, screen_h)
+            key = "completed" if kind == stats.WIN else "failed"
+            self._add_result_picture(image_watch.load_image(core.resource_path(name)), kind, screen_h,
+                                     fields=dict(core.BUILTINS[key][3], builtin=key))
         except Exception as exc:
             messagebox.showerror("Macro Recorder", f"Couldn't add the built-in picture:\n{exc}",
                                  parent=self.settings_win)
@@ -117,55 +124,21 @@ class ResultsMixin:
                             f"{need}%):\n\n" + "\n".join(lines), parent=self.settings_win)
 
     def _load_result_pictures_first(self):
-        """At start: the result pictures (read when first used). On the very first start, the
-        built-in MISSION COMPLETED and MISSION FAILED pictures are added, ready to use; a copy that
-        already had result pictures gets the MISSION FAILED one once, if it has no "failed" picture."""
-        first = "result_pictures" not in self.settings
-        if image_watch is not None and (first or not self.settings.get("builtin_failed_added")):
-            self._load_result_pictures()
-            kinds = [stats.WIN, stats.LOSS] if first else []
-            if not first and not any(p["kind"] == stats.LOSS for p in self.result_pictures):
-                kinds = [stats.LOSS]
-            for kind in kinds:
-                try:
-                    name, screen_h = self.BUILTINS[kind]
-                    self._add_result_picture(image_watch.load_image(core.resource_path(name)), kind, screen_h)
-                except Exception as exc:
-                    diag.error("Couldn't add a built-in result picture", exc)
-            self.settings["builtin_failed_added"] = True
-            core.save_settings(self.settings)
+        """At start: the result pictures (read when first used), then the Picture watch groups (on the
+        very first start, or the first start of 2.9, that adds the built-in pictures)."""
         self._load_result_pictures()
+        self._setup_picture_groups()
 
     def _build_results_tab(self, f):
         self._section(f, "MISSION RESULTS", first=True)
         row = self._row(f, "Run stats", "win rate, run times, fragments an hour, a chart of each day")
         ttk.Button(row, text="Open…", command=self.open_stats).pack(side="right")
         self._switch_row(f, "Count wins and losses while playing", self.results_var, info=self.RESULTS_HELP)
-        self.result_lists = {}
-        self.result_buttons = []
-        for kind, title in ((stats.WIN, "MISSION COMPLETED  (counts as a win)"),
-                            (stats.LOSS, "MISSION FAILED  (counts as a loss)")):
-            tk.Label(f, text=title, bg=BG, fg=MUTED, font=F_SECTION, anchor="w").pack(fill="x", pady=(10, 2))
-            lst = tk.Frame(f, bg=BG)
-            lst.pack(fill="x")
-            self.result_lists[kind] = lst
-            row = tk.Frame(f, bg=BG)
-            row.pack(fill="x", pady=(4, 0))
-            b1 = ttk.Button(row, text="Add from screen…", command=lambda k=kind: self._result_from_screen(k))
-            b2 = ttk.Button(row, text="Picture file…", command=lambda k=kind: self._result_from_file(k))
-            b1.pack(side="left")
-            b2.pack(side="left", padx=6)
-            self.result_buttons += [b1, b2]
-            b3 = ttk.Button(row, text="Add built-in " + ("MISSION COMPLETED" if kind == stats.WIN else "MISSION FAILED"),
-                            command=lambda k=kind: self.add_builtin_result(k))
-            b3.pack(side="left")
-            self.result_buttons.append(b3)
-        row = self._row(f, "Match", "%  (80-90 suits most pictures)")
-        ttk.Spinbox(row, from_=50, to=99, width=4, textvariable=self.results_match_var,
-                    command=self._save_settings).pack(side="right")
-        b = ttk.Button(row, text="Test now", command=self.test_result_pictures)
-        b.pack(side="right", padx=(0, 10))
-        self.result_buttons.append(b)
+        # the MISSION COMPLETED / FAILED pictures and their Match are in the Picture watch window (2.9)
+        row = self._row(f, "Result pictures", "MISSION COMPLETED / FAILED: in Picture watch > AOT:R")
+        b = ttk.Button(row, text="Open Picture watch…", command=lambda: self.open_picture_watch("aotr"))
+        b.pack(side="right")
+        self.result_buttons = [b]
         self._switch_row(f, "Count divine fragments", self.drops_var, "by their pink-to-blue frame",
                          info=self.DROPS_HELP)
         self._section(f, "RESULTS")
@@ -181,10 +154,10 @@ class ResultsMixin:
         if image_watch is None:
             for b in self.result_buttons:
                 b.config(state="disabled")
-        self._show_result_pictures()
         self._show_session()
 
     def _show_result_pictures(self):
+        """(The result pictures are shown in the Picture watch window now.)"""
         if not hasattr(self, "result_lists"):
             return
         self.result_thumbs = []

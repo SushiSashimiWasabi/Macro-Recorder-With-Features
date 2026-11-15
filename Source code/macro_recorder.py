@@ -267,12 +267,48 @@ WATCH_FIELDS = ("screen_h", "name", "action", "macro", "key", "seconds", "click"
                 "tries", "confirm_file", "confirm_screen_h", "confirm_seconds")
 
 
+# where a picture is kept in the Picture watch window and when it's used (2.9): its group's id, on
+# (kept only when False), the macros it's used for (none = every macro), which built-in picture it is
+GROUP_FIELDS = ("group", "on", "macros", "builtin")
+GROUP_GENERAL, GROUP_AOTR, GROUP_MINE = "general", "aotr", "mine"
+# the pictures that come with the app: key -> (file, screen height it was taken at, result kind or
+# None for a watched picture, its built-in settings)
+BUILTINS = {
+    "retry": (BUILTIN_PICTURE, BUILTIN_PICTURE_SCREEN_H, None, {"name": "RETRY"}),
+    "disconnect": (BUILTIN_DISCONNECT, BUILTIN_DISCONNECT_SCREEN_H, None,
+                   {"name": "Disconnected", "action": "recover"}),
+    "completed": (BUILTIN_WIN_PICTURE, BUILTIN_WIN_PICTURE_SCREEN_H, stats.WIN, {"name": "MISSION COMPLETED"}),
+    "failed": (BUILTIN_LOSS_PICTURE, BUILTIN_LOSS_PICTURE_SCREEN_H, stats.LOSS, {"name": "MISSION FAILED"}),
+}
+
+
+def group_fields(entry):
+    """The group fields of a picture's settings entry that are usable."""
+    out = {}
+    if isinstance(entry.get("group"), str) and entry["group"]:
+        out["group"] = entry["group"]
+    if entry.get("on") is False:
+        out["on"] = False
+    macros = entry.get("macros")
+    if isinstance(macros, list) and macros:
+        out["macros"] = [m for m in macros if isinstance(m, str) and m]
+    if entry.get("builtin") in BUILTINS:
+        out["builtin"] = entry["builtin"]
+    return out
+
+
+def picture_group(pic):
+    """The id of the group a picture is in (built-in pictures start in AOT:R, others in My pictures)."""
+    return pic.get("group") or (GROUP_AOTR if pic.get("builtin") else GROUP_MINE)
+
+
 def watch_entry(pic):
     """What settings keep of a watched picture."""
     out = {"file": pic["file"], "screen_h": pic.get("screen_h")}
     for k in WATCH_FIELDS:
         if pic.get(k) not in (None, "", False) or (k in ("click", "counts") and pic.get(k) is False):
             out[k] = pic[k]
+    out.update(group_fields(pic))
     return out
 
 
@@ -281,6 +317,7 @@ def watch_picture_from(entry):
     if not isinstance(entry, dict) or not entry.get("file"):
         return None
     fields = {k: entry[k] for k in WATCH_FIELDS if k in entry}
+    fields.update(group_fields(entry))
     fields.setdefault("screen_h", None)
     return saved_picture(entry["file"], **fields)
 
@@ -1089,9 +1126,8 @@ class MacroRecorder:
             return
         saved = s.get("watch_pictures")
         if not isinstance(saved, list):
-            # first start: begin with the built-in RETRY picture, ready to use
+            # first start: the built-in pictures are added by the Picture watch setup (picture_window.py)
             saved = []
-            self.root.after(0, self.add_builtin_picture)
         for entry in saved:
             pic = watch_picture_from(entry)
             if pic is not None:  # (picture file gone: forget it)
@@ -1126,7 +1162,7 @@ class MacroRecorder:
             return
         try:
             self._add_watch_picture(image_watch.load_image(resource_path(BUILTIN_PICTURE)),
-                                    screen_h=BUILTIN_PICTURE_SCREEN_H)
+                                    screen_h=BUILTIN_PICTURE_SCREEN_H, fields={"builtin": "retry", "name": "RETRY"})
         except Exception as exc:
             messagebox.showerror("Macro Recorder", f"Couldn't add the built-in picture:\n{exc}")
 
@@ -1138,7 +1174,7 @@ class MacroRecorder:
         try:
             self._add_watch_picture(image_watch.load_image(resource_path(BUILTIN_DISCONNECT)),
                                     screen_h=BUILTIN_DISCONNECT_SCREEN_H,
-                                    fields={"name": "Disconnected", "action": "recover"})
+                                    fields={"name": "Disconnected", "action": "recover", "builtin": "disconnect"})
         except Exception as exc:
             messagebox.showerror("Macro Recorder", f"Couldn't add the built-in picture:\n{exc}")
 
@@ -1374,9 +1410,35 @@ class MacroRecorder:
         screen[y0:y1, x0:x1] = 0
         return screen
 
+    def _picture_active(self, pic, path=None):
+        """Whether a picture is used now: it's on, its group is on, and it's for every macro or for
+        this one (path: the macro; None = the open one)."""
+        if pic.get("on") is False:
+            return False
+        gid = picture_group(pic)
+        for g in self.settings.get("picture_groups") or []:
+            if isinstance(g, dict) and g.get("id") == gid:
+                if g.get("on") is False:
+                    return False
+                break
+        macros = pic.get("macros")
+        if macros:
+            path = path if path is not None else self.current_file
+            if not path:
+                return False
+            key = self._macro_key(path)
+            return any(isinstance(m, str) and self._macro_key(m) == key for m in macros)
+        return True
+
+    def _active_watch_pictures(self, path=None):
+        return [p for p in self.watch_pictures if self._picture_active(p, path)]
+
+    def _active_result_pictures(self, path=None):
+        return [p for p in self.result_pictures if self._picture_active(p, path)]
+
     def _make_matchers(self):
         matchers = []
-        for pic in self.watch_pictures:
+        for pic in self._active_watch_pictures():
             m = image_watch.Matcher(pic["img"], picked_screen_h=pic["screen_h"],
                                     ignore_background=bool(self.watch_bg_var.get()), screen_h=self.screen_h)
             # where it was found last time (this session): the next playback looks there first
@@ -1854,11 +1916,8 @@ class MacroRecorder:
             bg = background.BackgroundPlayer(hwnd)
         self._save_settings()
         watch = None
-        if image_watch is not None and self.watch_var.get():
-            if not self.watch_pictures:
-                messagebox.showerror("Macro Recorder", "\"Watch for a picture\" is on, but there's no picture "
-                                     "yet. Add one, or untick the box.")
-                return
+        if image_watch is not None and self.watch_var.get() and self._active_watch_pictures():
+            # (with no picture on for this macro, it plays without watching: the status line says so)
             try:
                 watch = {
                     "matchers": self._make_matchers(),
@@ -1901,6 +1960,10 @@ class MacroRecorder:
         self.playing = True
         self.countdown_left = ready
         self.play_note = ""
+        if image_watch is not None and self.watch_var.get():
+            n = len(watch["matchers"]) if watch else 0
+            self.play_note = (f"Watching {n} picture{'s' if n != 1 else ''}" if n
+                              else "Picture watch: no picture is on for this macro")
         self.play_bg = bg
         self._refresh()
         diag.info(f"Playing: {workflow.count_events(events)} recorded actions in {len(events)} step(s), speed {speed:g}, "
@@ -1914,7 +1977,7 @@ class MacroRecorder:
         """The result pictures, ready to look for (each at its own size and two others)."""
         matchers = []
         if image_watch is not None and self.settings.get("results_enabled", True):
-            for pic in self.result_pictures:
+            for pic in self._active_result_pictures():
                 # a result title can show at quite another size than when the picture was taken (other
                 # screen or window size), so it's also looked for a quarter smaller and a third bigger
                 base_h = pic["screen_h"] or self.screen_h
@@ -2086,7 +2149,7 @@ class MacroRecorder:
 
     def _prepare_watch_actions(self, watch, play_on):
         """Read the macros that pictures play or switch to, and the pictures that confirm a rejoin."""
-        for n, pic in enumerate(self.watch_pictures, start=1):
+        for n, pic in enumerate(self._active_watch_pictures(), start=1):
             action = pic.get("action", "restart")
             if action in WATCH_NEED_MACRO:
                 if pic.get("macro"):
@@ -2095,7 +2158,7 @@ class MacroRecorder:
                         watch["macros"][pic["macro"]] = steps
                         self.wait_matchers.update(self._make_wait_matchers(steps))
                 elif action != "recover":
-                    raise ValueError(f"{watch_name(pic, n)} has no macro chosen yet (Settings > Picture watch)")
+                    raise ValueError(f"{watch_name(pic, n)} has no macro chosen yet (Picture watch)")
             if action == "recover" and pic.get("confirm_file"):
                 path = os.path.join(watch_dir(), pic["confirm_file"])
                 if os.path.isfile(path):
