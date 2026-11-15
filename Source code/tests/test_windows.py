@@ -1,6 +1,6 @@
-"""Tests for which window stays in front (2.9): a window opened from another stays in front of it;
-of two windows opened from the same one, the one used last is in front. No real input, a throwaway
-settings folder."""
+"""Tests for which window is in front (2.9): the window you switch to comes to the front and stays
+there; after picking a picture from the screen, the window it was picked from is in front again.
+No real input, a throwaway settings folder."""
 import os
 import sys
 import tempfile
@@ -43,8 +43,8 @@ def order():
 
 
 def use(w):
-    """Like clicking it: Windows brings it to the front and gives it the keyboard (Xvfb has no window
-    manager to bring it forward, so that's done here)."""
+    """Like clicking it or Alt+Tab: Windows brings it to the front and gives it the keyboard (Xvfb
+    has no window manager to bring it forward, so that's done here)."""
     w.lift()
     w.focus_force()
     pump(0.3)
@@ -55,47 +55,31 @@ def above(a, b):
     return str(a) in o and str(b) in o and o.index(str(a)) > o.index(str(b))
 
 
-stack = app.window_stack
 use(root)
 app.open_settings("Picture watch")
 pump(0.5)
 sett = app.settings_win
+check("Settings opens in front of the main window", above(sett, root), order())
 use(sett)
 pw = app.open_picture_watch()
 pump(0.5)
-use(pw.win)
-check("Picture watch opened from Settings remembers it", stack.opener_of(str(pw.win)) == str(sett),
-      (stack.opener_of(str(pw.win)), str(sett)))
-check("Settings opened from the main window remembers it", stack.opener_of(str(sett)) == str(root),
-      stack.opener_of(str(sett)))
+check("Picture watch opens in front of Settings", above(pw.win, sett), order())
 use(root)
-check("using the main window: Settings stays in front of it", above(sett, root), order())
-check("...and Picture watch in front of Settings", above(pw.win, sett), order())
+check("switching to the main window: it comes in front and stays there",
+      above(root, sett) and above(root, pw.win), order())
+pump(0.5)
+check("...nothing is pushed back in front of it a moment later", above(root, sett) and above(root, pw.win), order())
 use(sett)
-check("using Settings: Picture watch stays in front of it", above(pw.win, sett), order())
-# a second window opened from Settings: the one used last is in front
-use(sett)
-other = tk.Toplevel(root)
-other.title("Other")
-other.attributes("-topmost", True)  # (like the app's own windows: on Windows the main window is on top)
-pump(0.3)
-use(other)
-check("a second window from Settings remembers it", stack.opener_of(str(other)) == str(sett),
-      stack.opener_of(str(other)))
-check("the one in use is in front of its sibling", above(other, pw.win), order())
+check("switching to Settings: it comes in front of Picture watch", above(sett, pw.win) and above(sett, root), order())
 use(pw.win)
-check("using the first one brings it in front of its sibling", above(pw.win, other), order())
-use(root)
-check("using the main window keeps both in front of Settings", above(pw.win, sett) and above(other, sett), order())
-check("...and the one used last stays in front of its sibling", above(pw.win, other), order())
-# after picking from the screen, the window it was picked from is in front again
+check("switching to Picture watch: it comes in front again", above(pw.win, sett), order())
+# after picking from the screen, the window it was picked from is in front again (not Settings)
 pw.win.withdraw()
 sett.withdraw()
 pump(0.2)
-stack.bring_back([pw.win, sett])
+app.window_stack.bring_back([pw.win, sett])
 pump(0.4)
 check("after picking: Picture watch is in front of Settings again", above(pw.win, sett), order())
-other.destroy()
 pw.close()
 failed = [n for n, ok in results if not ok]
 print(f"\n{len(results) - len(failed)} of {len(results)} passed")
