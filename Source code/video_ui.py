@@ -26,6 +26,79 @@ class VideoMixin:
         "Quality: YouTube's embedded player doesn't let other apps change the quality any more, so "
         "pick it with the gear in the video. Faster and Slower change the playback speed instead.")
 
+    VIDEO_DATA_HELP = (
+        "The video window uses its own copy of Edge, which keeps its own files here (Edge's parts, "
+        "YouTube's cache). They can grow to several hundred MB.\n\n"
+        "Clear… deletes them. Nothing of yours is lost (your video link, keys and window size stay), "
+        "but YouTube asks \"Before you continue\" once more, and the first video after clearing opens "
+        "a bit slower while Edge sets itself up again.")
+
+    def _video_data_dir(self):
+        return os.path.join(os.path.dirname(core.settings_path()), "video_browser")
+
+    @staticmethod
+    def _folder_size(path):
+        total = 0
+        for top, _dirs, files in os.walk(path):
+            for name in files:
+                try:
+                    total += os.path.getsize(os.path.join(top, name))
+                except OSError:
+                    pass
+        return total
+
+    @staticmethod
+    def _size_text(size):
+        if size <= 0:
+            return "empty"
+        mb = size / (1024 * 1024)
+        return f"{mb:.0f} MB" if mb >= 1 else "less than 1 MB"
+
+    def _show_video_data_size(self):
+        """Works out the folder's size on a helper thread (it can hold thousands of files)."""
+        var = getattr(self, "video_data_var", None)
+        if var is None:
+            return
+        var.set("…")
+        folder = self._video_data_dir()
+        self._in_background(lambda: self._folder_size(folder),
+                            lambda size, error: var.set("?" if error else self._size_text(size)))
+
+    def clear_video_data(self):
+        """Settings > Playback > Advanced > Saved browser data > Clear…"""
+        if self.video.is_open():
+            messagebox.showinfo("Video", "Close the video window first, then clear its data.",
+                                parent=self.settings_win)
+            return
+        folder = self._video_data_dir()
+        size = self._folder_size(folder) if os.path.isdir(folder) else 0
+        if size <= 0:
+            messagebox.showinfo("Video", "There's no saved browser data to clear.", parent=self.settings_win)
+            self._show_video_data_size()
+            return
+        if not messagebox.askyesno(
+                "Video", f"Delete the video window's saved browser data ({self._size_text(size)})?\n\n"
+                         "Your video link, keys and window size stay. YouTube asks \"Before you continue\" "
+                         "once more, and the first video after this opens a bit slower.",
+                parent=self.settings_win):
+            return
+        self.video_data_var.set("Clearing…")
+
+        def work():
+            video_overlay.stop_leftover_browser(folder)  # (Edge may still run in the background)
+            shutil.rmtree(folder, ignore_errors=True)
+            return os.path.isdir(folder)
+
+        def done(left, error):
+            if error or left:
+                diag.error("Couldn't clear all of the video window's data", error)
+                messagebox.showwarning("Video", "Some files couldn't be deleted (Edge may still be using "
+                                                "them). Try again in a moment.", parent=self.settings_win)
+            else:
+                diag.info(f"Video window: cleared its browser data ({self._size_text(size)})")
+            self._show_video_data_size()
+        self._in_background(work, done)
+
     def video_keys(self):
         """action -> key id (or None when the action has no key)."""
         saved = self.settings.get("video_keys")

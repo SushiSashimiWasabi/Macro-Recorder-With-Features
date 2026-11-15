@@ -514,7 +514,7 @@ class SettingsWindowMixin:
                      "check_updates", "background_animate", "settings_background_per_page",
                      "app_icon_file", "app_logo_file", "app_logo_same", "record_camera", "pause_when_away",
                      "away_stop_seconds", "switch_to_program", "fit_to", "discord_enabled", "discord_webhook",
-                     "discord_runs", "discord_ping_fragments", "discord_screenshot", "discord_stops", "discord_name",
+                     "discord_runs", "discord_ping_fragments", "discord_screenshot", "discord_shot_size", "discord_stops", "discord_name",
                      "discord_ping", "discord_ping_when", "discord_capture", "discord_title", "discord_content",
                      "discord_message", "results_enabled", "drops_enabled", "simplify_moves",
                      "game_closed", "auto_stop", "vary", "discord_summary", "discord_live")
@@ -686,6 +686,7 @@ class SettingsWindowMixin:
                 (self.discord_runs_var, bool(s.get("discord_runs", True))),
                 (self.discord_ping_drop_var, bool(s.get("discord_ping_fragments", False))),
                 (self.discord_shot_var, bool(s.get("discord_screenshot", True))),
+                (self.discord_size_var, SHOT_SIZE.get(s.get("discord_shot_size"), SHOT_SIZE["sharp"])),
                 (self.discord_stop_var, bool(s.get("discord_stops", True))),
                 (self.watch_limit_var, core.int_setting(s, "watch_limit_count", 10, 0, 1000)),
                 (self.watch_limit_s_var, core.int_setting(s, "watch_limit_seconds", 60, 1, 3600)),

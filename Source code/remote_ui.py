@@ -15,7 +15,8 @@ import webbrowser
 
 from ui_common import *  # noqa: F401,F403  (colours, fonts, widgets, tk, core, the other modules)
 
-import discord_remote
+import lazy
+discord_remote = lazy.module("discord_remote")  # (loaded when the phone remote is first used)
 
 DEVELOPER_PAGE = "https://discord.com/developers/applications"
 
@@ -84,14 +85,14 @@ class RemoteMixin:
         self.remote_token_var = tk.StringVar(value=str(s.get("remote_token", "")))
         self.remote_status_var = tk.StringVar(value="")
         self.remote_code_var = tk.StringVar(value=self._shown_code())
-        self.remote = discord_remote.Remote(
+        self.remote = lazy.LazyObject(lambda: discord_remote.Remote(
             get_token=lambda: str(self.settings.get("remote_token", "")) if self.settings.get("remote_enabled") else "",
             handle=self._remote_handle,
             on_status=lambda ok, text, info=None: self._call_ui(lambda: self._remote_status(ok, text, info)),
             commands=COMMANDS, presence=self._remote_presence,
             registered_key=lambda: self.settings.get("remote_commands_key"),
             on_registered=lambda key: self._call_ui(lambda: self._remote_registered(key)),
-            log=diag.info)
+            log=diag.info), idle={"stop": lambda *a, **k: None, "running": lambda: False})
         self._remote_restart()
 
     @staticmethod
@@ -441,7 +442,7 @@ class RemoteMixin:
         if name == "screenshot":
             R.respond(it, R.DEFER_REPLY)
             diag.info("Phone remote: screenshot")
-            picture = discord_notify.encode(self._screenshot())
+            picture = discord_notify.encode(self._screenshot(), size=self.settings.get("discord_shot_size", "sharp"))
             if picture:
                 R.edit_reply(it, {"content": "Screenshot at " + time.strftime("%H:%M:%S")}, picture)
             else:

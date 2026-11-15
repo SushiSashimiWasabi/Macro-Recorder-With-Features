@@ -72,7 +72,8 @@ class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, PictureWatchMixin, Setting
         self.name_var = tk.StringVar(value="")  # empty until a macro is opened or saved
         self.old_macro_var = tk.StringVar(value="")  # the yellow note for macros recorded before 2.6
         self.sounds_var = tk.BooleanVar(value=bool(s.get("sounds", True)))
-        self.player = sounds.Player()
+        # (these are made the first time they're used, so their parts aren't loaded at start)
+        self.player = lazy.LazyObject(lambda: sounds.Player(), idle={"stop": lambda *a, **k: None})
         self.last_sound = 0.0
         root.bind_all("<Button-1>", self._click_sound, add="+")
         self.volume_var = tk.IntVar(value=sounds.volume_number(s.get("sound_volume", sounds.DEFAULT_VOLUME)))
@@ -106,6 +107,7 @@ class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, PictureWatchMixin, Setting
         self.discord_runs_var = tk.BooleanVar(value=bool(s.get("discord_runs", True)))
         self.discord_ping_drop_var = tk.BooleanVar(value=bool(s.get("discord_ping_fragments", False)))
         self.discord_shot_var = tk.BooleanVar(value=bool(s.get("discord_screenshot", True)))
+        self.discord_size_var = tk.StringVar(value=SHOT_SIZE.get(s.get("discord_shot_size"), SHOT_SIZE["sharp"]))
         self.discord_stop_var = tk.BooleanVar(value=bool(s.get("discord_stops", True)))
         self.discord_name_var = tk.StringVar(value=str(s.get("discord_name", "Macro Recorder")))
         self.discord_ping_var = tk.StringVar(value=str(s.get("discord_ping", "")))
@@ -126,9 +128,10 @@ class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, PictureWatchMixin, Setting
         self.discord_status_var = tk.StringVar(value="")
         self.discord_status_var.trace_add("write", lambda *a: self.root.after_idle(self._settings_text_changed))
         # (reads the saved settings, not the boxes: it's also used from the playback thread)
-        self.notifier = discord_notify.Notifier(
+        self.notifier = lazy.LazyObject(lambda: discord_notify.Notifier(
             lambda: str(self.settings.get("discord_webhook", "")) if self.settings.get("discord_enabled") else "",
-            on_result=lambda ok, text: self._call_ui(lambda: self.discord_status_var.set(text)))
+            on_result=lambda ok, text: self._call_ui(lambda: self.discord_status_var.set(text)),
+            shot_size=lambda: self.settings.get("discord_shot_size", "sharp")))
         # the YouTube video window over the game
         self.video_var = tk.StringVar(value=str(s.get("video_link", "")))
         self.video_through_var = tk.StringVar(
@@ -139,9 +142,12 @@ class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, PictureWatchMixin, Setting
             dark_title_bar(win)
             if getattr(self, "icon_img", None) is not None:
                 win.iconphoto(False, self.icon_img)
-        self.video = video_overlay.make_overlay(
-            os.path.join(os.path.dirname(core.settings_path()), "video_browser"), root=root,
-            on_closed=lambda: self._video_closed(), setup_window=setup_video_window)
+        video_dir = os.path.join(os.path.dirname(core.settings_path()), "video_browser")
+        self.video = lazy.LazyObject(
+            lambda: video_overlay.make_overlay(video_dir, root=root, on_closed=lambda: self._video_closed(),
+                                               setup_window=setup_video_window),
+            idle={"is_open": lambda: False, "close": lambda *a, **k: None, "rect": None, "click_through": False,
+                  "error": ""})
         r = s.get("video_rect")
         if isinstance(r, list) and len(r) == 4 and all(isinstance(v, int) for v in r):
             self.video.rect = tuple(r)
@@ -455,6 +461,8 @@ class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, PictureWatchMixin, Setting
             s["discord_runs"] = bool(self.discord_runs_var.get())
             s["discord_ping_fragments"] = bool(self.discord_ping_drop_var.get())
             s["discord_screenshot"] = bool(self.discord_shot_var.get())
+            s["discord_shot_size"] = next((k for k, v in SHOT_SIZE.items() if v == self.discord_size_var.get()),
+                                          "sharp")
             s["discord_stops"] = bool(self.discord_stop_var.get())
             s["discord_name"] = self.discord_name_var.get().strip()[:80]
             s["discord_ping"] = self.discord_ping_var.get().strip()

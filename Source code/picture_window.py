@@ -532,6 +532,8 @@ class PictureWatchWindow:
                                    disabledbackground=BG, disabledforeground=MUTED)
         self.name_entry.pack(side="left", fill="x", expand=True, ipady=4)
         self.name_var.trace_add("write", lambda *a: self._name_typed())
+        # grey hint in the empty box: it says the name goes here (gone once you type)
+        self.name_hint = entry_hint(self.name_entry, self.name_var, self._name_hint_text)
         self.btn_apply = ttk.Button(top, text="Apply", width=8, command=self.apply)
         self.btn_reset = ttk.Button(top, text="Reset", width=8, command=self.reset)
         self.btn_redo = ttk.Button(top, text="Redo", width=8, command=self.redo)
@@ -854,6 +856,15 @@ class PictureWatchWindow:
             self.name_var.set(g.get("name", ""))
             self.name_entry.config(state="disabled" if g.get("builtin") else "normal")
         self.filling_name = False
+        self.name_hint()
+
+    def _name_hint_text(self):
+        """The grey hint's words, or "" (no hint) while the window is still loading its pictures."""
+        if getattr(self, "pics", None) is None:
+            return ""
+        if self._pic(getattr(self, "sel_pic", None)) is not None:
+            return "Type a name for this picture (like Retry button)"
+        return "Type a name for this group"
 
     def _name_typed(self):
         if self.filling_name or str(self.name_entry.cget("state")) == "disabled":

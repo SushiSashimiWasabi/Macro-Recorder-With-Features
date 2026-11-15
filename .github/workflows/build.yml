@@ -25,6 +25,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+          cache: pip  # (downloads kept between runs: quicker)
+          cache-dependency-path: "Source code/requirements.txt"
       - name: Run the tests
         shell: cmd
         run: |
@@ -40,6 +42,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+          cache: pip  # (downloads kept between runs: quicker)
+          cache-dependency-path: "Source code/requirements.txt"
       - name: Build the folder build (zip) and the one-file MacroRecorder.exe
         shell: cmd
         run: |
@@ -47,7 +51,8 @@ jobs:
           py -m PyInstaller --noconfirm --clean "Source code\MacroRecorder_win.spec" || exit /b 1
           tar -a -c -f MacroRecorder-Windows.zip -C dist\MacroRecorder MacroRecorder.exe _internal || exit /b 1
           set MR_ONEFILE=1
-          py -m PyInstaller --noconfirm --clean "Source code\MacroRecorder_win.spec" || exit /b 1
+          rem (no --clean: reuses the folder build's work, only the exe is packed differently)
+          py -m PyInstaller --noconfirm "Source code\MacroRecorder_win.spec" || exit /b 1
           copy /y dist\MacroRecorder.exe MacroRecorder.exe || exit /b 1
       - uses: actions/upload-artifact@v4
         with:
@@ -114,6 +119,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+          cache: pip  # (downloads kept between runs: quicker)
+          cache-dependency-path: "Source code/requirements.txt"
       - name: Build MacroRecorder.app
         run: bash build_mac.sh
       - name: Zip it (keeps the app bundle intact)

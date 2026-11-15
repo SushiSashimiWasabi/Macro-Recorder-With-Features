@@ -2397,6 +2397,7 @@ class MacroRecorder:
                     # check about once a second; when a check is slow, rest at least as long as it
                     # took, so watching never uses more than about half of one CPU core
                     took = time.perf_counter() - started
+                    self._note_look("Picture watch", took)
                     done.wait(max(0.3, 1.0 - took, took))
         except Exception:
             pass  # screenshots don't work here: playback just goes on without watching
@@ -2419,6 +2420,9 @@ class MacroRecorder:
             if "gdi" in h:
                 parts.append(f"GDI {h['gdi']}, USER {h['user']}")
             diag.info("Health: " + ", ".join(parts))
+            looks = self._look_summary()
+            if looks:
+                diag.info(f"Picture checks (last {HEALTH_EVERY // 60} min): " + looks)
 
     def _watch_look_area(self, m, i, checks):
         """Where Picture watch searches for picture i on this check (besides around where it was
@@ -2456,6 +2460,7 @@ class MacroRecorder:
         self.held_lists = (held_keys, held_buttons)
         window_tools.set_thread_priority(1)  # playback goes before the screen checks
         window_tools.keep_awake(True)  # no sleep or screen-off during long waits (let go of below)
+        self._look_summary()  # (the health line's picture-check times start from this run)
         seen = threading.Event()  # a watched-for picture showed up
         watch_done = threading.Event()
         # count: finished runs; restarts: when a picture did its action (for the runaway limit);
@@ -2738,19 +2743,76 @@ class MacroRecorder:
 
     def _shows(self, matcher, need, wait=0.0):
         """Whether a picture is on screen now; looks again for up to `wait` seconds until it is."""
+        return self._look_until(matcher, need, True, wait, 0.5, "recovery")
+
+    def _look_until(self, matcher, need, want, wait, every, kind):
+        """Looks for a picture until it shows (want True) or is gone (want False), for up to `wait`
+        seconds: True when that happened, else False.
+
+        Light, like Wait for a picture: around the spot where it was last found first, its whole area
+        only every other look (and always on the first and the last look, since only a whole look can
+        say it's gone), every size only on the first look. A disconnect picture is only looked for in
+        the middle of the screen (it only counts there). It rests at least as long as a look took."""
+        need = getattr(matcher, "need", need)  # (its own Match %, if it has one)
+        pic = getattr(matcher, "picture_entry", None) or {}
+        area = None
+        if pic.get("action") == "recover":
+            area = self._watch_look_area(matcher, 0, 0)
         deadline = time.perf_counter() + wait
-        while True:
-            try:
-                screen = self._hide_own_window(image_watch.grab_screen(), image_watch.screen_origin())
-                score, _ = matcher.find(screen, good_enough=need)
-            except Exception as exc:
-                diag.error("Couldn't check a picture", exc)
-                score = 0.0
-            if score >= need:
-                return True
-            if time.perf_counter() >= deadline or self.stop_play.is_set():
-                return False
-            self.stop_play.wait(0.5)
+        looks = 0
+        with image_watch.mss.mss() as sct:
+            origin = image_watch.screen_origin(sct)
+            while True:
+                started = time.perf_counter()
+                last = started >= deadline
+                whole = matcher.last_rect is None or looks % 2 == 0 or last
+                first = looks == 0
+                looks += 1
+                visible = None  # (not known: only around the last spot was looked at)
+                try:
+                    region = area if whole else matcher.near_last_area()
+                    screen = self._hide_own_window(image_watch.grab_screen(sct, region), origin)
+                    score, rect = matcher.find_near_last(screen, good_enough=need)
+                    if score < need and whole:
+                        score, rect = matcher.find(screen, good_enough=need,
+                                                   quick=not first and matcher.last_rect is not None, area=area)
+                    if score >= need and self._watch_match_ok(pic, score, rect, need):
+                        visible = True
+                    elif whole:
+                        visible = False
+                except Exception as exc:
+                    diag.error("Couldn't check a picture", exc)
+                    visible = False if whole else None
+                took = time.perf_counter() - started
+                self._note_look(kind, took)
+                if visible is not None and visible == want:
+                    return True
+                if last or self.stop_play.is_set():
+                    return False
+                self.stop_play.wait(max(every, took))
+
+    _look_lock = threading.Lock()
+
+    def _note_look(self, kind, seconds):
+        """Counts how long a picture look took, for the health line in the log."""
+        with self._look_lock:
+            stats = self.__dict__.setdefault("look_stats", {})
+            s = stats.setdefault(kind, [0, 0.0, 0.0])
+            s[0] += 1
+            s[1] += seconds
+            s[2] = max(s[2], seconds)
+
+    def _look_summary(self):
+        """"Picture watch 1800 looks, 6 ms on average, slowest 120 ms; ..." since the last call."""
+        with self._look_lock:
+            stats = self.__dict__.pop("look_stats", {})
+        parts = []
+        for kind in ("Picture watch", "results", "wait for a picture", "if/retry", "recovery"):
+            s = stats.get(kind)
+            if s and s[0]:
+                parts.append(f"{kind} {s[0]} looks, {s[1] / s[0] * 1000:.0f} ms on average, "
+                             f"slowest {s[2] * 1000:.0f} ms")
+        return "; ".join(parts)
 
     def _recovery_event(self, kind, text):
         """A disconnect screen showed ("lost"), the game is back ("back") or it couldn't be got back
@@ -2986,6 +3048,7 @@ class MacroRecorder:
                             s["since"] = None
                         s["first"] = False
                     took = time.perf_counter() - started
+                    self._note_look("results", took)
                     done.wait(max(0.5, 1.5 - took, took))
         except Exception as exc:
             diag.error("Result pictures: watching the screen failed", exc)
@@ -3199,22 +3262,7 @@ class MacroRecorder:
         if matcher is None:
             return not condition.get("shows", True)
         need = max(0.5, min(0.99, condition.get("match", 85) / 100.0))
-        deadline = time.perf_counter() + wait
-        while True:
-            try:
-                screen = self._hide_own_window(image_watch.grab_screen(), image_watch.screen_origin())
-                score, _ = matcher.find(screen, good_enough=need, quick=matcher.last_rect is not None)
-                if score < need and matcher.last_rect is None:
-                    score, _ = matcher.find(screen, good_enough=need)
-            except Exception as exc:
-                diag.error("Couldn't check a condition's picture", exc)
-                score = 0.0
-            shows = score >= need
-            if shows == bool(condition.get("shows", True)):
-                return True
-            if time.perf_counter() >= deadline or self.stop_play.is_set():
-                return False
-            self.stop_play.wait(0.25)
+        return self._look_until(matcher, need, bool(condition.get("shows", True)), wait, 0.25, "if/retry")
 
     def _run_finished(self, count, how):
         """One run of the macro is over (how: "end" = it played to the end, "picture" = picture watch).
@@ -3645,6 +3693,7 @@ class MacroRecorder:
                 except Exception as exc:
                     diag.error("Wait for a picture: screenshot failed", exc)
                     score, rect = 0.0, None
+                self._note_look("wait for a picture", time.perf_counter() - started)
                 if score >= need and rect is not None:
                     x, y, w, h = rect
                     found = (origin[0] + x + w // 2, origin[1] + y + h // 2)

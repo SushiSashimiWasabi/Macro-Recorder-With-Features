@@ -512,6 +512,50 @@ if os.path.isfile(box):
     check("built-in Disconnected: found on the real box, in the middle",
           score > 0.95 and app._watch_match_ok(pic, score, rect, 0.8), (round(score, 3), rect))
 
+    # the recovery's "is the box still there / gone?" checks (and If/Retry) are light: the middle only for
+    # a disconnect picture, a rest between looks, and only a whole look can say it's gone
+    app.screen_w, app.screen_h = 2560, 1440
+    blank = np.full((1440, 2560, 3), 60, np.uint8)
+    shown = {"img": screen}
+    regions = []
+
+    def fake_grab(sct=None, region=None):
+        regions.append(region)
+        return shown["img"].copy()
+    real_grab = image_watch.grab_screen
+    image_watch.grab_screen = fake_grab
+    app.stop_play.clear()
+    m = image_watch.Matcher(pic["img"], picked_screen_h=1440, ignore_background=True, screen_h=1440)
+    m.picture_entry = pic
+    app._look_summary()
+    real_shows = lambda *a, **k: core.MacroRecorder._shows(app, *a, **k)
+    seen_now = real_shows(m, 0.8, wait=0)
+    check("recovery check: the box is seen (one look)", seen_now and len(regions) == 1)
+    r = regions[0]
+    check("recovery check: a disconnect picture is only looked for in the middle",
+          r is not None and r[0] > 500 and r[2] < 2060 and r[1] > 200 and r[3] < 1240, r)
+    shown["img"] = blank
+    regions.clear()
+    check("recovery check: the box gone is noticed", not real_shows(m, 0.8, wait=0))
+    check("gone check: wanting it gone says yes on a screen without it",
+          app._look_until(m, 0.8, False, 0, 0.5, "recovery"))
+    shown["img"] = screen
+    began = time.perf_counter()
+    gone = app._look_until(m, 0.8, False, 1.0, 0.25, "if/retry")
+    took = time.perf_counter() - began
+    check("gone check: a box still there is never called gone (only seen ones, up to the time limit)",
+          not gone and 0.9 < took < 3.0, round(took, 2))
+    shown["img"] = blank
+    regions.clear()
+    began = time.perf_counter()
+    app._look_until(m, 0.8, True, 1.2, 0.5, "recovery")
+    check("waiting check: rests between looks (about 2 a second, not as fast as it can)",
+          2 <= len(regions) <= 5, len(regions))
+    summary = app._look_summary()
+    check("health line: picture-check times are counted", "recovery" in summary and "if/retry" in summary, summary)
+    check("health line: counts start again after each line", app._look_summary() == "")
+    image_watch.grab_screen = real_grab
+
 failed = [n for n, ok in results if not ok]
 print(f"\n{len(results) - len(failed)} of {len(results)} passed")
 app.flush_settings() if hasattr(app, "flush_settings") else None

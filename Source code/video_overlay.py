@@ -727,6 +727,22 @@ class MacVideoOverlay:
             self.server = None
 
 
+def stop_leftover_browser(profile_dir, wait=3.0):
+    """Ends an Edge/Chrome that is still running in the background with this profile (it keeps its
+    files open), so the profile folder can be deleted. Windows only."""
+    if not IS_WIN:
+        return
+    h = _u.FindWindowW("Chrome_MessageWindow", os.path.normpath(profile_dir))
+    pid = _window_pid(h) if h else None
+    if not pid:
+        return
+    subprocess.call(["taskkill", "/T", "/F", "/PID", str(pid)], stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL, creationflags=0x08000000)
+    end = time.time() + wait
+    while _u.FindWindowW("Chrome_MessageWindow", os.path.normpath(profile_dir)) and time.time() < end:
+        time.sleep(0.1)
+
+
 def make_overlay(profile_dir, root=None, on_closed=None, setup_window=None):
     """The right video window for this computer (Windows: VideoOverlay, unchanged)."""
     if IS_MAC:

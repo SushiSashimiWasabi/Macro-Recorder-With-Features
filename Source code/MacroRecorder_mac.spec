@@ -11,7 +11,7 @@ a = Analysis(
            (os.path.join(here, "completed_default.png"), "."),
            (os.path.join(here, "failed_default.png"), "."),
            (os.path.join(here, "disconnected_default.png"), ".")],
-    hiddenimports=["image_watch", "lazy", "pynput.keyboard._darwin", "pynput.mouse._darwin", "WebKit", "AppKit", "Foundation", "certifi"],
+    hiddenimports=["image_watch", "lazy", "discord_notify", "discord_remote", "sounds", "text_styles", "updater", "video_overlay", "pynput.keyboard._darwin", "pynput.mouse._darwin", "WebKit", "AppKit", "Foundation", "certifi"],
 )
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="MacroRecorder", console=False)

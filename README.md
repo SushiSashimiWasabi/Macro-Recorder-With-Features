@@ -86,7 +86,8 @@ countdown before recording starts (Settings > Recording > Countdown; press Recor
 then "Recording" with the time and the number of actions.
 
 **Video over the game:** paste a YouTube video link into the **Video** row (under Saved macros)
-and click **Show**. Playlists aren't supported, only single videos (the red note under the row). The video plays with sound in a small window that always stays on
+and click **Show**. Playlists aren't supported, only single videos (the red note under the row; a switch on
+the row hides it). The video plays with sound in a small window that always stays on
 top of the game. Move it by its title bar and resize it by dragging its edges; it remembers its size
 and place. While a macro records or plays, clicks go straight through it and it never takes the
 keyboard, so the macro isn't affected (pause the macro to use the video's own buttons). **Close**
@@ -98,6 +99,8 @@ You can't open a video while a macro is running; open it first.
 (the number pad at first) skip 10 seconds back or forward, change the volume, mute, pause, change
 the speed, and go to the next or previous video you showed before, without touching the mouse. They
 aren't recorded. YouTube's player doesn't let apps change the quality; use the gear in the video.
+**Saved browser data** (same place) shows how much the video window's own copy of Edge keeps (it can
+grow to several hundred MB) and **Clear...** deletes it; YouTube then asks "Before you continue" once more.
 
 **Pausing playback:** press the pause key while a macro plays. It lets go of any keys and buttons
 it's holding and waits; press it again to carry on from the same spot.
@@ -110,7 +113,7 @@ it's holding and waits; press it again to carry on from the same spot.
   the game isn't in front**, Screen size with **Fit clicks to**, and under Advanced: Play into and the
   video window.
 - **Discord:** messages in your own Discord channel while a macro runs (see below).
-- **Picture watch:** see below.
+- **Picture watch:** opens the Picture watch window (see below).
 - **Background:** put your own picture behind the window, also an animated `.gif`. **Add...** saves a picture (up to 5),
   and the **◀ ▶** arrows switch between your saved pictures (or none, the plain dark window).
   **Darkness** keeps text readable, **Fit** fills the window or shows the whole picture, and
@@ -142,7 +145,7 @@ picture**, **If** / **Repeat** / **Retry** groups, **Start over**, **Stop** and 
 and mouse...** records straight into the macro, and **Insert another macro...** copies a saved
 macro's actions in; both ask where they go (the start, after the chosen action or the end).
 **Duplicate**, **Remove** and **More** (move, copy / paste, group, ungroup, turn off) show once you
-pick an action. The macro's name box renames its file. **Undo**, **Redo**, **Reset** and **Apply**
+pick an action. The macro's name box renames its file (a grey hint says so while it's empty). **Undo**, **Redo**, **Reset** and **Apply**
 light up once something changed.
 
 A recorded part has **Edit the recorded events...**: every recorded action with its time. Select
@@ -164,9 +167,9 @@ macro plays, if another window comes in front of the game (a pop-up, Discord), t
 every key and pauses; click back into the game and it carries on. **Stop after waiting** ends it if
 the game stays away that long (0 = keep waiting).
 
-**Results (wins and losses):** Settings > Results has pictures that mean a run was won (the built-in
-gold MISSION COMPLETED title, or your own) or lost (add your own MISSION FAILED picture with **Add from
-screen...** while it shows). While a macro plays, each run counts as won, lost or unknown. The timer
+**Results (wins and losses):** the built-in MISSION COMPLETED and MISSION FAILED pictures (Picture
+watch, group AOT:R) say whether a run was won or lost; Settings > Results keeps the run stats and the
+divine fragment count. While a macro plays, each run counts as won, lost or unknown. The timer
 at the top shows the count, Settings > Results shows the last session and all-time totals, and the
 Discord card has the streak, win rate, completed/runs, failed/runs and run times.
 
@@ -176,6 +179,8 @@ you get a results card, and a short summary when playback stops. Choose the name
 ping (`@everyone`, `<@your user ID>`) and when (every message, only failed runs and stops, or never; **Ping when a divine fragment
 drops** pings you on that run's card too),
 and what the screenshot shows (main screen, all screens, the game's window or any program's window).
+**Screenshot size:** Sharp (up to 1600 pixels wide) or Smaller (about half the upload, handy for long
+nights; small text may be harder to read).
 **Edit the message...** opens its own window (resize it by its edges; it remembers its size): the
 line above the card, the title and the text, with Discord's formatting buttons (bold, italic,
 underline, strike, heading, code, spoiler), letter styles (𝐁𝐨𝐥𝐝, 𝓒𝓾𝓻𝓼𝓲𝓿𝓮, 𝕲𝖔𝖙𝖍𝖎𝖈, Ｗｉｄｅ, ...),
@@ -194,9 +199,9 @@ what's new once (also in Settings > About).
 
 ## Screen size (play a macro on a different resolution)
 
-**Some macros were recorded in fullscreen, so those only work in fullscreen** (play the game
-fullscreen, on the main screen). The app itself works properly in windowed mode too: a macro
-recorded in a window plays back fine in the same window.
+The app works in fullscreen and in a window. Macros recorded before 2.6 don't know their game's
+window, so a short yellow note shows when you open one: in a window, its clicks may miss (play those
+in fullscreen, on the main screen).
 
 The **Screen size** box (Settings > Playback) has two choices:
 - **Macro recorded at:** the screen size the macro was recorded on. It's filled in by itself for
@@ -231,32 +236,32 @@ game's RETRY button (a picture built into the .exe), with Repeat continuously on
 their own macro and press Play. If they remove the picture, **Add built-in RETRY** puts it back.
 It was taken on a 1080p screen; on other screen sizes it's resized to match.
 
-These options are in **Settings > Picture watch**. To use your own pictures instead:
+**The Picture watch window** (Settings > Picture watch > **Open Picture watch...**, or **Picture watch**
+at the bottom of the main window) is made like the Edit window: groups on the left, the group's
+pictures in the middle, the chosen picture's options on the right. Nothing is used until **Apply**;
+**Undo**, **Redo** and **Reset** work on everything in it.
 
-1. Get the picture on screen (for example finish a mission so the banner shows).
-2. Click **Add from screen...**. The screen freezes; drag a box around the picture. For a banner,
-   box just the text and the line under it. Esc cancels. (Or use **Add picture file...** for a saved
-   PNG/JPG.) Add as many pictures as you like, for example one for Completed and one for Failed;
-   **Remove** takes one off the list.
-3. Click **Test now** while a picture is showing, and again while it isn't. It lists a score per
-   picture. The one showing should be
-   well above the **Match** percentage and the second well below. 80% suits most pictures.
-4. Tick **While playing, start the macro over...** and set:
-   - **When it shows: click on it:** clicks the middle of the picture as soon as it's seen. Use this
-     with a button, like the Retry button at the end of a mission. A small picture of just the
-     button (or just its word, "RETRY", so a changing vote count doesn't matter) works best.
-   - **wait N s:** time for the game to load before the macro starts again.
-   - **If the macro ends before the picture shows, wait up to N s for it:** if the macro finishes
-     its steps first, it waits this long for the picture, then starts over anyway.
-   - **Ignore the background:** only match the bright parts of the picture (text, lines) and the
-     pixels right around them, so a different scene behind the banner doesn't matter. Leave it on.
+- **Groups:** **General** holds the options for every picture (Match %, Ignore the background, the
+  safety limit, Shift Lock, saving pictures inside macros). **AOT:R** holds the built-in pictures
+  (RETRY, Disconnected, MISSION COMPLETED, MISSION FAILED), each with an ⓘ that says what it's for.
+  **My pictures** and groups you make (**New group**) hold your own. A green dot means on, red off,
+  grey: on, but its group is off. Built-in pictures are on only in AOT:R; a copy in another group
+  starts off.
+- **Adding:** **Add from screen...** freezes the screen so you drag a box around the picture (Esc
+  cancels); **Picture file...** takes a saved PNG/JPG; **Add built-in** adds a copy of a built-in one.
+  A small, distinctive part works best (just the word "RETRY" rather than the whole button). A note
+  warns when a picture is big, as big pictures can match game screens by mistake.
+- **Name:** type it in the box at the top (a grey hint says so while it's empty).
+- **What it does** when it shows: start the macro over, play another macro and then start over,
+  switch to another macro, skip to the next step, press a key, wait, stop, or for the Disconnected
+  box: play your rejoin macro and go on. Each picture can also **click on it**, have a cooldown,
+  "only when this other picture also shows", and its own Match % and Ignore the background.
+- **For which macros:** all macros, or only the ones you tick.
+- **Test now** lists a score per picture: the one showing should be well above its Match %, the
+  others well below. 80% suits most pictures.
+- **Move to group**, **Duplicate** and **Remove** work on the chosen picture.
 
-   - **Safety limit:** if the picture starts the macro over more than this many times in that many
-     seconds (10 in 60 at first), something is stuck, so the macro stops and says why. 0 = no limit.
-   - **Press Shift if the mouse pointer is hidden:** before clicking, frees the mouse from Roblox's
-     Shift Lock so the click lands on the button.
-   - **Save these pictures inside the macros you save:** a friend who opens your macro is asked
-     whether to add its pictures, so they get your Retry picture too.
+When you press Play, the status line says how many pictures are watched for that macro.
 
 Each time the picture shows counts as one finished run for **Repeat**. After it has been seen, it
 must go away before it can count again, so a results screen that stays up doesn't restart the macro

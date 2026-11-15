@@ -157,6 +157,36 @@ check("window: Redo does it again", w._pic(first["_uid"]).get("on") is False and
 w.reset()
 check("window: Reset: as when it opened", not w.changed())
 
+# the grey hint in the name box
+hint = w.name_entry.winfo_children()[0]
+w.select_group("general")
+pump(0.1)
+check("name hint: not on General (the box is greyed out)", not hint.winfo_ismapped())
+w.select_group("aotr")
+w.pics_tree.selection_set(w.pics_tree.get_children()[0])
+pump(0.1)
+check("name hint: not shown while the picture has a name", not hint.winfo_ismapped())
+w.name_var.set("")
+pump(0.1)
+check("name hint: shown in the empty box, about the picture",
+      hint.winfo_ismapped() and hint.cget("text").startswith("Type a name for this picture")
+      and w.name_var.get() == "", hint.cget("text"))
+w.name_var.set("R")
+pump(0.1)
+check("name hint: gone with the first letter typed", not hint.winfo_ismapped() and w.name_var.get() == "R")
+w.reset()
+pump(0.1)
+check("name hint: Reset puts the name back, no hint", not hint.winfo_ismapped() and not w.changed())
+w.select_group("general")
+w.select_group("aotr")
+pump(0.1)
+check("name hint: never changes anything by itself", not w.changed())
+saved_pics = w.pics
+del w.pics
+check("name hint: no error while the window is still loading its pictures (2.9 preview bug)",
+      w._name_hint_text() == "")
+w.pics = saved_pics
+
 # a new group, named in the box at the top
 w.new_group()
 pump(0.1)

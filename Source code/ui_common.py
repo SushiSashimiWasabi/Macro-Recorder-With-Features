@@ -29,21 +29,24 @@ from tkinter import messagebox as _tk_messagebox
 
 import backdrop
 import diag
-import discord_notify
 import icon_picture
 import importers
 import macro_recorder as core
 import platform_keys
-import sounds
 import stats
-import text_styles
-import video_overlay
 import window_tools
 import macro_steps as workflow
 from macro_recorder import (HOTKEY_ACTIONS, IS_MAC, IS_WIN, SCREEN_TARGET, SPEED_PRESETS, background,
                             format_speed, hotkey_name, image_watch, parse_speed)
 
-import updater
+import lazy
+# loaded the first time they're used, so the window shows sooner (they bring the network and
+# web server parts along; most of them aren't needed in the first seconds or at all)
+discord_notify = lazy.module("discord_notify")
+sounds = lazy.module("sounds")
+text_styles = lazy.module("text_styles")
+video_overlay = lazy.module("video_overlay")
+updater = lazy.module("updater")
 from version import APP_VERSION, HISTORY, WHATS_NEW
 
 # ---------------------------------------------------------------- look
@@ -515,6 +518,7 @@ VIDEO_THROUGH = ("While recording or playing", "Always")  # when clicks go throu
 VIDEO_HINT = "Paste a YouTube video or playlist link"
 SETTINGS_PAGES = ("General", "Recording", "Playback", "Picture watch", "Results", "Background", "Sounds",
                   "Discord", "About")
+SHOT_SIZE = {"sharp": "Sharp", "smaller": "Smaller (about half the upload)"}
 PING_WHEN = {"always": "Every message", "problems": "Only failed runs and stops", "never": "Never"}
 CAPTURE_CHOICES = {"screen": "Main screen", "all": "All screens", "game": "The game's window",
                    "program": "A program's window:"}
@@ -960,6 +964,42 @@ def hover_text(widget, full):
     widget.bind("<Leave>", hide, add="+")
     widget.bind("<Destroy>", hide, add="+")
     return widget
+
+
+def entry_hint(entry, var, text, size=12):
+    """A grey hint shown over an empty text box (like "Type a name for this picture"). It goes away
+    with the first letter typed and comes back when the box is emptied; it never shows while the box
+    is greyed out. The hint is laid over the box, not typed into it, so the box's text (a name) stays
+    empty and nothing counts as changed. text: the words, or a function giving them.
+
+    Returns update(): call it after the box was greyed out or turned back on."""
+    hint = tk.Label(entry, text="", fg=MUTED, font=(FAMILY, size), bd=0, padx=0, pady=0, anchor="w",
+                    cursor="xterm")
+
+    def update(*_a):
+        try:
+            words = text() if callable(text) else text
+            show = bool(words) and not var.get() and str(entry.cget("state")) != "disabled"
+            if show:
+                hint.config(text=words, bg=entry.cget("bg"))
+                hint.place(x=3, rely=0.5, anchor="w")
+            else:
+                hint.place_forget()
+        except Exception:  # (the window is closing, or isn't ready yet): no hint
+            try:
+                hint.place_forget()
+            except tk.TclError:
+                pass
+
+    def focus_box(_e=None):
+        if str(entry.cget("state")) != "disabled":
+            entry.focus_set()
+            entry.icursor("end")
+        return "break"
+    hint.bind("<Button-1>", focus_box)
+    var.trace_add("write", update)
+    entry.after_idle(update)
+    return update
 
 
 class WindowStack:

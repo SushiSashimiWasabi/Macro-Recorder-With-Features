@@ -802,6 +802,13 @@ class SettingsPagesMixin:
                           command=lambda v: self._video_opacity())
         scale.pack(side="right")
         scale.bind("<ButtonRelease-1>", lambda e: self._save_settings())
+        row = self._row(f, "Saved browser data", info=self.VIDEO_DATA_HELP)
+        ttk.Button(row, text="Clear…", command=self.clear_video_data).pack(side="right")
+        self.video_data_var = tk.StringVar(value="")
+        tk.Label(row, textvariable=self.video_data_var, bg=BG, fg=MUTED, font=F_SMALL).pack(side="right",
+                                                                                          padx=(0, 10))
+        self.video_data_var.trace_add("write", lambda *a: self.root.after_idle(self._settings_text_changed))
+        self._show_video_data_size()
 
     SWITCH_HELP = (
         "A macro remembers the game it was recorded in (like Roblox). When you press Play in this "

@@ -73,6 +73,18 @@ check("opens the open macro", ed.entries[ed.current][1] == p1 and len(ed.steps) 
 check("nothing changed: Apply, Reset, Undo, Redo off",
       all(str(b.cget("state")) == "disabled" for b in (ed.btn_apply, ed.btn_reset, ed.btn_undo, ed.btn_redo)))
 check("no Duplicate / Remove / More before something is chosen", not ed.btn_dup.winfo_ismapped())
+name_hint = ed.name_entry.winfo_children()[0]
+check("name hint: not shown while the macro has a name", not name_hint.winfo_ismapped())
+before_name = ed.name_var.get()
+ed.name_var.set("")
+pump()
+check("name hint: shown in the empty name box", name_hint.winfo_ismapped()
+      and name_hint.cget("text") == "Type a name for this macro" and ed.name_var.get() == "")
+ed.name_var.set("x")
+pump()
+check("name hint: gone with the first letter typed", not name_hint.winfo_ismapped())
+ed.name_var.set(before_name)
+pump()
 
 ed.tree.selection_set(ed.steps[0]["id"])
 pump()

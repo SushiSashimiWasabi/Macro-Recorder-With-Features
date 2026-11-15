@@ -23,7 +23,7 @@ a = Analysis(
            (os.path.join(here, "completed_default.png"), "."),
            (os.path.join(here, "failed_default.png"), "."),
            (os.path.join(here, "disconnected_default.png"), ".")],
-    hiddenimports=["image_watch", "lazy", "pynput.keyboard._win32", "pynput.mouse._win32"],
+    hiddenimports=["image_watch", "lazy", "discord_notify", "discord_remote", "sounds", "text_styles", "updater", "video_overlay", "pynput.keyboard._win32", "pynput.mouse._win32"],
     excludes=EXCLUDE_MODULES,
 )
 a.binaries = [b for b in a.binaries if not os.path.basename(b[0]).lower().startswith(EXCLUDE_FILES)]

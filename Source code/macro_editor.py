@@ -98,6 +98,7 @@ class MacroEditor:
                                    highlightbackground=BORDER, highlightcolor=ACCENT)
         self.name_entry.pack(side="left", fill="x", expand=True, ipady=4)
         self.name_var.trace_add("write", lambda *a: self._show_buttons())
+        entry_hint(self.name_entry, self.name_var, "Type a name for this macro")  # (gone once you type)
         self.btn_apply = ttk.Button(top, text="Apply", width=8, command=self.apply)
         self.btn_reset = ttk.Button(top, text="Reset", width=8, command=self.reset)
         self.btn_redo = ttk.Button(top, text="Redo", width=8, command=self.redo)

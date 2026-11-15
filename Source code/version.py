@@ -7,7 +7,7 @@ APP_VERSION = "2.9"
 # Version numbers started at 2.1 (the first one that could update itself); the earlier steps have
 # names instead.
 HISTORY = [
-    ("2.9", "(not finalized yet)", [
+    ("2.9", "15 November 2026", [
         "Picture watch has its own window (Settings > Picture watch > Open Picture watch…, or Picture watch "
         "at the bottom of the main window), made like the Edit window: groups on the left, the group's "
         "pictures in the middle, the chosen picture's options on the right. Rename a group or picture in the "
@@ -48,6 +48,18 @@ HISTORY = [
         "adds them to your background pictures (none twice) and the shared profile uses them.",
         "A switch on the row of the red \"Playlists aren't supported\" note under Video hides it. Fit clicks to "
         "has one ⓘ with all of its help.",
+        "Empty name boxes say what goes there: a grey \"Type a name for this picture\" in Picture watch and "
+        "\"Type a name for this macro\" in the Edit window. It goes away as soon as you type.",
+        "If / Retry steps that wait for a picture, and the check after a rejoin that the Disconnected box is "
+        "gone, use much less CPU: they look where the picture was last seen first, rest between looks, and "
+        "look for the Disconnected box only in the middle of the screen.",
+        "Settings > Discord > Screenshot size: Sharp (as before) or Smaller, about half the upload for long "
+        "nights.",
+        "Settings > Playback > Advanced > Saved browser data: shows how much the video window's own Edge "
+        "keeps, and Clear… deletes it.",
+        "The app opens a little sooner: the Discord, phone remote and video parts load the first time "
+        "they're used. The log's health line (every 30 minutes while playing) now also says how long the "
+        "picture checks take.",
     ]),
     ("2.8.1", "15 November 2026", [
         "Phone remote: /pair now works only while the Phone remote window is open on the PC, so nobody can "

@@ -142,18 +142,26 @@ def screenshot_png(target=CAPTURE_SCREEN, game_exe=None, max_w=1600):
     return encode(grab(target, game_exe), max_w)
 
 
-def encode(img, max_w=1600):
+# screenshot sizes for Discord (Settings > Discord > Screenshot size): (width at most, JPG quality)
+SHOT_SIZES = {"sharp": (1600, 88), "smaller": (1280, 80)}
+
+
+def encode(img, max_w=1600, size=None):
     """A screenshot (from grab) as JPG bytes, shrunk to max_w wide: much smaller and quicker to make
-    and send than PNG, and looks the same in Discord."""
+    and send than PNG, and looks the same in Discord. size: "sharp" or "smaller" (SHOT_SIZES)
+    instead of max_w."""
     if img is None:
         return None
+    quality = 88
+    if size is not None:
+        max_w, quality = SHOT_SIZES.get(size, SHOT_SIZES["sharp"])
     try:
         import cv2
 
         h, w = img.shape[:2]
         if w > max_w:
             img = cv2.resize(img, (max_w, int(h * max_w / w)), interpolation=cv2.INTER_AREA)
-        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 88])
+        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, quality])
         return buf.tobytes() if ok else None
     except Exception:
         return None
@@ -214,10 +222,12 @@ def grab_area(target=CAPTURE_SCREEN, game_exe=None):
 
 
 class Notifier:
-    def __init__(self, get_url, on_result=None):
+    def __init__(self, get_url, on_result=None, shot_size=None):
         """get_url(): the webhook link right now. on_result(ok, text): called (on the helper thread)
-        after each try, so Settings can show whether the last message really arrived."""
+        after each try, so Settings can show whether the last message really arrived. shot_size():
+        "sharp" or "smaller" (how screenshots are packed)."""
         self.get_url = get_url
+        self.shot_size = shot_size or (lambda: "sharp")
         self.on_result = on_result
         self.jobs = queue.Queue()
         self.thread = None
@@ -264,7 +274,7 @@ class Notifier:
         tried again after RETRY_OFFLINE seconds, a few times, so an overnight run loses fewer cards."""
         if png is not None and not isinstance(png, (bytes, bytearray)):
             try:
-                png = encode(png)
+                png = encode(png, size=self.shot_size())
             except Exception as exc:
                 return False, str(exc)
         tries = 0

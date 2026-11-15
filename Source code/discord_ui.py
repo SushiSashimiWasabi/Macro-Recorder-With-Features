@@ -42,6 +42,11 @@ class DiscordMixin:
         self._switch_row(f, "After each run", self.discord_runs_var, "a card with the run's results")
         self._switch_row(f, "When playback stops", self.discord_stop_var, "finished, stopped or a problem")
         self._switch_row(f, "With a screenshot", self.discord_shot_var)
+        row = self._row(f, "Screenshot size", info=self.SHOT_SIZE_HELP)
+        box = ttk.Combobox(row, width=30, state="readonly", textvariable=self.discord_size_var,
+                           values=list(SHOT_SIZE.values()))
+        box.pack(side="right")
+        box.bind("<<ComboboxSelected>>", lambda e: (box.selection_clear(), self._save_settings()))
         self._choice_row(f, "One card that updates", self.live_summary, self.toggle_live_card,
                          tip="instead of a new card each run (no screenshot)")
         self._choice_row(f, "Daily or weekly summary", self.summary_summary, self.open_summary_options)
@@ -78,6 +83,12 @@ class DiscordMixin:
         "After a run where divine fragments were counted (Settings > Results > Count divine fragments), "
         "its card is sent with the ping, whatever the Ping box says about when to ping.\n\n"
         "The card is sent even if \"After each run\" is off.")
+
+    SHOT_SIZE_HELP = (
+        "How big the screenshots sent to Discord (and the phone remote's /screenshot) are.\n\n"
+        "Sharp: up to 1600 pixels wide, clearest.\n"
+        "Smaller: up to 1280 pixels wide and packed a bit more, about half the upload (handy for long "
+        "nights with hundreds of runs). Small text, like item names, may be harder to read.")
 
     def _entry(self, parent, var, width):
         e = tk.Entry(parent, textvariable=var, bg=FIELD, fg=TEXT, font=F_SMALL, relief="flat", width=width,
@@ -218,10 +229,11 @@ class DiscordMixin:
         content, card = self._run_card(stats.WIN, sample.values(self._ping_for(True)))
         card["title"] = "Test · " + card["title"]
         shot = self.discord_shot_var.get()
+        size = self.settings.get("discord_shot_size", "sharp")
         name = str(self.settings.get("discord_name") or "Macro Recorder")
 
         def work():
-            discord_notify.post(url, content, discord_notify.encode(self._screenshot()) if shot else None,
+            discord_notify.post(url, content, discord_notify.encode(self._screenshot(), size=size) if shot else None,
                                 embed=card, username=name)
 
         def done(_r, error):
