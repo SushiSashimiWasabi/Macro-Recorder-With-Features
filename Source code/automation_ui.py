@@ -20,6 +20,8 @@ def clock_text(seconds):
     return "-" if seconds is None else stats.duration_text(seconds)
 
 
+CHOICE_WORDS = 44  # (letters) a Settings row's summary next to Change… is cut short after this
+
 class AutomationMixin:
     # ------------------------------------------------------------ a small window of options
 
@@ -100,9 +102,12 @@ class AutomationMixin:
         """A Settings row: its name, what's chosen now (grey) and Change…."""
         row = self._row(parent, text, tip, info=info)
         ttk.Button(row, text="Change…", command=command).pack(side="right")
-        var = tk.StringVar(value=summary())
+        # a long summary is cut short (all of it shows when the mouse is over it), so it never
+        # pushes the row's name or the Change… button aside
+        var = tk.StringVar(value=short(summary(), CHOICE_WORDS))
         var.trace_add("write", lambda *a: self.root.after_idle(self._settings_text_changed))
-        tk.Label(row, textvariable=var, bg=BG, fg=MUTED, font=F_SMALL).pack(side="right", padx=(0, 10))
+        hover_text(tk.Label(row, textvariable=var, bg=BG, fg=MUTED, font=F_SMALL), summary).pack(
+            side="right", padx=(0, 10))
         if not hasattr(self, "choice_rows"):
             self.choice_rows = []
         self.choice_rows.append((var, summary))
@@ -111,7 +116,7 @@ class AutomationMixin:
     def _show_automation(self):
         for var, summary in getattr(self, "choice_rows", []):
             try:
-                var.set(summary())
+                var.set(short(summary(), CHOICE_WORDS))
             except tk.TclError:
                 pass
 

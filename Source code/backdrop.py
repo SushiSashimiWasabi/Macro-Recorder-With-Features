@@ -494,6 +494,9 @@ class Backdrop:
         A label that got a picture keeps its old size until it may measure its new text."""
         if not self.active or not self._shown():
             return
+        # parts that were just added are only shown (mapped) once Tk is idle: let it lay them out
+        # now, else they're missed and stay a plain dark box until something else repaints
+        self.root.update_idletasks()
         changed = [w for w, it in self.items.items()
                    if it["kind"] == "label" and w.winfo_exists() and str(w.cget("text")) != it["text"]]
         new_labels = self._decorate(self.root, dry=True)
@@ -787,6 +790,14 @@ class Backdrop:
             except tk.TclError:
                 continue
             cls = w.winfo_class()
+            it = self.items.get(w)
+            if it is not None and it["kind"] == "frame" and not it["under"].winfo_exists():
+                # its piece of picture was destroyed with its old contents (a list that was
+                # rebuilt): it needs a new one
+                if dry:
+                    self._new_widgets = True
+                else:
+                    self.items.pop(w, None)
             if w not in self.items and self._plain(w):
                 if cls in FRAME_CLASSES:
                     if dry:

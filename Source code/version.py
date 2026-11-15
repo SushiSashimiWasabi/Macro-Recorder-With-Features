@@ -11,6 +11,12 @@ HISTORY = [
         "Phone remote: /pair now works only while the Phone remote window is open on the PC, so nobody can "
         "keep guessing the code while you're away. Accounts you already paired keep working as before, and "
         "closing the window gives a new code for next time.",
+        "Settings with a background picture: lists that change (Picture watch after adding or changing a "
+        "picture, Results pictures, Phone remote accounts) no longer turn partly black.",
+        "Long names no longer push buttons off the window: in Picture watch, Change… now sits next to Remove "
+        "and a long name or macro name wraps onto the next line; long summaries next to Change… (Stop by "
+        "itself, Small random timing, Profile, Daily or weekly summary) are cut short, and the mouse over "
+        "them shows all of it.",
     ]),
     ("2.8", "15 November 2026", [
         "Every picture in Picture watch now has its own action (Change… next to it): start the macro over, "

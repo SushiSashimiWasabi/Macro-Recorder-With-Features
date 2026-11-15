@@ -1108,8 +1108,12 @@ class MacroRecorder:
         for i, pic in enumerate(self.watch_pictures):
             thumb, w, h = picture_thumb(pic, 300, 50)
             self.watch_thumbs.append(thumb)
-            ttk.Label(self.watch_list, image=thumb, compound="left", text=f"  {w} x {h}").grid(
-                row=i, column=0, sticky="w", pady=1)
+            # the picture and its size in two labels: a label with a picture can't show the
+            # background picture behind its text
+            cell = ttk.Frame(self.watch_list)
+            cell.grid(row=i, column=0, sticky="w", pady=1)
+            ttk.Label(cell, image=thumb).pack(side="left")
+            ttk.Label(cell, text=f"  {w} x {h}").pack(side="left")
             b = ttk.Button(self.watch_list, text="Remove", command=lambda i=i: self._remove_watch_picture(i))
             b.grid(row=i, column=1, padx=(8, 0))
             self.watch_remove_buttons.append(b)

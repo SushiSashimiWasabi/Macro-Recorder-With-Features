@@ -913,6 +913,39 @@ def short(text, n=26):
     return text if len(text) <= n else text[:n - 1] + "…"
 
 
+def hover_text(widget, full):
+    """Shows the whole text in a small box while the mouse is over widget, when it was cut short.
+    full: the whole text, or a function giving it (shown only when it differs from what's shown)."""
+    tip = {"win": None}
+
+    def show(_e=None):
+        text = full() if callable(full) else full
+        try:
+            shown = str(widget.cget("text"))
+        except tk.TclError:
+            shown = ""
+        if not text or text == shown or tip["win"] is not None:
+            return
+        win = tip["win"] = tk.Toplevel(widget)
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        tk.Label(win, text=text, bg=CARD, fg=TEXT, font=F_SMALL, justify="left", wraplength=420, padx=8,
+                 pady=5, highlightthickness=1, highlightbackground=BORDER).pack()
+        win.geometry(f"+{widget.winfo_rootx()}+{widget.winfo_rooty() + widget.winfo_height() + 2}")
+
+    def hide(_e=None):
+        if tip["win"] is not None:
+            try:
+                tip["win"].destroy()
+            except tk.TclError:
+                pass
+            tip["win"] = None
+    widget.bind("<Enter>", show, add="+")
+    widget.bind("<Leave>", hide, add="+")
+    widget.bind("<Destroy>", hide, add="+")
+    return widget
+
+
 class _MessageBoxes:
     """The message boxes every part of the window uses: Windows' own at first, the dark ones
     (ThemedBoxes) as soon as the window exists (use_boxes)."""

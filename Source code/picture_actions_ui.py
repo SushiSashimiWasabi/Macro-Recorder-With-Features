@@ -47,6 +47,9 @@ def action_summary(pic):
     return text + (f"  ({', '.join(extra)})" if extra else "")
 
 
+WATCH_WORDS_WIDTH = 300  # (pixels) what a watched picture does: longer wraps onto the next line
+
+
 class PictureActionsMixin:
     def _show_watch_pictures(self):
         super()._show_watch_pictures()
@@ -55,11 +58,14 @@ class PictureActionsMixin:
         self.watch_action_buttons = []
         for i, pic in enumerate(self.watch_pictures):
             name = pic.get("name")
-            ttk.Label(self.watch_list, text=(f"{name}:  " if name else "") + action_summary(pic)).grid(
-                row=i, column=2, sticky="w", padx=(14, 0))
+            # Change… right after Remove, the words last: a long name or macro name wraps onto
+            # more lines instead of pushing Change… off the side of the window
             b = ttk.Button(self.watch_list, text="Change…", command=lambda i=i: self.edit_picture_action(i))
-            b.grid(row=i, column=3, padx=(8, 0))
+            b.grid(row=i, column=2, padx=(6, 0))
             self.watch_action_buttons.append(b)
+            words = (f"{name}:  " if name else "") + action_summary(pic)
+            hover_text(ttk.Label(self.watch_list, text=short(words, 150), wraplength=WATCH_WORDS_WIDTH,
+                                 justify="left"), words).grid(row=i, column=3, sticky="w", padx=(14, 0))
 
     def _saved_macro_paths(self):
         paths = [p for p in self.settings.get("macro_library") or [] if isinstance(p, str)]
