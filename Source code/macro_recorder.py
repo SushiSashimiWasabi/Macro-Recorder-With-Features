@@ -264,7 +264,8 @@ WATCH_INLINE = ("skip", "key", "wait", "nothing")  # the macro goes on after the
 WATCH_NEED_MACRO = ("play", "switch", "recover")
 # what's remembered for each watched picture besides its file (None / missing = the usual)
 WATCH_FIELDS = ("screen_h", "name", "action", "macro", "key", "seconds", "click", "cooldown", "also", "counts",
-                "tries", "confirm_file", "confirm_screen_h", "confirm_seconds")
+                "tries", "confirm_file", "confirm_screen_h", "confirm_seconds", "match", "ignore_bg")
+# (2.9) "match" (50-99) and "ignore_bg": a picture's own Match % and Ignore background, instead of General's
 
 
 # where a picture is kept in the Picture watch window and when it's used (2.9): its group's id, on
@@ -282,18 +283,37 @@ BUILTINS = {
 }
 
 
+def picture_on_by_default(pic):
+    """A built-in picture is on to start with only in AOT:R; a copy anywhere else (added to another group,
+    moved, or put there by mistake) starts off. Every other picture starts on."""
+    return not (pic.get("builtin") in BUILTINS and picture_group(pic) != GROUP_AOTR)
+
+
+def picture_on(pic):
+    """Whether the picture itself is switched on ("on" is kept only when it isn't the usual)."""
+    on = pic.get("on")
+    return on if isinstance(on, bool) else picture_on_by_default(pic)
+
+
+def set_picture_on(pic, on):
+    if bool(on) == picture_on_by_default(pic):
+        pic.pop("on", None)
+    else:
+        pic["on"] = bool(on)
+
+
 def group_fields(entry):
     """The group fields of a picture's settings entry that are usable."""
     out = {}
     if isinstance(entry.get("group"), str) and entry["group"]:
         out["group"] = entry["group"]
-    if entry.get("on") is False:
-        out["on"] = False
+    if entry.get("builtin") in BUILTINS:
+        out["builtin"] = entry["builtin"]
+    if isinstance(entry.get("on"), bool) and entry["on"] != picture_on_by_default(dict(entry, **out)):
+        out["on"] = entry["on"]
     macros = entry.get("macros")
     if isinstance(macros, list) and macros:
         out["macros"] = [m for m in macros if isinstance(m, str) and m]
-    if entry.get("builtin") in BUILTINS:
-        out["builtin"] = entry["builtin"]
     return out
 
 
@@ -306,7 +326,7 @@ def watch_entry(pic):
     """What settings keep of a watched picture."""
     out = {"file": pic["file"], "screen_h": pic.get("screen_h")}
     for k in WATCH_FIELDS:
-        if pic.get(k) not in (None, "", False) or (k in ("click", "counts") and pic.get(k) is False):
+        if pic.get(k) not in (None, "", False) or (k in ("click", "counts", "ignore_bg") and pic.get(k) is False):
             out[k] = pic[k]
     out.update(group_fields(pic))
     return out
@@ -1417,7 +1437,7 @@ class MacroRecorder:
     def _picture_active(self, pic, path=None):
         """Whether a picture is used now: it's on, its group is on, and it's for every macro or for
         this one (path: the macro; None = the open one)."""
-        if pic.get("on") is False:
+        if not picture_on(pic):
             return False
         gid = picture_group(pic)
         for g in self.settings.get("picture_groups") or []:
@@ -1440,11 +1460,23 @@ class MacroRecorder:
     def _active_result_pictures(self, path=None):
         return [p for p in self.result_pictures if self._picture_active(p, path)]
 
+    def picture_need(self, pic):
+        """How well a watched picture must match (0.5-0.99): its own Match %, or General's."""
+        own = pic.get("match")
+        if isinstance(own, (int, float)) and not isinstance(own, bool):
+            return max(50, min(99, int(own))) / 100.0
+        return self.settings.get("watch_match", 80) / 100.0
+
+    def picture_ignores_bg(self, pic):
+        own = pic.get("ignore_bg")
+        return own if isinstance(own, bool) else bool(self.watch_bg_var.get())
+
     def _make_matchers(self):
         matchers = []
         for pic in self._active_watch_pictures():
             m = image_watch.Matcher(pic["img"], picked_screen_h=pic["screen_h"],
-                                    ignore_background=bool(self.watch_bg_var.get()), screen_h=self.screen_h)
+                                    ignore_background=self.picture_ignores_bg(pic), screen_h=self.screen_h)
+            m.need = self.picture_need(pic)
             # where it was found last time (this session): the next playback looks there first
             m.last_rect = pic.get("seen_rect")
             m.picture_entry = pic
@@ -2308,6 +2340,7 @@ class MacroRecorder:
                     checks += 1
                     visible = [False] * len(matchers)
                     middles = [None] * len(matchers)
+                    scores = [0.0] * len(matchers)
                     try:
                         # only take the parts of the screen that are looked at
                         areas = [a for a in looks if a is not None] + \
@@ -2321,10 +2354,12 @@ class MacroRecorder:
                                 region = None  # (the whole screen)
                         screen = self._hide_own_window(image_watch.grab_screen(sct, region), origin)
                         for i, m in enumerate(matchers):
-                            score, rect = m.find_near_last(screen, good_enough=need)
-                            if score < need and looks[i] is not None:
-                                score, rect = m.find(screen, good_enough=need, quick=not all_sizes, area=looks[i])
-                            if score >= need and self._watch_match_ok(m.picture_entry, score, rect, need):
+                            m_need = getattr(m, "need", need)  # (its own Match %, or General's)
+                            score, rect = m.find_near_last(screen, good_enough=m_need)
+                            if score < m_need and looks[i] is not None:
+                                score, rect = m.find(screen, good_enough=m_need, quick=not all_sizes, area=looks[i])
+                            scores[i] = score
+                            if score >= m_need and self._watch_match_ok(m.picture_entry, score, rect, m_need):
                                 visible[i] = True
                                 m.picture_entry["seen_rect"] = m.last_rect
                                 ox, oy = origin
@@ -2352,6 +2387,10 @@ class MacroRecorder:
                             st["fired"] = started
                             watch["seen_at"] = middles[i]
                             watch["seen_pic"] = pic
+                            # (so a report says which picture ended a run, and how sure it was)
+                            diag.info(f"Picture watch: \"{watch_name(pic, i + 1)}\" showed "
+                                      f"({scores[i] * 100:.0f}%, needs {getattr(m, 'need', need) * 100:.0f}%): "
+                                      f"{pic.get('action', 'restart')}")
                             seen.set()
                         elif not visible[i] and looks[i] is not None:
                             st["armed"] = True  # gone (its whole area was checked): it may count again

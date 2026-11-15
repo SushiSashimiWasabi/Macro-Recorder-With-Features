@@ -153,7 +153,7 @@ class PictureWatchMixin:
             if g.get("on") is False:
                 bits.append(f"{g.get('name')}: off")
             elif mine:
-                bits.append(f"{g.get('name')}: {sum(1 for p in mine if p.get('on') is not False)} of {len(mine)} on")
+                bits.append(f"{g.get('name')}: {sum(1 for p in mine if core.picture_on(p))} of {len(mine)} on")
         return " · ".join(bits) or "No pictures yet"
 
     def _show_picture_summary(self):
@@ -176,6 +176,7 @@ class PictureWatchMixin:
             if len(groups) != len(self._picture_groups()):
                 s["picture_groups"] = groups
                 core.save_settings(s)
+            self._sort_all_profiles()
             self._show_picture_summary()
             return
         fresh = getattr(self, "pictures_fresh", False)
@@ -207,8 +208,68 @@ class PictureWatchMixin:
         s["picture_groups"] = default_groups()
         s["watch_pictures"] = [core.watch_entry(p) for p in self.watch_pictures]
         self._save_result_pictures()
+        self._sort_all_profiles()
         core.save_settings(s, now=True)
         self._show_picture_summary()
+
+    def _sort_all_profiles(self):
+        """Profiles kept from before 2.9 still hold picture lists without groups: sort them too, so
+        switching to one doesn't put the built-in pictures into My pictures."""
+        changed = False
+        profiles = self.settings.get("profiles")
+        for part in (profiles.values() if isinstance(profiles, dict) else []):
+            try:
+                changed = self.sort_profile_pictures(part) or changed
+            except Exception as exc:
+                diag.error("Couldn't sort a profile's pictures", exc)
+        if changed:
+            core.save_settings(self.settings)
+
+    def sort_profile_pictures(self, part):
+        """Put the pictures of a profile (its settings) that have no group yet into one: built-in ones
+        (found by comparing them with the app's own) into AOT:R, others into My pictures. True if
+        something changed."""
+        if not isinstance(part, dict) or image_watch is None:
+            return False
+        changed = False
+        if not isinstance(part.get("picture_groups"), list) and (
+                part.get("watch_pictures") or part.get("result_pictures")):
+            part["picture_groups"] = default_groups()
+            changed = True
+        for key, result in (("watch_pictures", False), ("result_pictures", True)):
+            for e in part.get(key) or []:
+                if not isinstance(e, dict) or e.get("group") or not e.get("file"):
+                    continue
+                if not e.get("builtin"):
+                    found = self._builtin_key_of(os.path.join(core.watch_dir(), e["file"]), result, e.get("kind"))
+                    if found:
+                        e["builtin"] = found
+                        e.setdefault("name", BUILTIN_TITLES[found])
+                e["group"] = AOTR_ID if e.get("builtin") else MINE_ID
+                changed = True
+        return changed
+
+    def _builtin_key_of(self, path, result, kind=None):
+        """Which built-in picture the picture file at path is a copy of (None: none)."""
+        import numpy as np
+        own = getattr(self, "builtin_images", None)
+        if own is None:
+            own = self.builtin_images = {}
+            for key, (file, _h, bkind, _f) in core.BUILTINS.items():
+                try:
+                    own[key] = (image_watch.load_image(core.resource_path(file)), bkind)
+                except Exception:
+                    continue
+        try:
+            mine = image_watch.load_image(path)
+        except Exception:
+            return None
+        for key, (img, bkind) in own.items():
+            if bool(bkind) != result or (result and kind != bkind):
+                continue
+            if mine is not None and mine.shape == img.shape and np.array_equal(mine, img):
+                return key
+        return None
 
     def _backup_settings_before_groups(self):
         """A copy of the settings as they were before 2.9 sorted the pictures (Backups folder, beside
@@ -265,8 +326,8 @@ class PictureWatchMixin:
             name = f"{'result' if kind else 'picture'}_{int(time.time() * 1000)}_{key}_{n}.png"
         shutil.copyfile(core.resource_path(file), os.path.join(core.watch_dir(), name))
         entry = dict(copy.deepcopy(fields), file=name, screen_h=screen_h, builtin=key, group=group or AOTR_ID)
-        if not on:
-            entry["on"] = False
+        # (on in AOT:R, off anywhere else, unless asked otherwise)
+        core.set_picture_on(entry, on and entry["group"] == AOTR_ID)
         if kind:
             entry["kind"] = kind
         return entry
@@ -452,7 +513,7 @@ class PictureWatchWindow:
         win = self.win = tk.Toplevel(app.root, bg=BG)
         win.title("Picture watch - Macro Recorder")
         win.attributes("-topmost", True)
-        win.minsize(980, 560)
+        win.minsize(1080, 560)
         geo = app.settings.get("picture_watch_geometry")
         win.geometry(geo if isinstance(geo, str) and geo[:1].isdigit() else "1280x740")
         if getattr(app, "icon_img", None) is not None:
@@ -509,7 +570,7 @@ class PictureWatchWindow:
         tk.Frame(body, bg=BORDER, width=1).pack(side="left", fill="y")
 
         # middle: the pictures of the chosen group
-        mid = tk.Frame(body, bg=BG, width=430)
+        mid = tk.Frame(body, bg=BG, width=520)
         mid.pack(side="left", fill="y")
         mid.pack_propagate(False)
         self.pictures_title = tk.Label(mid, text="PICTURES", bg=BG, fg=MUTED, font=F_SECTION, anchor="w")
@@ -529,8 +590,11 @@ class PictureWatchWindow:
         self.btn_remove_pic = ttk.Button(row2, text="Remove", command=self.remove_picture)
         for b in (self.btn_move_pic, self.btn_remove_pic):
             b.pack(side="left", padx=(0, 6))
-        self.pics_tree = ttk.Treeview(mid, show="tree", selectmode="browse", style="Pictures.Treeview")
+        self.pics_tree = ttk.Treeview(mid, show="tree", selectmode="browse", style="Pictures.Treeview",
+                                      columns=("what",))
         self.pics_tree.pack(fill="both", expand=True, padx=12)
+        self.pics_tree.bind("<Configure>", lambda e: self._split_columns(e.width), add="+")
+        self._split_columns(496)
         self.pics_tree.tag_configure("off", foreground=DIM)
         self.pics_tree.tag_configure("missing", foreground=RED)
         self.pics_tree.bind("<<TreeviewSelect>>", lambda e: self._picture_clicked())
@@ -569,7 +633,7 @@ class PictureWatchWindow:
             self.canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
 
     def _tree_tips(self, tree):
-        """Hover a picture that's grey (its group is off) or links a missing macro: a box says why."""
+        """Hover a picture: a box shows its whole name and what it does, and why it is grey or red."""
         tip = {"win": None, "row": None}
 
         def hide(_e=None):
@@ -601,9 +665,12 @@ class PictureWatchWindow:
         tree.bind("<Destroy>", hide, add="+")
 
     def _picture_tip(self, e):
-        lines = []
+        number = [x["_uid"] for x in self.pics if x["group"] == e["group"]].index(e["_uid"]) + 1 \
+            if e in self.pics else 1
+        name, what = self._pic_texts(e, number)
+        lines = [name.replace("  ⓘ", ""), what]
         g = self._group(e["group"])
-        if e.get("on") is not False and g is not None and g.get("on") is False:
+        if core.picture_on(e) and g is not None and g.get("on") is False:
             lines.append(f"On, but not used: the group \"{g.get('name')}\" is off.")
         gone = [m for m in e.get("macros") or [] if not os.path.isfile(m)]
         if gone:
@@ -655,20 +722,38 @@ class PictureWatchWindow:
             tree.see(self.sel_group)
             self.filling_tree = False
 
-    def _pic_label(self, e, number):
+    def _pic_texts(self, e, number):
+        """(name, what it does) of a picture's row: the name on the left half, the rest on the right."""
         if e.get("kind"):
             name = e.get("name") or ("Completed picture" if e["kind"] == stats.WIN else "Failed picture")
             what = "counts a win" if e["kind"] == stats.WIN else "counts a loss"
         else:
             name = e.get("name") or f"Picture {number}"
             what = action_summary(e).split("  (")[0]
-        bits = [name + ("  ⓘ" if e.get("builtin") else "")]
-        if e.get("on") is False:
-            bits.append("(off)")
+        bits = []
+        if not core.picture_on(e):
+            bits.append("off: turn on to use here" if not core.picture_on_by_default(e) else "off")
+        bits.append(what)
         macros = e.get("macros") or []
         if macros:
-            bits.append(f"· {len(macros)} macro{'s' if len(macros) != 1 else ''}")
-        return "  " + "  ".join(bits) + "\n  " + short(what, 40)
+            bits.append(f"{len(macros)} macro{'s' if len(macros) != 1 else ''}")
+        if not e.get("kind") and "match" in e:
+            bits.append(f"own {e['match']}%")
+        return name + ("  ⓘ" if e.get("builtin") else ""), " · ".join(bits)
+
+    def _pic_label(self, e, number):
+        return "  " + self._pic_texts(e, number)[0]
+
+    def _pic_values(self, e, number):
+        return (self._pic_texts(e, number)[1],)
+
+    def _split_columns(self, width):
+        """The PICTURES list in two halves: the dot, the thumbnail and the name on the left, what it
+        does on the right."""
+        image_w = 16 + 96 + 8
+        left = image_w + max(80, (width - image_w) // 2)
+        self.pics_tree.column("#0", width=left, minwidth=left, stretch=False)
+        self.pics_tree.column("what", width=max(60, width - left - 4), stretch=True)
 
     def _fill_pictures(self):
         tree = self.pics_tree
@@ -690,7 +775,7 @@ class PictureWatchWindow:
             if e["group"] != gid:
                 continue
             number += 1
-            on = e.get("on") is not False
+            on = core.picture_on(e)
             thumb, _w, _h = self._thumb(e["file"])
             img = dot_image(self._dot_color(on, group_on), thumb, height=28, thumb_w=90)
             self.pic_images.append(img)
@@ -699,7 +784,8 @@ class PictureWatchWindow:
                 tags = ("off",)
             if any(not os.path.isfile(m) for m in e.get("macros") or []):
                 tags = ("missing",)
-            tree.insert("", "end", iid=str(e["_uid"]), text=self._pic_label(e, number), image=img, tags=tags)
+            tree.insert("", "end", iid=str(e["_uid"]), text=self._pic_label(e, number), image=img, tags=tags,
+                        values=self._pic_values(e, number))
         if not number:
             self.empty_note.config(text="No pictures in this group yet.\nAdd one from the screen, a picture "
                                         "file, or a built-in one.")
@@ -721,7 +807,7 @@ class PictureWatchWindow:
         e = self._pic(self.sel_pic)
         if e is not None and self.pics_tree.exists(str(e["_uid"])):
             number = [x["_uid"] for x in self.pics if x["group"] == e["group"]].index(e["_uid"]) + 1
-            self.pics_tree.item(str(e["_uid"]), text=self._pic_label(e, number))
+            self.pics_tree.item(str(e["_uid"]), text=self._pic_label(e, number), values=self._pic_values(e, number))
 
     def select_group(self, gid):
         self.sel_group = gid if gid == GENERAL_ID or self._group(gid) else AOTR_ID
@@ -838,7 +924,7 @@ class PictureWatchWindow:
             self.change(lambda: g.pop("on", None) if on else g.update(on=False))
         self._switch(row, g.get("on") is not False, set_on)
         mine = [e for e in self.pics if e["group"] == g["id"]]
-        on = sum(1 for e in mine if e.get("on") is not False)
+        on = sum(1 for e in mine if core.picture_on(e))
         self._para(f"{len(mine)} picture{'s' if len(mine) != 1 else ''}, {on} on.")
         if g["id"] == AOTR_ID:
             self._para("The pictures that come with the app, for Attack on Titan Revolution: RETRY, Disconnected, "
@@ -921,8 +1007,8 @@ class PictureWatchWindow:
         row = self._row("On", "used while playing" if group_on else "but its group is off")
 
         def set_on(on):
-            self.change(lambda: e.pop("on", None) if on else e.update(on=False))
-        self._switch(row, e.get("on") is not False, set_on)
+            self.change(lambda: core.set_picture_on(e, on))
+        self._switch(row, core.picture_on(e), set_on)
 
         if not key:
             row = self._row("This picture is")
@@ -949,6 +1035,7 @@ class PictureWatchWindow:
             others = [x for x in self.pics if not x.get("kind")]
             self.form = app._picture_action_form(holder, e, others, self.win, on_change=lambda: self._form_changed(e),
                                                  show_name=False, wrap=440)
+            self._own_matching(e)
         self._use_for(e)
         self._heading("TEST")
         row = tk.Frame(self.detail, bg=BG)
@@ -956,6 +1043,55 @@ class PictureWatchWindow:
         self.test_var = tk.StringVar(value="How well it matches the screen right now")
         ttk.Button(row, text="Test now", command=lambda: self.test_picture(e)).pack(side="left")
         tk.Label(row, textvariable=self.test_var, bg=BG, fg=MUTED, font=F_SMALL).pack(side="left", padx=(10, 0))
+
+    OWN_HELP = ("General (at the top of the groups list) has the same two options for every picture: Match % "
+                "and Ignore the background around text.\n\n"
+                "Turn \"Use its own\" on to give only this picture other values, for example a stricter Match "
+                "for a picture that sometimes shows by mistake. Off, it uses General's.")
+
+    def _own_matching(self, e):
+        """MATCHING: the picture's own Match % and Ignore background, or General's (off by default)."""
+        self._heading("MATCHING")
+        own = "match" in e or "ignore_bg" in e
+        row = self._row("Use its own", "Match % and Ignore background" if own else
+                        f"off: General's ({self.general['watch_match']}%)")
+        link(row, "ⓘ", lambda: self.app.boxes.showinfo("Use its own", self.OWN_HELP, parent=self.win),
+             fg=MUTED, font=(FAMILY, 11)).pack(side="left", padx=(6, 0))
+
+        def set_own(on):
+            def do():
+                if on:
+                    e["match"] = int(self.general["watch_match"])
+                    e["ignore_bg"] = bool(self.general["watch_ignore_bg"])
+                else:
+                    e.pop("match", None)
+                    e.pop("ignore_bg", None)
+            self.change(do)
+        self._switch(row, own, set_own)
+        if not own:
+            return
+        row = self._row("Match", "% (higher = stricter)")
+        var = tk.StringVar(value=str(e.get("match", self.general["watch_match"])))
+
+        def typed(*_a):
+            try:
+                value = max(50, min(99, int(float(var.get().strip() or "x"))))
+            except ValueError:
+                return
+            if e.get("match") != value:
+                self._typing()
+                e["match"] = value
+                self._refresh_rows()
+                self._show_buttons()
+        box = ttk.Spinbox(row, from_=50, to=99, width=5, textvariable=var)
+        box.pack(side="right")
+        var.trace_add("write", typed)
+        box.bind("<FocusOut>", lambda _e: var.set(str(e.get("match", self.general["watch_match"]))))
+        row = self._row("Ignore the background around text")
+
+        def set_bg(v):
+            self.change(lambda: e.__setitem__("ignore_bg", v), rebuild=False)
+        self._switch(row, e.get("ignore_bg", self.general["watch_ignore_bg"]) is not False, set_bg)
 
     def _form_changed(self, e):
         if self.form is None:
@@ -1071,7 +1207,10 @@ class PictureWatchWindow:
         def do():
             self.groups.insert(self.groups.index(g) + 1, copy_g)
             for e in [x for x in self.pics if x["group"] == g["id"]]:
-                self.pics.append(self._with_uid(dict(copy.deepcopy(e), group=copy_g["id"])))
+                new = dict(copy.deepcopy(e), group=copy_g["id"])
+                if e.get("builtin") and g["id"] == AOTR_ID:
+                    new.pop("on", None)  # (a copy of a built-in picture outside AOT:R starts off)
+                self.pics.append(self._with_uid(new))
             self.sel_group, self.sel_pic = copy_g["id"], None
         self.change(do)
 
@@ -1107,10 +1246,34 @@ class PictureWatchWindow:
             self.sel_group, self.sel_pic = entry["group"], entry["_uid"]
         self.change(do)
 
+    BIG_PICTURE = (300, 160)  # wider or taller than this: a note says it could match by mistake
+
     def _picked(self, img, screen_h):
         name = f"picture_{int(time.time() * 1000)}.png"
         image_watch.save_image(os.path.join(core.watch_dir(), name), img)
         self._add_entry({"file": name, "screen_h": screen_h})
+        self._warn_if_big(img)
+
+    def _warn_if_big(self, img):
+        """A big picture (a whole pop-up box) also matches ordinary game screens fairly well, because
+        of its bright or plain parts, and can then act in the middle of a run. A note says so, once
+        for each such picture, until it's ticked away."""
+        app = self.app
+        try:
+            h, w = img.shape[:2]
+        except AttributeError:
+            return
+        if (w <= self.BIG_PICTURE[0] and h <= self.BIG_PICTURE[1]) or app.settings.get("warn_big_pictures") is False:
+            return
+        answer = app.boxes.askchoice(
+            "Picture watch", f"This picture is big ({w} x {h}).\n\nA big picture, like a whole pop-up box, can "
+            "also match ordinary game screens by mistake (bright sky, white text), and then act in the middle "
+            "of a run. A small, clear part works better: just the word or the button.\n\nIf you keep it, you "
+            "can give it a stricter Match: \"Use its own\" under MATCHING.",
+            [("OK", "ok"), ("Don't show this again", "never")], default="ok", parent=self.win)
+        if answer == "never":
+            app.settings["warn_big_pictures"] = False
+            core.save_settings(app.settings)
 
     def add_from_screen(self):
         app = self.app
@@ -1180,7 +1343,13 @@ class PictureWatchWindow:
             return
 
         def do():
+            on = core.picture_on(e)
             e["group"] = gid
+            if e.get("builtin"):
+                # a built-in picture is on in AOT:R and starts off anywhere else
+                core.set_picture_on(e, gid == AOTR_ID)
+            else:
+                core.set_picture_on(e, on)
             self.sel_group = gid
         self.change(do)
 
@@ -1235,9 +1404,9 @@ class PictureWatchWindow:
                                                 screen_h=app.screen_h, work_height=core.RESULT_WORK_HEIGHT
                                                 ).find(screen)[0] for f in (1.0, 1.33, 0.75))
             else:
-                need = self.general["watch_match"]
+                need = int(e.get("match", self.general["watch_match"]))
                 score = image_watch.Matcher(img, picked_screen_h=e.get("screen_h"),
-                                            ignore_background=bool(self.general["watch_ignore_bg"]),
+                                            ignore_background=bool(e.get("ignore_bg", self.general["watch_ignore_bg"])),
                                             screen_h=app.screen_h).find(screen)[0]
         except Exception as exc:
             self.test_var.set(f"Couldn't check the screen: {exc}")
@@ -1265,7 +1434,7 @@ class PictureWatchWindow:
     def _problem(self):
         """(a picture that can't be used as it is, what's wrong) or (None, None)."""
         for e in self.pics:
-            if e.get("kind") or e.get("on") is False or not self._group_on(e["group"]):
+            if e.get("kind") or not core.picture_on(e) or not self._group_on(e["group"]):
                 continue
             action = e.get("action", "restart")
             if action in ("play", "switch") and not e.get("macro"):

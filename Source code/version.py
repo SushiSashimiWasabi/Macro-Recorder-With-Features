@@ -32,6 +32,22 @@ HISTORY = [
         "part. Switching a profile (or opening a macro linked to one) swaps the background at once; the "
         "saved pictures stay one list shared by every profile. Removing a picture another profile uses asks "
         "first.",
+        "Built-in pictures are on only in AOT:R. A copy in another group (added, moved or duplicated there) "
+        "starts off, and its row says \"off: turn on to use here\". Profiles kept from before 2.9 have their "
+        "pictures sorted into groups too, so switching to one no longer moves the built-in pictures into My "
+        "pictures.",
+        "Each picture can have its own Match % and Ignore background (MATCHING > Use its own, off by default; "
+        "General has the same for every picture). The list shows the name on the left half and what it does on "
+        "the right half; hover a row to see all of it. A note warns when you add a big picture, which can match "
+        "game screens by mistake (it can be ticked away).",
+        "The log says which picture showed and how well it matched, so a report shows what ended a run. Macros "
+        "saved with their pictures inside keep each picture's name and what it does.",
+        "No more dark boxes behind the text under Ready when you switch macros, and the Darkness and \"Show "
+        "which part\" sliders now follow while you drag.",
+        "The Share file can carry the background pictures and GIFs too (it asks; each up to 25 MB). Importing "
+        "adds them to your background pictures (none twice) and the shared profile uses them.",
+        "A switch on the row of the red \"Playlists aren't supported\" note under Video hides it. Fit clicks to "
+        "has one ⓘ with all of its help.",
     ]),
     ("2.8.1", "15 November 2026", [
         "Phone remote: /pair now works only while the Phone remote window is open on the PC, so nobody can "

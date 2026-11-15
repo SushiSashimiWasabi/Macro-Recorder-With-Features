@@ -851,7 +851,7 @@ class SettingsPagesMixin:
         for ev in ("<<ComboboxSelected>>", "<FocusOut>", "<Return>"):
             self.play_on_box.bind(ev, lambda e: self._read_play_on(quiet=True))
         tk.Label(row, text="Your screen", bg=BG, fg=TEXT, font=F_BASE).pack(side="right", padx=(0, 8))
-        row = self._row(f, "Fit clicks to", info=self.FIT_HELP)
+        row = self._row(f, "Fit clicks to", info=self.FIT_HELP + "\n\n" + self.SCREEN_SIZE_HELP)
         box = ttk.Combobox(row, width=19, state="readonly", textvariable=self.fit_var, values=list(FIT_TO.values()))
         box.pack(side="right")
         box.bind("<<ComboboxSelected>>", lambda e: (box.selection_clear(), self._save_settings()))
@@ -860,7 +860,4 @@ class SettingsPagesMixin:
         # only for an open macro that doesn't know its game window (recorded before 2.6)
         tk.Label(note, textvariable=self.old_macro_var, bg=BG, fg=AMBER, font=F_SMALL, anchor="w",
                  justify="left", wraplength=520).pack(side="left")
-        info = link(note, "ⓘ", lambda: messagebox.showinfo("Screen size", self.SCREEN_SIZE_HELP,
-                                                           parent=self.settings_win),
-                    fg=MUTED, font=(FAMILY, 11))
-        info.pack(side="left", padx=(6, 0))
+        # (one ⓘ for the whole part, after "Fit clicks to": 2.9)

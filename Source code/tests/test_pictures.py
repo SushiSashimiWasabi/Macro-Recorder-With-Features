@@ -172,6 +172,13 @@ e = w._pic(w.sel_pic)
 check("window: Add built-in into another group: built-in settings, in that group",
       e["group"] == g["id"] and e.get("builtin") == "disconnect" and e.get("action") == "recover"
       and os.path.isfile(os.path.join(core.watch_dir(), e["file"])), {k: v for k, v in e.items()})
+check("built-in outside AOT:R: starts off, and the row says how to use it",
+      not core.picture_on(e) and "off: turn on to use here" in w.pics_tree.item(str(e["_uid"]), "values")[0],
+      w.pics_tree.item(str(e["_uid"])))
+w.change(lambda: core.set_picture_on(e, True))
+check("built-in outside AOT:R: turned on, it's kept as on", e.get("on") is True and core.picture_on(e)
+      and core.watch_entry(dict(e, file="x.png")).get("on") is True, e.get("on"))
+w.change(lambda: core.set_picture_on(e, False))
 # its options change from the form on the right
 w.form.vars["action"].set(core.WATCH_ACTION_NAMES["restart"])
 w.form.vars["layout"](set_counts=True)
@@ -181,8 +188,8 @@ w.reset_builtin(e)
 check("window: Reset to built-in", w._pic(e["_uid"]).get("action") == "recover")
 e = w._pic(e["_uid"])
 w.change(lambda: e.update(macros=[app.current_file]))
-check("window: the row says how many macros", "1 macro" in w.pics_tree.item(str(e["_uid"]), "text"),
-      w.pics_tree.item(str(e["_uid"]), "text"))
+check("window: the row says how many macros (right half)", "1 macro" in w.pics_tree.item(str(e["_uid"]), "values")[0]
+      and "1 macro" not in w.pics_tree.item(str(e["_uid"]), "text"), w.pics_tree.item(str(e["_uid"])))
 # Apply: everything is used
 assert w.apply()
 pump(0.1)
@@ -248,6 +255,68 @@ check("a macro that knows its window: no note", app.info_var.get() != app.OLD_MA
 check("no red fullscreen line in Settings > Playback any more",
       "Some macros were recorded in fullscreen" not in open(os.path.join(sys.argv[1], "settings_pages.py"),
                                                           encoding="utf-8").read().split("SCREEN_SIZE_HELP")[2])
+
+# ---- 2.9 feedback: own Match %, sorting old profiles, big pictures, the log line
+w = app.open_picture_watch()
+pump(0.2)
+w.select_group("mine")
+mine = [x for x in w.pics if x["group"] == "mine" and not x.get("kind")]
+if mine:
+    w.sel_pic = mine[0]["_uid"]
+    w._show_options()
+    x = mine[0]
+    check("own match: off by default", "match" not in x and "ignore_bg" not in x)
+    w.change(lambda: x.update(match=93, ignore_bg=False))
+    check("own match: the row says it", "own 93%" in w.pics_tree.item(str(x["_uid"]), "values")[0],
+          w.pics_tree.item(str(x["_uid"])))
+    assert w.apply()
+    applied = next(p for p in app.watch_pictures if p["file"] == x["file"])
+    check("own match: kept in settings, False included",
+          applied.get("match") == 93 and applied.get("ignore_bg") is False
+          and next(en for en in app.settings["watch_pictures"] if en["file"] == x["file"]).get("ignore_bg") is False)
+    check("own match: used when watching", app.picture_need(applied) == 0.93 and app.picture_ignores_bg(applied) is False
+          and app.picture_need({"file": "y"}) == app.settings.get("watch_match", 80) / 100.0)
+w.close()
+pump(0.1)
+# an old profile (no groups) with the built-in RETRY: sorted back into AOT:R, not into My pictures
+image_watch.save_image(os.path.join(core.watch_dir(), "prof_retry.png"), retry_img)
+app.profiles()["Old"] = {"speed": 1.0, "watch_pictures": [{"file": "prof_retry.png", "screen_h": 1080},
+                                                         {"file": "own.png", "screen_h": 1080}]}
+app._sort_all_profiles()
+old = app.profiles()["Old"]
+check("old profile: the built-in goes to AOT:R, its own picture to My pictures",
+      [(en.get("group"), en.get("builtin")) for en in old["watch_pictures"]] == [("aotr", "retry"), ("mine", None)]
+      and isinstance(old.get("picture_groups"), list), old["watch_pictures"])
+# a big picture: a note, which can be ticked away
+w = app.open_picture_watch()
+pump(0.2)
+asked = []
+app.boxes.askchoice = lambda *a, **k: (asked.append(a[1]), "never")[1]
+w._picked(np.zeros((260, 420, 3), np.uint8), None)
+check("big picture: a note says it could match by mistake", asked and "big" in asked[0], asked)
+w._picked(np.zeros((260, 420, 3), np.uint8), None)
+check("big picture: ticked away, it isn't shown again", len(asked) == 1 and app.settings.get("warn_big_pictures") is False)
+w._picked(np.zeros((20, 40, 3), np.uint8), None)
+check("small picture: no note", len(asked) == 1)
+w.reset()
+w.close()
+app.boxes.askchoice = lambda *a, **k: answers.pop(0) if answers else None
+# macros carry each picture's name and action
+app.watch_pictures = [core.watch_picture_from({"file": "own.png", "screen_h": 1080, "name": "Lobby", "action": "key",
+                                               "key": {"vk": 13}, "match": 91})]
+inside = app._pictures_for_file(app.current_file)
+check("macro file: each picture keeps its name and action",
+      inside and inside[0].get("name") == "Lobby" and inside[0].get("action") == "key" and inside[0].get("match") == 91,
+      [{k: v for k, v in en.items() if k != "png"} for en in inside])
+app.file_data = {"watch_pictures": inside}
+app.watch_pictures = []
+app._offer_file_pictures()
+check("macro file: opened, the picture comes back with them",
+      app.watch_pictures and app.watch_pictures[0].get("name") == "Lobby"
+      and app.watch_pictures[0].get("action") == "key", [{k: v for k, v in p.items() if k != "img"} for p in app.watch_pictures])
+# the log says which picture ended a run, and how sure
+src = open(os.path.join(sys.argv[1], "macro_recorder.py"), encoding="utf-8").read()
+check("log: the picture that showed is named with its %", 'Picture watch: \\"{watch_name(pic, i + 1)}\\" showed' in src)
 
 failed = [n for n, ok in results if not ok]
 print(f"\n{len(results) - len(failed)} of {len(results)} passed")

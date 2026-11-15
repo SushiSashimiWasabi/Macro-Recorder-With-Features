@@ -338,11 +338,17 @@ class Backdrop:
                 for d in anim[1]:
                     total += d
                     self.frame_ends.append(total)
+        same_picture = key == self.source_key and self.composite is not None and fit == self.fit
         self.darkness = max(0.0, min(0.95, darkness / 100))
         self.fit = fit
         self.position = position
         self._forget_composite()
-        self.repaint()
+        if same_picture and self.frames is None and self.active and self._shown():
+            # only Darkness or "Show which part" moved (a slider being dragged): the window's parts
+            # are where they were, so each just gets its new piece (no laying out again: smooth)
+            self._crop_all()
+        else:
+            self.repaint()
         self._start_animation()
         return True
 
@@ -481,6 +487,15 @@ class Backdrop:
         if not self.active or not self._shown():
             return
         root = self.root
+        # labels whose text changed get their piece of the (new) picture before Tk draws anything,
+        # so a longer text never shows on a dark box for a moment (2.9)
+        changed = [w for w, it in self.items.items()
+                   if it["kind"] == "label" and w.winfo_exists() and str(w.cget("text")) != it["text"]]
+        if changed and self._ensure_composite():
+            for w in changed:
+                self._retext(w)
+            if self.pending_fix is None:  # (a shorter text gets its own size right after)
+                self.pending_fix = root.after(1, self._fix_moved)
         root.update_idletasks()
         new_labels = self._decorate(root)
         root.update_idletasks()  # labels let go of their stretching first, then are measured
@@ -494,6 +509,15 @@ class Backdrop:
         A label that got a picture keeps its old size until it may measure its new text."""
         if not self.active or not self._shown():
             return
+        changed = [w for w, it in self.items.items()
+                   if it["kind"] == "label" and w.winfo_exists() and str(w.cget("text")) != it["text"]]
+        if changed and self.composite is not None:
+            # labels whose text changed get their new piece BEFORE Tk draws anything: drawn first, a
+            # longer text would show for a moment on a dark box (the old, smaller piece) (2.9)
+            for w in changed:
+                self._retext(w)
+            if self.pending_fix is None:  # parts that moved because of it get their piece right after
+                self.pending_fix = self.root.after(1, self._fix_moved)
         # parts that were just added are only shown (mapped) once Tk is idle: let it lay them out
         # now, else they're missed and stay a plain dark box until something else repaints
         self.root.update_idletasks()
@@ -523,6 +547,11 @@ class Backdrop:
     def _fix_moved(self):
         self.pending_fix = None
         if self.active and self._shown():
+            # labels that got a shorter text kept their old size for a moment (no dark box): now
+            # they get their own size, and what they give up shows the frame's piece behind them
+            shrunk = [w for w, it in self.items.items() if it.get("shrink") and w.winfo_exists()]
+            for w in shrunk:
+                self._retext(w, keep_old=False)
             # labels that just got a longer text may not have their new size yet (Tk sizes them
             # when idle, and this timer can run first); measuring them now would give them a
             # piece of their OLD size, leaving the rest of the label as a dark box
@@ -551,7 +580,7 @@ class Backdrop:
         except (tk.TclError, KeyError):
             return w.winfo_width(), w.winfo_height()
 
-    def _retext(self, w):
+    def _retext(self, w, keep_old=True):
         """A label with a picture got a new text: give it its piece at its new size straight away."""
         it = self.items[w]
         self._fresh_composite()
@@ -561,11 +590,19 @@ class Backdrop:
             width = w.winfo_width()
         if stretch[1]:
             height = w.winfo_height()
+        # a shorter text: the label keeps its old size until Tk lays it out again, so its piece covers
+        # that old size for now (else the part it gives up shows as a dark box); _fix_moved trims it
+        if keep_old and (width < w.winfo_width() or height < w.winfo_height()):
+            it["shrink"] = True
+            width, height = max(width, w.winfo_width()), max(height, w.winfo_height())
+        else:
+            it.pop("shrink", None)
         width, height = max(1, width), max(1, height)
         x, y = self._pos(w)
-        img = photo(self._crop(w, (width, height)))
+        piece = self._crop(w, (width, height))
+        img = photo(piece)
         it["img"], it["text"], it["rect"] = img, str(w.cget("text")), (x, y, width, height)
-        w.config(image=img)
+        self._label_picture(w, img, piece)
 
     def clear(self):
         """Back to the plain window."""
@@ -611,7 +648,15 @@ class Backdrop:
             how = cv2.INTER_AREA if s < 0.5 else cv2.INTER_LINEAR
         else:
             how = cv2.INTER_AREA if s < 1 else cv2.INTER_CUBIC
-        img = cv2.resize(src, (nw, nh), interpolation=how)
+        # the resized picture is kept: moving Darkness or "Show which part" doesn't resize it again
+        rkey = (self.source_key, nw, nh, how)
+        cached = getattr(self, "_resized", None)
+        if cached is not None and cached[0] == rkey:
+            img = cached[1]
+        else:
+            img = cv2.resize(src, (nw, nh), interpolation=how)
+            if self.frames is None:
+                self._resized = (rkey, img)
         base = self._flat(self.base, width, height)
         out = base.copy()
         # the slider position moves the picture along the side that's cut off ("cover");
@@ -683,15 +728,16 @@ class Backdrop:
             piece[sy0 - y:sy1 - y, sx0 - x:sx1 - x] = self.composite[sy0:sy1, sx0:sx1]
         return piece
 
-    def _crop_all(self):
+    def _ensure_composite(self):
+        """The finished picture for the window's size (made if needed). False: nothing to paint yet."""
         root = self.root
         size = (root.winfo_width(), root.winfo_height())
         if size[0] < 2 or size[1] < 2:
-            return
+            return False
         if self.area is not None:
             a = self.area()
             if a is None or not a.winfo_ismapped():
-                return  # the page isn't shown yet; painted again once it is
+                return False  # the page isn't shown yet; painted again once it is
         key = (size, self._area_rect(*size))
         if self.composite is None or self.composite_key != key:
             self._forget_composite()
@@ -700,6 +746,11 @@ class Backdrop:
             self.composite_size, self.composite_key = size, key
             for it in self.items.values():
                 it.pop("rect", None)
+        return True
+
+    def _crop_all(self):
+        if not self._ensure_composite():
+            return
         for w, it in list(self.items.items()):
             if not w.winfo_exists():
                 self.items.pop(w, None)
@@ -725,7 +776,7 @@ class Backdrop:
                     it["box_top"] = (lw.winfo_height() // 2) if lw is not None else 0
             piece = self._piece(it, rect) if kind == "frame" else self._crop_rect(*rect)
             if kind in ("entry", "check"):
-                color = hex_of(piece.reshape(-1, 3).mean(axis=0))
+                color = hex_of(piece[::6, ::6].reshape(-1, 3).mean(axis=0))
                 if kind == "entry":
                     w.config(bg=color, disabledbackground=color)
                 else:
@@ -735,13 +786,23 @@ class Backdrop:
             img = photo(piece)
             it["img"] = img  # Tk forgets pictures nobody keeps
             if kind == "frame":
-                it["under"].config(image=img)
+                # (its colour too: a frame that grows shows it until it gets its bigger piece)
+                it["under"].config(image=img, bg=hex_of(piece[::6, ::6].reshape(-1, 3).mean(axis=0)))
             elif kind == "label":
-                w.config(image=img)
+                self._label_picture(w, img, piece)
             elif kind == "canvas":
                 w.delete("bdimg")
                 w.create_image(0, 0, anchor="nw", image=img, tags="bdimg")
                 w.tag_lower("bdimg")
+
+    @staticmethod
+    def _label_picture(w, img, piece):
+        """A label gets its piece. Its own colour becomes the piece's colour too: whenever Tk shows a
+        bit of it the picture doesn't cover yet (its text just changed), that bit isn't a dark box."""
+        if w.winfo_class() == "Label":
+            w.config(image=img, bg=hex_of(piece[::6, ::6].reshape(-1, 3).mean(axis=0)))
+        else:
+            w.config(image=img)
 
     def _covered(self, w, under):
         """Is this frame hidden completely behind one of its own parts?"""
@@ -847,7 +908,8 @@ class Backdrop:
         still on the left: its piece of picture is exactly its size, and text sits in the middle."""
         ttk_label = w.winfo_class() == "TLabel"
         it = {"kind": "label", "text": None, "foreground": str(w.cget("foreground")),
-              "compound": str(w.cget("compound")), "geom": None}
+              "compound": str(w.cget("compound")), "geom": None,
+              "bg": None if ttk_label else str(w.cget("bg"))}
         if ttk_label:
             # a ttk label draws a thin border around itself; this style has none, so its piece
             # of picture can be exactly its size
@@ -908,6 +970,8 @@ class Backdrop:
                 w.config(image="", compound=it["compound"] or "none", **pad)
                 if forget:
                     w.config(foreground=it["foreground"])
+                    if it.get("bg"):
+                        w.config(bg=it["bg"])
                     if it["geom"]:
                         how, opts = it["geom"]
                         (w.pack_configure if how == "pack" else w.grid_configure)(**opts)

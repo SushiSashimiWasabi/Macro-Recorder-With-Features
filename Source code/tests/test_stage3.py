@@ -153,6 +153,30 @@ check("backgrounds: a profile from before 2.9 takes the one showing now",
 app.forget_background_everywhere("bg2.png")
 check("backgrounds: a removed picture is gone from every profile",
       app.profiles()["Old"]["background_picture"] == "" and app.profiles()["Quick test"]["background_picture"] == "bg1.png")
+# the note about playlists under Video: a switch on its row hides it (the row stays)
+check("playlist note: shown at first", app.playlist_note.cget("text") == app.PLAYLIST_NOTE)
+app.playlist_note_var.set(False)
+app._playlist_note_switched()
+check("playlist note: switched off, hidden and remembered (not per profile)",
+      app.playlist_note.cget("text") == "" and app.settings.get("video_playlist_note") is False
+      and not profiles_ui.in_profile("video_playlist_note") and app.playlist_note.winfo_manager() == "pack")
+app.playlist_note_var.set(True)
+app._playlist_note_switched()
+if backdrop.AVAILABLE:
+    # a label whose text changes gets its piece of picture at once; its own colour is the piece's
+    # colour, so whatever Tk shows of it for a moment is never a dark box
+    root.deiconify()
+    pump(0.3)
+    app.backdrop.refresh()
+    lab = app.playlist_note
+    app.playlist_note_var.set(False)
+    app._playlist_note_switched()
+    app.playlist_note_var.set(True)
+    app._playlist_note_switched()
+    it = app.backdrop.items.get(lab)
+    check("background: a changed label keeps a piece and the piece's colour",
+          it is not None and it["text"] == app.PLAYLIST_NOTE and str(lab.cget("bg")).lower() != modern_ui.PANEL.lower(),
+          (it and it["text"], lab.cget("bg")))
 del app.profiles()["Old"]
 app.settings["background_picture"] = ""
 app.bg_main.dark_var.set(40)

@@ -240,6 +240,11 @@ class VideoMixin:
                                 "https://www.youtube.com/watch?v=…  or  https://www.youtube.com/playlist?list=…",
                                 parent=self.root)
             return
+        if not link.get("video") and link.get("list") and \
+                getattr(self, "playlist_note_var", None) is not None and not self.playlist_note_var.get():
+            # the note under Video is hidden, so it's said here (it's still tried)
+            messagebox.showinfo("Video", "Playlists aren't supported, only single videos, so this may not "
+                                "play. A link to one video of the playlist works.", parent=self.root)
         self.settings["video_link"] = text
         self.video.opacity = self.video_opacity_var.get()
         self.video.click_through = self._video_should_click_through()

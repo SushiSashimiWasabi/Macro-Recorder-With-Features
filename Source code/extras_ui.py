@@ -115,11 +115,12 @@ class ExtrasMixin:
     SHARE_HELP = (
         "Export makes one " + PACK_EXT + " file with the open macro and everything it needs: the macros its "
         "\"Play another macro\" steps and pictures use, the pictures of Picture watch with what each one does, "
-        "and the profile linked to the macro (if any).\n\n"
+        "the profile linked to the macro (if any), and, if you say yes, its background pictures and GIFs "
+        "(each up to 25 MB).\n\n"
         "Left out on purpose: your Discord link and pings, the phone remote, \"If the game closes\" and "
         "\"Stop by itself\". Those stay yours.\n\n"
-        "Import puts the macros in a folder you choose, asks before adding the pictures and the profile, "
-        "then opens the macro.")
+        "Import puts the macros in a folder you choose, asks before adding the pictures, the profile and the "
+        "backgrounds, then opens the macro.")
 
     def _pack_collect(self, path, found):
         """Read a macro and every macro it plays into found: {file name in the pack: text or bytes}."""
@@ -189,6 +190,9 @@ class ExtrasMixin:
             linked = getattr(self, "macro_profile", None)
             if linked and linked in self.profiles():
                 manifest["profile"] = {"name": linked, "settings": shareable(self.profiles()[linked])}
+            skipped_bg = self._pack_backgrounds(manifest, found, parent)
+            if skipped_bg is None:
+                return None  # (cancelled)
         except (OSError, ValueError) as exc:
             self.boxes.showerror("Share", f"Couldn't put the file together:\n{exc}", parent=parent)
             return None
@@ -201,16 +205,130 @@ class ExtrasMixin:
             with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
                 z.writestr("manifest.json", json.dumps(manifest, indent=1))
                 for name, content in found["files"].items():
-                    z.writestr(name if name.startswith("pictures/") else "macros/" + name, content)
+                    z.writestr(name if name.startswith(("pictures/", "backgrounds/")) else "macros/" + name, content)
         except OSError as exc:
             self.boxes.showerror("Share", f"Couldn't write the file:\n{exc}", parent=parent)
             return None
         n_m, n_p = len(manifest["macros"]), len(pictures)
+        n_b = len((manifest.get("backgrounds") or {}).get("files") or [])
         self.boxes.showinfo("Share", f"Saved: {n_m} macro{'s' if n_m != 1 else ''}, {n_p} picture"
                             f"{'s' if n_p != 1 else ''}" + (", the profile \"" + manifest["profile"]["name"] + "\""
                                                             if "profile" in manifest else "")
-                            + ".\n\nYour Discord link and the phone remote are not inside.", parent=parent)
+                            + (f", {n_b} background picture{'s' if n_b != 1 else ''}" if n_b else "")
+                            + "." + (f"\n\nLeft out (bigger than 25 MB): {', '.join(skipped_bg)}" if skipped_bg else "")
+                            + "\n\nYour Discord link and the phone remote are not inside.", parent=parent)
         return path
+
+    def _pack_backgrounds(self, manifest, found, parent):
+        """Asks whether the background pictures go in the file too (the linked profile's, or the ones
+        showing now), and puts them in. Returns the names left out for being too big, or None when
+        cancelled."""
+        linked = (manifest.get("profile") or {}).get("name")
+        source = self.profiles()[linked] if linked else self.settings
+        bg = {k: v for k, v in source.items() if profiles_ui.is_background_key(k)}
+        folder = os.path.dirname(core.settings_path())
+        lib = {e["file"]: e for e in self.bg_library() if isinstance(e, dict) and e.get("file")}
+        used = []
+        for k, v in bg.items():
+            if k.endswith("_picture") and v in lib and v not in used and os.path.isfile(os.path.join(folder, v)):
+                used.append(v)
+        if not used:
+            return []
+        size = sum(os.path.getsize(os.path.join(folder, f)) for f in used)
+        answer = self.boxes.askyesno(
+            "Share", f"Put the background picture{'s' if len(used) != 1 else ''} in the file too? "
+            f"({len(used)}, {size / 1048576:.1f} MB: " + ", ".join(lib[f].get("name") or f for f in used)
+            + ")\n\nThe one you share it with is asked before they're used.", parent=parent)
+        if not answer:
+            return []
+        skipped, files = [], []
+        for f in used:
+            if os.path.getsize(os.path.join(folder, f)) > MAX_PACK_FILE_BYTES:
+                skipped.append(lib[f].get("name") or f)
+                continue
+            with open(os.path.join(folder, f), "rb") as fh:
+                found["files"]["backgrounds/" + safe_name(f)] = fh.read()
+            files.append({"file": safe_name(f), "name": str(lib[f].get("name") or f)[:120]})
+        kept = {f["file"] for f in files}
+        manifest["backgrounds"] = {
+            "files": files,
+            "settings": {k: ((safe_name(v) if v and safe_name(v) in kept else "") if k.endswith("_picture") else v)
+                         for k, v in bg.items() if not k.endswith("_original")}}
+        return skipped
+
+    def _pack_take_backgrounds(self, backgrounds, picture_bytes, took_profile, parent):
+        """Offer the pack's background pictures: added to your saved background pictures (one you
+        already have isn't added twice), then used by the profile that came with it, or, if you say
+        so, right away. Returns how many were added."""
+        files = [f for f in backgrounds.get("files") or [] if isinstance(f, dict) and f.get("file") in picture_bytes]
+        settings = backgrounds.get("settings") if isinstance(backgrounds.get("settings"), dict) else {}
+        if not files:
+            return 0
+        where = (f"the profile \"{took_profile}\" uses them" if took_profile
+                 else "you're asked next whether to show them now")
+        if not self.boxes.askyesno("Share", f"This macro comes with {len(files)} background picture"
+                                   f"{'s' if len(files) != 1 else ''}.\n\nAdd "
+                                   f"{'them' if len(files) != 1 else 'it'} to your background pictures? "
+                                   f"({where})", parent=parent):
+            return 0
+        import backdrop
+        folder = os.path.dirname(core.settings_path())
+        lib = self.bg_library()
+        have = {}
+        for e in lib:
+            try:
+                with open(os.path.join(folder, e["file"]), "rb") as fh:
+                    have[hashlib.sha1(fh.read()).hexdigest()] = e["file"]
+            except (OSError, KeyError, TypeError):
+                pass
+        names, added, full = {}, 0, []
+        for f in files:
+            data = picture_bytes[f["file"]]
+            same = have.get(hashlib.sha1(data).hexdigest())
+            if same:
+                names[f["file"]] = same
+                continue
+            if len(lib) >= MAX_BACKGROUNDS:
+                full.append(f.get("name") or f["file"])
+                continue
+            used_stems = {os.path.splitext(e["file"])[0] for e in lib}
+            stem = next(f"background_{i}" for i in range(1, 100) if f"background_{i}" not in used_stems)
+            tmp = os.path.join(folder, f"_shared_{stem}{os.path.splitext(f['file'])[1].lower() or '.png'}")
+            try:
+                with open(tmp, "wb") as fh:
+                    fh.write(data)
+                stored = backdrop.store_any(tmp, folder, stem)  # (checked: only a real picture is kept)
+            finally:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+            if not stored:
+                continue
+            lib.append({"file": stored, "name": str(f.get("name") or stored)[:120]})
+            names[f["file"]] = stored
+            added += 1
+        clean = {}
+        for k, v in settings.items():
+            if not profiles_ui.is_background_key(k):
+                continue  # (only background options come from a shared file this way)
+            if k.endswith("_picture"):
+                v = names.get(v, "") if isinstance(v, str) else ""
+            elif not isinstance(v, (int, float, str, bool)):
+                continue
+            clean[k] = v
+        if took_profile and took_profile in self.profiles():
+            self.profiles()[took_profile].update(clean)
+        elif clean and self.boxes.askyesno("Share", "Show the shared background now? (Undo: pick your old one "
+                                           "again in Settings > Background.)", parent=parent):
+            self.settings.update(clean)
+            self._load_page_settings()
+        core.save_settings(self.settings)
+        if full:
+            self.boxes.showinfo("Share", f"You already have {MAX_BACKGROUNDS} saved background pictures, so these "
+                                "weren't added: " + ", ".join(full) + "\n\nRemove one in Settings > Background "
+                                "and import again.", parent=parent)
+        return added
 
     def import_pack(self, path=None, folder=None):
         """Open a shared file: its macros go in a folder, pictures and profile are offered.
@@ -269,6 +387,12 @@ class ExtrasMixin:
                         with open(target, "w", encoding="utf-8") as f:
                             core.dump_macro(data, f)
                 pictures = [p for p in manifest.get("pictures") or [] if isinstance(p, dict) and p.get("file")]
+                backgrounds = manifest.get("backgrounds") if isinstance(manifest.get("backgrounds"), dict) else {}
+                bg_bytes = {}
+                for f in backgrounds.get("files") or []:
+                    name = "backgrounds/" + safe_name(f.get("file") or "") if isinstance(f, dict) else ""
+                    if name in infos:
+                        bg_bytes[f["file"]] = z.read(name)
                 picture_bytes = {}
                 for p in pictures:
                     for field in ("file", "confirm_file"):
@@ -298,6 +422,7 @@ class ExtrasMixin:
                 part.update(shareable(profile["settings"]))
                 self.profiles()[took_profile] = part
                 core.save_settings(self.settings)
+        took_bg = self._pack_take_backgrounds(backgrounds, bg_bytes, took_profile, parent) if bg_bytes else 0
         self.skip_file_pictures = True
         if not self.load(placed[main], quiet=True):
             self.skip_file_pictures = False
@@ -307,7 +432,9 @@ class ExtrasMixin:
         self.boxes.showinfo("Share", f"Opened \"{macro_label(placed[main])}\".\n\n{len(placed)} macro"
                             f"{'s' if len(placed) != 1 else ''} in {dest}\n{added} picture"
                             f"{'s' if added != 1 else ''} added to Picture watch"
-                            + (f"\nProfile added: {took_profile}" if took_profile else ""), parent=parent)
+                            + (f"\nProfile added: {took_profile}" if took_profile else "")
+                            + (f"\n{took_bg} background picture{'s' if took_bg != 1 else ''} added" if took_bg else ""),
+                            parent=parent)
         return placed[main]
 
     def _pack_add_pictures(self, pictures, picture_bytes, placed, dest, parent):

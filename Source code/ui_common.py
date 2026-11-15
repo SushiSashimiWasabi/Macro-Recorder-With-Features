@@ -624,7 +624,7 @@ class BackgroundControls:
                 return
             step = -1 if (event.delta > 0 or event.num == 4) else 1  # wheel down = further down
             self.pos_var.set(max(0, min(100, int(float(self.pos_var.get())) + step * 5)))
-            self.changed(delay=40)
+            self.changed()
         for ev in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
             self.pos_scale.bind(ev, wheel)
         if not backdrop.AVAILABLE:
@@ -678,14 +678,22 @@ class BackgroundControls:
                       position=float(src.pos_var.get()) / 100)
         self.show_state()
 
-    def changed(self, now=False, delay=150):
+    def changed(self, now=False, delay=50):
+        """An option moved. While a slider is dragged the picture follows about 20 times a second
+        (each change doesn't wait for the slider to stop moving any more)."""
         if self.built:
             self.dark_label.config(text=f"{int(float(self.dark_var.get()))}%")
         self.app._save_settings()
-        if self.job is not None:
+        if now and self.job is not None:
             self.app.root.after_cancel(self.job)
-        # both windows, as the settings window may follow the main window's options
-        self.job = self.app.root.after(0 if now else delay, self.app._apply_background)
+            self.job = None
+        if self.job is None:
+            # both windows, as the settings window may follow the main window's options
+            self.job = self.app.root.after(0 if now else delay, self.apply_all)
+
+    def apply_all(self):
+        self.job = None
+        self.app._apply_background()
 
     def step(self, d):
         """◀ / ▶: the previous or next saved picture (going past the ends gives "none")."""

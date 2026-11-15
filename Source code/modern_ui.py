@@ -246,8 +246,17 @@ class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, PictureWatchMixin, Setting
         self.btn_video = ttk.Button(vid, text="Show", width=7, command=self.toggle_video)
         self.btn_video.pack(side="right")
         self._video_hint()
-        tk.Label(body, text="Playlists aren't supported, only single videos.", bg=PANEL, fg=RED,
-                 font=F_SMALL, anchor="w").pack(fill="x", pady=(0, 8))
+        # the note about playlists, with a switch on the same row to hide it (2.9). Hidden, the row
+        # stays (only the switch shows), so the window keeps its size
+        note = tk.Frame(body, bg=PANEL)
+        note.pack(fill="x", pady=(0, 8))
+        self.playlist_note_var = tk.BooleanVar(value=self.settings.get("video_playlist_note", True) is not False)
+        self.playlist_note = tk.Label(note, text="", bg=PANEL, fg=RED, font=F_SMALL, anchor="w")
+        self.playlist_note.pack(side="left", fill="x", expand=True)
+        Switch(note, self.playlist_note_var, command=self._playlist_note_switched, bg=PANEL).pack(side="right")
+        self.playlist_note_label = tk.Label(note, text="", bg=PANEL, fg=DIM, font=F_SMALL)
+        self.playlist_note_label.pack(side="right", padx=(0, 6))
+        self._show_playlist_note()
 
         # the macro: its name, size and file buttons
         mac = tk.Frame(body, bg=PANEL)
@@ -812,9 +821,19 @@ class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, PictureWatchMixin, Setting
         out = []
         for pic in self._active_watch_pictures(path):
             try:
-                out.append({"png": image_watch.png_data(pic["img"]), "screen_h": pic.get("screen_h")})
+                entry = {"png": image_watch.png_data(pic["img"]), "screen_h": pic.get("screen_h")}
             except Exception:
-                pass
+                continue
+            # (2.9) its name and what it does go with it, so it doesn't arrive as a nameless picture
+            # that only starts the macro over. Not the files of this PC: the rejoin check picture, or
+            # which macros it's used for
+            for k in core.WATCH_FIELDS:
+                if k not in ("screen_h", "confirm_file", "confirm_screen_h") and k in pic \
+                        and pic[k] not in (None, ""):
+                    entry[k] = pic[k]
+            if pic.get("builtin"):
+                entry["builtin"] = pic["builtin"]
+            out.append(entry)
         return out
 
     def _offer_file_pictures(self):
@@ -839,7 +858,12 @@ class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, PictureWatchMixin, Setting
                 data = np.frombuffer(base64.b64decode(entry["png"]), np.uint8)
                 img = image_watch.cv2.imdecode(data, image_watch.cv2.IMREAD_COLOR)
                 if img is not None and digest(img) not in have:
-                    new.append((img, entry.get("screen_h")))
+                    fields = {k: entry[k] for k in core.WATCH_FIELDS
+                              if k in entry and k not in ("screen_h", "confirm_file", "confirm_screen_h")}
+                    if entry.get("builtin") in core.BUILTINS:
+                        fields["builtin"] = entry["builtin"]
+                        fields["group"] = core.GROUP_AOTR
+                    new.append((img, entry.get("screen_h"), fields))
                     have.add(digest(img))
             except Exception:
                 continue
@@ -851,8 +875,8 @@ class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, PictureWatchMixin, Setting
                 "(like a Retry button), that you don't have yet.\n\nAdd "
                 f"{'them' if n != 1 else 'it'} to Picture watch?", parent=self.root):
             return
-        for img, screen_h in new:
-            self._add_watch_picture(img, screen_h=screen_h)
+        for img, screen_h, fields in new:
+            self._add_watch_picture(img, screen_h=screen_h, fields=fields)
         self.sub_note = f"Added {n} picture{'s' if n != 1 else ''} to Picture watch"
         self._refresh()
 
@@ -861,6 +885,20 @@ class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, PictureWatchMixin, Setting
     # ------------------------------------------------------------ keys for the video window
 
     # action, name, what the page does, how much
+
+    PLAYLIST_NOTE = "Playlists aren't supported, only single videos."
+
+    def _show_playlist_note(self):
+        on = bool(self.playlist_note_var.get())
+        self.playlist_note.config(text=self.PLAYLIST_NOTE if on else "")
+        self.playlist_note_label.config(text="" if on else "Playlist note")
+
+    def _playlist_note_switched(self):
+        self.settings["video_playlist_note"] = bool(self.playlist_note_var.get())
+        core.save_settings(self.settings)
+        self._show_playlist_note()
+        if getattr(self, "backdrop", None) is not None:
+            self.backdrop.refresh()
 
     def _on_close(self):
         try:

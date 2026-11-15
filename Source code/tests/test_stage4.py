@@ -23,6 +23,7 @@ import extras_ui  # noqa: E402
 import image_watch  # noqa: E402
 import macro_steps as workflow  # noqa: E402
 import modern_ui  # noqa: E402
+import profiles_ui  # noqa: E402
 import stats  # noqa: E402
 import window_tools  # noqa: E402
 
@@ -256,6 +257,42 @@ check("share: a profile from a file can't bring a Discord link, a token or a pro
       p_part.get("speed") == 2.0 and "evil" not in str(p_part.get("discord_webhook"))
       and "remote_token" not in p_part and "calc.exe" not in json.dumps(p_part.get("game_closed") or {}),
       {k: p_part.get(k) for k in ("speed", "discord_webhook", "game_closed")})
+
+# ---- share: background pictures go in the file too (if you say yes), and come back on import
+import cv2  # noqa: E402
+settings_dir = os.path.dirname(core.settings_path())
+bgimg = np.zeros((60, 90, 3), np.uint8)
+bgimg[:, :45] = (200, 120, 40)
+cv2.imwrite(os.path.join(settings_dir, "background_1.png"), bgimg)
+app.settings["background_library"] = [{"file": "background_1.png", "name": "sky.png"}]
+app.settings["background_picture"] = "background_1.png"
+app.save_profile("Farm")
+app.load(main_path, quiet=True)
+pack2 = os.path.join(tmp, "WithBg.macropack")
+boxes.clear()
+check("share+bg: export with the background", app.export_pack(pack2) == pack2, boxes[-2:])
+with zipfile.ZipFile(pack2) as z:
+    names2 = z.namelist()
+    manifest2 = json.loads(z.read("manifest.json"))
+check("share+bg: the picture is inside, with which window shows it",
+      "backgrounds/background_1.png" in names2 and manifest2["backgrounds"]["settings"].get("background_picture")
+      == "background_1.png" and not any(n.startswith("macros/backgrounds") for n in names2), names2)
+check("share+bg: the profile itself still carries no background (the backgrounds part does)",
+      not any(profiles_ui.is_background_key(k) for k in manifest2["profile"]["settings"]))
+# the friend: no background pictures yet, no Farm profile
+app.settings["background_library"] = []
+app.settings["background_picture"] = ""
+os.remove(os.path.join(settings_dir, "background_1.png"))
+app.delete_profile("Farm")
+boxes.clear()
+out2 = app.import_pack(pack2, folder=friend)
+lib = app.bg_library()
+check("share+bg: import adds the background picture", out2 and len(lib) == 1 and lib[0]["name"] == "sky.png"
+      and os.path.isfile(os.path.join(settings_dir, lib[0]["file"])), (lib, boxes[-1:]))
+check("share+bg: the imported profile shows it", app.profiles().get("Farm", {}).get("background_picture") == lib[0]["file"],
+      app.profiles().get("Farm", {}).get("background_picture"))
+again2 = app.import_pack(pack2, folder=friend)
+check("share+bg: importing again doesn't add it twice", again2 and len(app.bg_library()) == 1, app.bg_library())
 
 # ---- with one card that updates: won/failed runs update it, unknown runs and fragment drops get their
 # own message with a screenshot

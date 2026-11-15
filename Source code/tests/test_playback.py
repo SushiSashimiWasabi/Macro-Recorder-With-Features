@@ -201,8 +201,8 @@ asked = []
 modern_ui.messagebox.askyesno = lambda *a, **k: asked.append(a) or True
 modern_ui.messagebox.showinfo = lambda *a, **k: None
 core.messagebox.showinfo = lambda *a, **k: None
-app._add_watch_picture = lambda img, screen_h=None: app.watch_pictures.append(
-    {"img": img, "file": "n.png", "screen_h": screen_h})
+app._add_watch_picture = lambda img, screen_h=None, fields=None: app.watch_pictures.append(
+    dict({"img": img, "file": "n.png", "screen_h": screen_h}, **(fields or {})))
 app.load(path, quiet=True)
 pump(0.3)
 check("open: program read back", (app.macro_program or {}).get("exe") == "Game.exe")
