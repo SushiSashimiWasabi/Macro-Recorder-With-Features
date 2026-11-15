@@ -1200,7 +1200,10 @@ class PictureWatchWindow:
 
     def reset_builtin(self, e):
         key = e.get("builtin")
-        if not key:
+        if not key or not self.app.boxes.askyesno(
+                "Picture watch", f"Put {BUILTIN_TITLES[key]} back to its built-in settings? Its name and what it "
+                "does when it shows go back to how they came with the app (it stays on or off, in this group, "
+                "for the same macros).\n\nUndo takes it back.", parent=self.win):
             return
         _file, screen_h, kind, fields = core.BUILTINS[key]
 
