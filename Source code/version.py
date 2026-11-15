@@ -1,12 +1,22 @@
 # The app's version. Raising it (and pushing to main) makes GitHub publish a new Release,
 # which every copy of the app offers to install when it starts.
-APP_VERSION = "2.9"
+APP_VERSION = "2.9.1"
 
 # Every version, newest first: (version, the day it was finalized, changes). The newest is shown once after an update;
 # Settings > About > What's new shows them all. Each change is one paragraph (shown as a bullet).
 # Version numbers started at 2.1 (the first one that could update itself); the earlier steps have
 # names instead.
 HISTORY = [
+    ("2.9.1", "16 November 2026", [
+        "Safer sharing: a saved macro no longer carries whole paths of your PC (they could show your Windows "
+        "user name). A chain step's macro is saved relative to the macro's own folder, or by its file name, "
+        "and a picture's rejoin macro by its file name; both are looked for beside the macro when it's "
+        "opened. Re-save macros you shared before to clean them up.",
+        "Opening someone's macro that comes with pictures now lists what each picture would do before you "
+        "add them, and only known actions and sensible values are taken over.",
+        "A picture inside a shared file that claims to be gigantic is refused instead of filling the "
+        "memory.",
+    ]),
     ("2.9", "15 November 2026", [
         "Picture watch has its own window (Settings > Picture watch > Open Picture watch…, or Picture watch "
         "at the bottom of the main window), made like the Edit window: groups on the left, the group's "

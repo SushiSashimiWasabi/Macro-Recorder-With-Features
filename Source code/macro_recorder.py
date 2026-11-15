@@ -23,6 +23,11 @@ import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+# (2.9.1) a picture inside a shared file (a .macro, a share file) can claim to be gigantic and fill the
+# memory when it's opened; OpenCV refuses pictures bigger than this (100 megapixels, about a 13000 x
+# 7500 photo: far more than any screen). Set before OpenCV is first loaded.
+os.environ.setdefault("OPENCV_IO_MAX_IMAGE_PIXELS", str(100_000_000))
+
 try:
     from pynput import keyboard, mouse
 except ImportError:  # pragma: no cover - shown to the user at startup
@@ -492,9 +497,107 @@ def expand_moves(events, step=0.01, budget=None):
     return out
 
 
+def shared_macro_path(path, folder):
+    """How a macro file named inside another macro file is written there: relative to that file's
+    folder when it's inside it, else only its file name. Never the whole path: a .macro gets shared,
+    and a path like C:\\Users\\<name>\\... would show the Windows user name. Read back with
+    MacroRecorder._find_macro_file (relative to the open macro, or beside it)."""
+    if not isinstance(path, str) or not path:
+        return path
+    name = path.replace("\\", "/").rsplit("/", 1)[-1]
+    if not folder or not os.path.isabs(path):
+        return path if not os.path.isabs(path) and ".." not in path.replace("\\", "/").split("/") else name
+    try:
+        rel = os.path.relpath(os.path.abspath(path), os.path.abspath(folder))
+    except ValueError:  # (another drive)
+        return name
+    if rel.startswith("..") or os.path.isabs(rel):
+        return name
+    return rel
+
+
+def _steps_for_file(steps, folder):
+    """A copy of the step tree with every other macro's path made shareable (see shared_macro_path)."""
+    out = []
+    for a in steps:
+        if not isinstance(a, dict):
+            out.append(a)
+            continue
+        b = a
+        for key in ("file", "on_fail"):
+            if a.get("kind") == "play_macro" and a.get(key):
+                b = dict(b, **{key: shared_macro_path(a[key], folder)})
+        if isinstance(a.get("actions"), list):
+            b = dict(b, actions=_steps_for_file(a["actions"], folder))
+        out.append(b)
+    return out
+
+
+# what a picture saved inside a .macro may carry (its png and screen_h aside), and how to check it
+SHARED_PICTURE_TEXT = {"name": 60}
+SHARED_PICTURE_NUMBERS = {"seconds": (0, 3600), "cooldown": (0, 3600), "confirm_seconds": (1, 3600),
+                          "tries": (1, 20), "match": (50, 99)}
+SHARED_PICTURE_SWITCHES = ("click", "counts", "ignore_bg")
+
+
+def shared_picture_fields(entry, folder=None):
+    """The fields of a picture that travels inside a .macro file, checked: known actions only, sensible
+    numbers, short texts, and the macro it plays as a file name (looked for in folder, the folder
+    of the macro it came with). Used both when saving (nothing of this PC's paths goes out) and when
+    opening someone's macro (nothing odd comes in)."""
+    out = {}
+    if not isinstance(entry, dict):
+        return out
+    if entry.get("action") in WATCH_ACTION_NAMES:
+        out["action"] = entry["action"]
+    for k, n in SHARED_PICTURE_TEXT.items():
+        if isinstance(entry.get(k), str) and entry[k].strip():
+            out[k] = entry[k].strip()[:n]
+    for k, (lo, hi) in SHARED_PICTURE_NUMBERS.items():
+        v = entry.get(k)
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and v == v:
+            out[k] = type(v)(min(hi, max(lo, v)))
+    for k in SHARED_PICTURE_SWITCHES:
+        if isinstance(entry.get(k), bool):
+            out[k] = entry[k]
+    key = entry.get("key")
+    if isinstance(key, dict):  # (a key as recorded: {"vk": 13} / {"char": "a"} / {"special": "enter"})
+        k = {}
+        for name in ("vk", "mac_vk"):
+            if isinstance(key.get(name), int) and not isinstance(key.get(name), bool) and 0 < key[name] < 512:
+                k[name] = key[name]
+        for name in ("char", "special"):
+            if isinstance(key.get(name), str) and 0 < len(key[name]) <= 20:
+                k[name] = key[name]
+        if k:
+            out["key"] = k
+    macro = entry.get("macro")
+    if isinstance(macro, str) and macro.strip():
+        name = macro.replace("\\", "/").rsplit("/", 1)[-1].strip()
+        if name.lower().endswith(FILE_EXT) and name not in (".", ".."):
+            out["macro"] = os.path.join(folder, name) if folder else name
+    return out
+
+
 def dump_macro(data, f):
     """Write a macro file compactly: one action per line, no extra spaces (about half the size of
-    the old layout, and quicker to open). Any program that reads JSON still reads it."""
+    the old layout, and quicker to open). Any program that reads JSON still reads it.
+
+    Other macros it names (chain steps, a picture's rejoin macro) are written relative to the file's
+    folder or as a file name only, never as a whole path of this PC."""
+    folder = os.path.dirname(os.path.abspath(f.name)) if isinstance(getattr(f, "name", None), str) else None
+    if isinstance(data.get("actions"), list):
+        data = dict(data, actions=_steps_for_file(data["actions"], folder))
+    if isinstance(data.get("watch_pictures"), list):
+        pics = []
+        for p in data["watch_pictures"]:
+            if isinstance(p, dict) and p.get("png"):
+                keep = {k: p[k] for k in ("png", "screen_h", "builtin") if k in p}
+                keep.update(shared_picture_fields(p))
+                if keep.get("macro"):
+                    keep["macro"] = keep["macro"].replace("\\", "/").rsplit("/", 1)[-1]
+                pics.append(keep)
+        data = dict(data, watch_pictures=pics)
     events = data.get("events", [])
     head = {k: v for k, v in data.items() if k != "events"}
     compact = {"separators": (",", ":"), "ensure_ascii": False}
@@ -2090,9 +2193,19 @@ class MacroRecorder:
     def _find_macro_file(self, path):
         """Where a macro named in a step or a picture's action is now: its saved place, or (when the
         macros were moved or shared together) the folder of the open macro."""
-        if path and os.path.isfile(path):
+        if not isinstance(path, str) or not path:
+            return None
+        if not os.path.isabs(path):
+            # (2.9.1) saved relative to the macro's own folder (see shared_macro_path); never above it
+            if ".." in path.replace("\\", "/").split("/") or not self.current_file:
+                path = os.path.basename(path)
+            else:
+                inside = os.path.join(os.path.dirname(self.current_file), path)
+                if os.path.isfile(inside):
+                    return inside
+        elif os.path.isfile(path):
             return path
-        if path and self.current_file:
+        if self.current_file:
             beside = os.path.join(os.path.dirname(self.current_file), os.path.basename(path))
             if os.path.isfile(beside):
                 return beside
@@ -2237,8 +2350,11 @@ class MacroRecorder:
 
             import numpy as np
 
-            data = np.frombuffer(base64.b64decode(h["png"]), np.uint8)
-            img = image_watch.cv2.imdecode(data, image_watch.cv2.IMREAD_COLOR)
+            try:
+                data = np.frombuffer(base64.b64decode(h["png"]), np.uint8)
+                img = image_watch.cv2.imdecode(data, image_watch.cv2.IMREAD_COLOR)
+            except Exception:  # (not a picture, or far too big: see OPENCV_IO_MAX_IMAGE_PIXELS)
+                img = None
             if img is None:
                 raise ValueError(f"picture {n} is broken")
             found[id(h)] = image_watch.Matcher(img, picked_screen_h=h.get("screen_h"), ignore_background=True,

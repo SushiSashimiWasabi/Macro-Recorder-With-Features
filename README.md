@@ -283,6 +283,11 @@ Your hotkeys, speed, countdown and other settings are remembered for next time i
 **Save...** writes the recording to a `.macro` file. Send that file, together with
 `MacroRecorder.exe` if they don't have it yet, to a friend. Older `.json` recordings open too.
 
+A `.macro` file never holds whole paths of your PC (since 2.9.1). Other macros it plays (chain steps,
+a picture's rejoin macro) are saved by file name, or relative to the macro's folder, and are looked
+for next to it when it's opened, so share them together in one folder. A macro that comes with
+pictures lists what each picture would do before they're added.
+
 There are three ways to open a macro:
 - Click **Open...** and choose the file.
 - Drag the `.macro` file onto `MacroRecorder.exe`.

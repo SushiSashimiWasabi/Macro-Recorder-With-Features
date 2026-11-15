@@ -835,10 +835,11 @@ class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, PictureWatchMixin, Setting
             # (2.9) its name and what it does go with it, so it doesn't arrive as a nameless picture
             # that only starts the macro over. Not the files of this PC: the rejoin check picture, or
             # which macros it's used for
-            for k in core.WATCH_FIELDS:
-                if k not in ("screen_h", "confirm_file", "confirm_screen_h") and k in pic \
-                        and pic[k] not in (None, ""):
-                    entry[k] = pic[k]
+            # (2.9.1) checked, and the rejoin macro by its file name only: it was the whole path, with
+            # the Windows user name in it
+            entry.update(core.shared_picture_fields(pic))
+            if entry.get("macro"):
+                entry["macro"] = os.path.basename(entry["macro"])
             if pic.get("builtin"):
                 entry["builtin"] = pic["builtin"]
             out.append(entry)
@@ -866,21 +867,30 @@ class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, PictureWatchMixin, Setting
                 data = np.frombuffer(base64.b64decode(entry["png"]), np.uint8)
                 img = image_watch.cv2.imdecode(data, image_watch.cv2.IMREAD_COLOR)
                 if img is not None and digest(img) not in have:
-                    fields = {k: entry[k] for k in core.WATCH_FIELDS
-                              if k in entry and k not in ("screen_h", "confirm_file", "confirm_screen_h")}
+                    # (2.9.1) only known actions and sensible values; its macro is looked for beside
+                    # the macro it came with (never a path written in the file)
+                    folder = os.path.dirname(self.current_file) if self.current_file else None
+                    fields = core.shared_picture_fields(entry, folder)
                     if entry.get("builtin") in core.BUILTINS:
                         fields["builtin"] = entry["builtin"]
                         fields["group"] = core.GROUP_AOTR
-                    new.append((img, entry.get("screen_h"), fields))
+                    screen_h = entry.get("screen_h")
+                    if not isinstance(screen_h, int) or isinstance(screen_h, bool) or not 200 <= screen_h <= 10000:
+                        screen_h = None
+                    new.append((img, screen_h, fields))
                     have.add(digest(img))
             except Exception:
                 continue
         if not new:
             return
         n = len(new)
+        from picture_actions_ui import action_summary
+        # (2.9.1) says what each one would do, so nothing is added unseen
+        lines = "\n".join(f"  \u2022 {f.get('name') or 'picture'}: {action_summary(f)}" for _i, _h, f in new[:8])
+        more = f"\n  \u2026 and {n - 8} more" if n > 8 else ""
         if not messagebox.askyesno(
                 "Macro Recorder", f"This macro comes with {n} picture{'s' if n != 1 else ''} to watch for "
-                "(like a Retry button), that you don't have yet.\n\nAdd "
+                f"that you don't have yet:\n\n{lines}{more}\n\nAdd "
                 f"{'them' if n != 1 else 'it'} to Picture watch?", parent=self.root):
             return
         for img, screen_h, fields in new:

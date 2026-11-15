@@ -207,9 +207,11 @@ check("share: import opens the main macro from the new folder",
       opened and os.path.dirname(opened) == os.path.join(friend, "Chain") and app.current_file == opened,
       (opened, boxes[-1:]))
 step = app.macro_steps()[0]
+# (2.9.1: saved by file name beside the macro, no whole paths; found again from the open macro)
 check("share: its steps point at the imported macros",
-      step.get("file") == os.path.join(friend, "Chain", "A.macro")
-      and step.get("on_fail") == os.path.join(friend, "Chain", "Fix.macro"), step)
+      app._find_macro_file(step.get("file")) == os.path.join(friend, "Chain", "A.macro")
+      and app._find_macro_file(step.get("on_fail")) == os.path.join(friend, "Chain", "Fix.macro")
+      and not os.path.isabs(step.get("file")), step)
 check("share: the pictures came with their actions",
       [(p.get("name"), p.get("action", "restart")) for p in app.watch_pictures] == [("Retry", "restart"),
                                                                                   ("Disconnected", "recover")]
