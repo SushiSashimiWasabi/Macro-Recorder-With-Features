@@ -1,12 +1,17 @@
 # The app's version. Raising it (and pushing to main) makes GitHub publish a new Release,
 # which every copy of the app offers to install when it starts.
-APP_VERSION = "2.8"
+APP_VERSION = "2.8.1"
 
 # Every version, newest first: (version, the day it was finalized, changes). The newest is shown once after an update;
 # Settings > About > What's new shows them all. Each change is one paragraph (shown as a bullet).
 # Version numbers started at 2.1 (the first one that could update itself); the earlier steps have
 # names instead.
 HISTORY = [
+    ("2.8.1", "15 November 2026", [
+        "Phone remote: /pair now works only while the Phone remote window is open on the PC, so nobody can "
+        "keep guessing the code while you're away. Accounts you already paired keep working as before, and "
+        "closing the window gives a new code for next time.",
+    ]),
     ("2.8", "15 November 2026", [
         "Every picture in Picture watch now has its own action (Change… next to it): start the macro over, "
         "play another macro and then start over, switch to another macro, skip to the next step, press a "

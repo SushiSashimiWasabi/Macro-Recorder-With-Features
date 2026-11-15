@@ -254,6 +254,15 @@ def cmd(name, value=None, user="111", kind=2):
 out = run(cmd("start"))
 check("a stranger is refused, privately", len(out) == 1 and out[0][0] == R.REPLY
       and out[0][1]["flags"] == R.ONLY_YOU and "pairing code" in out[0][1]["content"], out)
+code = app.remote_code
+out = run(cmd("pair", code))
+check("pairing is closed while the Phone remote window isn't open, even with the right code",
+      "only open while the Phone remote window is open" in out[0][1]["content"] and not app._remote_users()
+      and app.remote_fails == 0, out)
+app.open_remote_window()
+app.remote_win.geometry("+5000+5000")
+root.update()
+check("opening the window opens pairing", app.remote_pairing)
 out = run(cmd("pair", "000000" if app.remote_code != "000000" else "111111"))
 check("a wrong pairing code is refused", "isn't the code" in out[0][1]["content"] and not app._remote_users())
 code = app.remote_code
@@ -403,8 +412,19 @@ check("the token never goes into a support report",
       "not a token" not in diag.report("x", dict(saved, remote_token="SECRET.TOKEN.VALUE"))
       and "SECRET" not in diag.report("x", dict(saved, remote_token="SECRET.TOKEN.VALUE")))
 app.remote_var.set(False)
+code = app.remote_code
 app._remote_close()
 check("closing the window keeps what was set", app.settings.get("remote_enabled") is False and app.remote_win is None)
+root.update()
+check("closing the window closes pairing, with a new code for next time", not app.remote_pairing
+      and app.remote_code != code and "only open" in run(cmd("pair", app.remote_code, user="333"))[0][1]["content"]
+      and not app._remote_allowed("333"))
+app.open_remote_window()
+root.update()
+app.remote_win.destroy()
+root.update()
+check("pairing also closes when the window goes some other way (with the Settings window)",
+      not app.remote_pairing and app.remote_win is None)
 app._on_close()
 
 ok = sum(1 for _, good in results if good)

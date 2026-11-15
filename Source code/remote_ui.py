@@ -78,6 +78,7 @@ class RemoteMixin:
         self.remote_info = {}
         self.remote_lock = threading.Lock()
         self.remote_fails = 0
+        self.remote_pairing = False  # /pair works only while the Phone remote window is open
         self.remote_code = self._new_pair_code()
         self.remote_var = tk.BooleanVar(value=bool(s.get("remote_enabled", False)))
         self.remote_token_var = tk.StringVar(value=str(s.get("remote_token", "")))
@@ -379,6 +380,9 @@ class RemoteMixin:
             return "Discord didn't say who you are. Try again."
         if self._remote_allowed(uid):
             return "Your account is already allowed. Try `/status`."
+        if not self.remote_pairing:  # (so nobody can keep guessing codes while you're away)
+            return ("Pairing is only open while the Phone remote window is open. On the PC, open Settings > "
+                    "Discord > Phone remote…, then type `/pair` with the code shown there.")
         typed = "".join(c for c in str(code or "") if c.isdigit())
         with self.remote_lock:
             ok = hmac.compare_digest(typed, self.remote_code)
@@ -473,6 +477,9 @@ class RemoteMixin:
         parent = self.settings_win if self.settings_win is not None and self.settings_win.winfo_viewable() \
             else self.root
         win = self.remote_win = tk.Toplevel(parent, bg=BG)
+        self.remote_pairing = True
+        # closed in any way (also along with the Settings window): pairing closes too
+        win.bind("<Destroy>", lambda e: e.widget is win and self._remote_pairing_closed(), add="+")
         win.title("Phone remote - Macro Recorder")
         win.resizable(False, False)
         win.attributes("-topmost", True)
@@ -524,6 +531,18 @@ class RemoteMixin:
         win.protocol("WM_DELETE_WINDOW", self._remote_close)
         dark_title_bar(win)
         self._remote_refresh_window()
+
+    def _remote_pairing_closed(self):
+        """The window is gone: /pair stops working, and the code it showed won't work next time."""
+        if self.remote_pairing:
+            self.remote_pairing = False
+            self._remote_new_code()
+        if self.remote_win is not None:
+            try:
+                if not self.remote_win.winfo_exists():
+                    self.remote_win = None
+            except tk.TclError:
+                self.remote_win = None
 
     def _remote_close(self):
         win, self.remote_win = self.remote_win, None
