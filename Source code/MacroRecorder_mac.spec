@@ -9,7 +9,8 @@ a = Analysis(
     pathex=[here],
     datas=[(os.path.join(here, "retry_default.png"), "."), (os.path.join(here, "default_logo.png"), "."),
            (os.path.join(here, "completed_default.png"), "."),
-           (os.path.join(here, "failed_default.png"), ".")],
+           (os.path.join(here, "failed_default.png"), "."),
+           (os.path.join(here, "disconnected_default.png"), ".")],
     hiddenimports=["image_watch", "lazy", "pynput.keyboard._darwin", "pynput.mouse._darwin", "WebKit", "AppKit", "Foundation", "certifi"],
 )
 pyz = PYZ(a.pure)

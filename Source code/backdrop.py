@@ -377,6 +377,10 @@ class Backdrop:
         """Stand still for now, e.g. while a macro records or plays (keeps its timing exact)."""
         if bool(paused) != self.paused:
             self.paused = bool(paused)
+            if self.paused:
+                # standing still for a while (a macro playing for hours): let go of the finished
+                # pictures of the other frames (up to ANIM_CACHE_BYTES); they're made again when it moves
+                self.masters = {i: m for i, m in self.masters.items() if i == self.frame_i}
             self._start_animation()
 
     def _playing(self):

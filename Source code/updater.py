@@ -2,7 +2,10 @@
 
 The newest version is the repo's latest GitHub Release (made by .github/workflows/build.yml when
 APP_VERSION in version.py goes up). Each Release has these files:
-    MacroRecorder.exe                    Windows
+    MacroRecorder-Windows.zip            Windows, the folder build (MacroRecorder.exe + a hidden
+                                         _internal folder beside it: starts in about a second)
+    MacroRecorder.exe                    Windows, the same app as one file (unpacks itself each time it
+                                         starts; kept so copies from before 2.8 can still update)
     MacroRecorder-Mac-AppleSilicon.zip   Mac with an M1 or newer chip
     MacroRecorder-Mac-Intel.zip          older Intel Mac
 
@@ -56,9 +59,24 @@ def can_install():
     return bool(getattr(sys, "frozen", False)) and (IS_WIN or IS_MAC)
 
 
+WIN_ZIP = "MacroRecorder-Windows.zip"
+WIN_EXE = "MacroRecorder.exe"
+INTERNAL = "_internal"  # the folder build's own folder beside the exe (PyInstaller's name for it)
+
+
+def is_folder_build():
+    """True when this is the Windows folder build (the exe with _internal beside it), not the
+    one-file exe."""
+    if not (IS_WIN and getattr(sys, "frozen", False)):
+        return False
+    here = os.path.dirname(os.path.abspath(sys.executable))
+    own = os.path.normcase(os.path.abspath(getattr(sys, "_MEIPASS", "") or ""))
+    return own == os.path.normcase(os.path.join(here, INTERNAL))
+
+
 def asset_name():
     if IS_WIN:
-        return "MacroRecorder.exe"
+        return WIN_ZIP
     if IS_MAC:
         return "MacroRecorder-Mac-AppleSilicon.zip" if platform.machine() == "arm64" else "MacroRecorder-Mac-Intel.zip"
     return None
@@ -100,7 +118,11 @@ def check(timeout=15):
     if not is_newer(tag):
         return None
     want = asset_name()
-    asset = next((a for a in data.get("assets") or [] if a.get("name") == want), None)
+    assets = data.get("assets") or []
+    asset = next((a for a in assets if a.get("name") == want), None)
+    if asset is None and IS_WIN:
+        # a Release without the folder zip: the one-file exe works as well
+        asset = next((a for a in assets if a.get("name") == WIN_EXE), None)
     if asset is None:
         raise UpdateError(f"Version {tag.lstrip('vV')} is out, but it has no {want} yet.")
     digest = str(asset.get("digest") or "")
@@ -111,6 +133,7 @@ def check(timeout=15):
         "size": int(asset.get("size") or 0),
         "sha256": digest.split(":", 1)[1].lower() if digest.startswith("sha256:") else "",
         "page": data.get("html_url") or f"https://github.com/{REPO}/releases/latest",
+        "name": asset.get("name") or want,
     }
 
 
@@ -146,18 +169,26 @@ def _old_path(exe):
 
 
 def cleanup_old():
-    """Run at start: removes the previous version left beside the exe by an update."""
+    """Run at start: removes the previous version left beside the exe by an update (the exe, and
+    for the folder build its _internal folder)."""
     if not (IS_WIN and getattr(sys, "frozen", False)):
         return
+    import shutil
+    here = os.path.dirname(os.path.abspath(sys.executable))
     old = _old_path(sys.executable)
+    old_internal = os.path.join(here, INTERNAL + ".old")
+    stage = os.path.join(here, STAGE)
     for _ in range(20):  # the old copy may still be closing for a moment
         if not os.path.exists(old):
-            return
+            break
         try:
             os.remove(old)
-            return
+            break
         except OSError:
             time.sleep(0.5)
+    for folder in (old_internal, stage):
+        if os.path.isdir(folder):
+            shutil.rmtree(folder, ignore_errors=True)
 
 
 def cleanup_leftover_unpacks():
@@ -168,7 +199,7 @@ def cleanup_leftover_unpacks():
     import glob
     import shutil
     own = getattr(sys, "_MEIPASS", None)
-    if not own:
+    if not own or is_folder_build():  # (the folder build doesn't unpack itself)
         return
     temp = os.path.dirname(own)
     try:
@@ -272,23 +303,136 @@ def install_mac(zip_file):
                             start_new_session=True, close_fds=True)
 
 
+# ---------------------------------------------------------------- Windows, folder build
+
+STAGE = "_update_new"  # the new version is unpacked here, beside the app, before it's put in place
+
+# Runs after the app has closed (an app can't replace its own _internal folder while it runs: its
+# files are in use). Every step is undone if a later one fails, so the app is never left half old,
+# half new: the old exe and _internal are renamed to *.old first and only removed by the new copy
+# once it has started.
+SWAP_SCRIPT = r"""
+param([int]$AppPid, [string]$Dir, [string]$ExeName, [string]$Stage, [string]$Log, [int]$Start)
+$ErrorActionPreference = 'Stop'
+function Note($t) { Add-Content -LiteralPath $Log -Value ((Get-Date -Format 'HH:mm:ss') + ' ' + $t) }
+$exe = Join-Path $Dir $ExeName
+$int = Join-Path $Dir '_internal'
+$exeOld = $exe + '.old'
+$intOld = $int + '.old'
+try { Wait-Process -Id $AppPid -Timeout 60 -ErrorAction Stop } catch { }
+Start-Sleep -Milliseconds 300
+$movedExe = $false; $movedInt = $false; $ok = $false
+try {
+    if (Test-Path -LiteralPath $exeOld) { Remove-Item -LiteralPath $exeOld -Force }
+    if (Test-Path -LiteralPath $intOld) { Remove-Item -LiteralPath $intOld -Recurse -Force }
+    if (Test-Path -LiteralPath $int) { Rename-Item -LiteralPath $int -NewName '_internal.old'; $movedInt = $true }
+    if (Test-Path -LiteralPath $exe) { Rename-Item -LiteralPath $exe -NewName ($ExeName + '.old'); $movedExe = $true }
+    Move-Item -LiteralPath (Join-Path $Stage '_internal') -Destination $int
+    Move-Item -LiteralPath (Join-Path $Stage 'MacroRecorder.exe') -Destination $exe
+    (Get-Item -LiteralPath $int -Force).Attributes = 'Directory, Hidden'
+    $ok = $true
+    Note 'Update put in place.'
+} catch {
+    Note ('Update failed, putting the old version back: ' + $_)
+    try {
+        if ($movedExe) { if (Test-Path -LiteralPath $exe) { Remove-Item -LiteralPath $exe -Force }; Rename-Item -LiteralPath $exeOld -NewName $ExeName }
+        if ($movedInt) { if (Test-Path -LiteralPath $int) { Remove-Item -LiteralPath $int -Recurse -Force }; Rename-Item -LiteralPath $intOld -NewName '_internal' }
+    } catch { Note ('Putting the old version back failed: ' + $_) }
+}
+if ($Start -eq 1 -and (Test-Path -LiteralPath $exe)) { Start-Process -FilePath $exe -WorkingDirectory $Dir }
+if ($ok) { Remove-Item -LiteralPath $Stage -Recurse -Force -ErrorAction SilentlyContinue }
+"""
+
+
+def unpack_folder_update(zip_file, app_dir):
+    """Unpacks the downloaded MacroRecorder-Windows.zip into _update_new beside the app and checks it
+    (an exe and a complete _internal folder). Returns that folder. Nothing of the app is touched."""
+    import shutil
+    import zipfile
+    stage = os.path.join(app_dir, STAGE)
+    if os.path.isdir(stage):
+        shutil.rmtree(stage, ignore_errors=True)
+    try:
+        with zipfile.ZipFile(zip_file) as z:
+            bad = z.testzip()
+            if bad is not None:
+                raise UpdateError(f"The download is damaged ({bad}). Try again later.")
+            for name in z.namelist():  # nothing may land outside the folder
+                target = os.path.normpath(os.path.join(stage, name))
+                if not target.startswith(os.path.normpath(stage) + os.sep):
+                    raise UpdateError("The download has unexpected files in it.")
+            z.extractall(stage)
+    except zipfile.BadZipFile:
+        shutil.rmtree(stage, ignore_errors=True)
+        raise UpdateError("The download isn't a complete zip file. Try again later.")
+    except OSError as e:
+        shutil.rmtree(stage, ignore_errors=True)
+        raise UpdateError(f"Couldn't unpack the new version ({e}). Is the disk full?")
+    exe = os.path.join(stage, WIN_EXE)
+    internal = os.path.join(stage, INTERNAL)
+    try:
+        with open(exe, "rb") as f:
+            is_exe = f.read(2) == b"MZ"
+    except OSError:
+        is_exe = False
+    import glob
+    if not is_exe or not glob.glob(os.path.join(internal, "python3*.dll")):
+        shutil.rmtree(stage, ignore_errors=True)
+        raise UpdateError("The download doesn't have a complete Macro Recorder in it.")
+    return stage
+
+
+def install_windows_folder(zip_file, exe=None, pid=None, start=True, wait=False):
+    """Puts the folder build from zip_file in place of this app: unpacks and checks it beside the
+    app, then a small script waits for this app to close, swaps the exe and _internal (undoing
+    everything if a step fails) and starts the new version. Works from the one-file exe too: that
+    one becomes the folder build (its exe is replaced and _internal is added beside it).
+    Returns the script's process; the caller then closes this app (unless wait)."""
+    exe = os.path.abspath(exe or sys.executable)
+    app_dir = os.path.dirname(exe)
+    stage = unpack_folder_update(zip_file, app_dir)
+    try:
+        os.remove(zip_file)
+    except OSError:
+        pass
+    work = tempfile.mkdtemp(prefix="MacroRecorder_update_")
+    script = os.path.join(work, "swap.ps1")
+    with open(script, "w", encoding="utf-8-sig") as f:
+        f.write(SWAP_SCRIPT)
+    log = os.path.join(work, "update_log.txt")  # (in Temp: what the swap did, for a report)
+    args = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+            "-WindowStyle", "Hidden", "-File", script, "-AppPid", str(pid or os.getpid()), "-Dir", app_dir,
+            "-ExeName", os.path.basename(exe), "-Stage", stage, "-Log", log, "-Start", "1" if start else "0"]
+    # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP (not DETACHED_PROCESS: PowerShell does nothing under it)
+    flags = 0x08000000 | 0x00000200
+    env = {k: v for k, v in os.environ.items() if not k.startswith("_PYI") and k != "_MEIPASS2"}
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    proc = subprocess.Popen(args, cwd=work, env=env, close_fds=True, creationflags=flags)
+    proc.log = log
+    if wait:
+        proc.wait(120)
+    return proc
+
+
 def install(new_file):
     if IS_WIN:
-        return install_windows(new_file)
+        with open(new_file, "rb") as f:
+            is_zip = f.read(2) == b"PK"
+        return install_windows_folder(new_file) if is_zip else install_windows(new_file)
     if IS_MAC:
         return install_mac(new_file)
     raise UpdateError("Updating isn't supported here.")
 
 
-def download_path():
-    name = asset_name() or "update"
+def download_path(name=None):
+    name = name or asset_name() or "update"
     if IS_WIN:
         # same folder as the exe when possible, so putting it in place is a quick rename
         folder = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else tempfile.gettempdir()
-        test = os.path.join(folder, "MacroRecorder.exe.download")
+        test = os.path.join(folder, name + ".download")
         try:
             open(test, "ab").close()
             return test
         except OSError:
-            return os.path.join(tempfile.gettempdir(), "MacroRecorder.exe.download")
+            return os.path.join(tempfile.gettempdir(), name + ".download")
     return os.path.join(tempfile.mkdtemp(prefix="MacroRecorder_dl_"), name)

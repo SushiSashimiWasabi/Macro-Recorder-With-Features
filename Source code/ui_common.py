@@ -771,9 +771,14 @@ class ThemedBoxes:
 
     def _box(self, title, message, kind, buttons, default, cancel, parent=None, entry=None):
         """buttons: [(text, value)]. Returns the value of the button pressed (cancel's for the X / Esc)."""
+        quiet = getattr(self, "quiet", None)
+        if quiet is not None:  # (the phone remote is doing this: nobody is there to answer a box)
+            quiet.append(str(message or ""))
+            return (cancel, None) if entry is not None else cancel
         parent = self._parent(parent)
         win = tk.Toplevel(parent, bg=BG)
         win.withdraw()
+        self.open_boxes = [w for w in getattr(self, "open_boxes", []) if w.winfo_exists()] + [win]
         win.title(title or "Macro Recorder")
         win.resizable(False, False)
         win.attributes("-topmost", True)
@@ -852,6 +857,18 @@ class ThemedBoxes:
         if entry is not None:
             return result["value"], result.get("text")
         return result["value"]
+
+    def close_all(self):
+        """Close every message box that's open, as if its X was pressed (the phone remote does this
+        before it starts a macro: a box left open would sit over the game)."""
+        for win in getattr(self, "open_boxes", []):
+            try:
+                if win.winfo_exists():
+                    win.grab_release()
+                    win.destroy()
+            except tk.TclError:
+                pass
+        self.open_boxes = []
 
     def showinfo(self, title=None, message=None, parent=None, **_kw):
         return self._box(title, message, "info", [("OK", "ok")], "ok", "ok", parent)

@@ -1,12 +1,87 @@
 # The app's version. Raising it (and pushing to main) makes GitHub publish a new Release,
 # which every copy of the app offers to install when it starts.
-APP_VERSION = "2.6.3"
+APP_VERSION = "2.8"
 
 # Every version, newest first: (version, the day it was finalized, changes). The newest is shown once after an update;
 # Settings > About > What's new shows them all. Each change is one paragraph (shown as a bullet).
 # Version numbers started at 2.1 (the first one that could update itself); the earlier steps have
 # names instead.
 HISTORY = [
+    ("2.8", "15 November 2026", [
+        "Every picture in Picture watch now has its own action (Change… next to it): start the macro over, "
+        "play another macro and then start over, switch to another macro, skip to the next step, press a "
+        "key, wait, or stop. Each one can have a name, its own \"click on it\", a cooldown, and \"only when "
+        "this other picture also shows\".",
+        "Chains: the new Edit action \"Play another macro\" plays a saved macro as often as you say. Put a few "
+        "under each other (macro A 5 times, then macro B) and turn Repeat on to loop the chain. Each part "
+        "counts as a run, and picture watch works inside every part.",
+        "Disconnect recovery: give the \"Disconnected\" box's picture the action \"Disconnected: play my rejoin macro\" and "
+        "choose your rejoin macro. It plays the macro, checks that the box is gone (and, if you chose one, "
+        "that an \"I'm back\" picture shows), then starts the main macro over. Failed tries wait longer each "
+        "time; after the last one it stops. Discord is told when it disconnects, gets back or gives up, and "
+        "reconnects are counted.",
+        "If the game closes completely (Settings > Playback > If the game closes): wait as before, stop, or "
+        "open the game again and play a rejoin macro.",
+        "Run stats (Settings > Results > Run stats): every run is now kept between sessions. See the win rate, "
+        "average and usual run time, best and longest run, fragments an hour and a chart of the last 14 days, "
+        "for one macro or all, next to another macro to compare. Unusually slow runs are marked.",
+        "Stop by itself (Settings > Playback): after a number of runs, fragments or minutes, or at a time of "
+        "day; in the middle of a run or after it. Afterwards it can close the game, put the PC to sleep or "
+        "shut it down (with a countdown you can cancel). Discord is told 5 minutes before a timed stop.",
+        "Small random timing (Settings > Playback > Advanced, off unless you turn it on): each action a few "
+        "milliseconds earlier or later and clicks within a few pixels, for steadier long loops. Each macro can "
+        "have its own amounts or never use it.",
+        "Discord daily and weekly summary (Settings > Discord): runs, wins and losses, fragments, time and the "
+        "best run; the weekly one comes with a chart and your record days.",
+        "Trim (Edit > a recorded part > Trim…): finds the wait at the start, mouse wandering at the end and "
+        "long pauses in the middle where no key is held, and cuts only the ones you tick.",
+        "Profiles (Settings > General > Profile): named sets of all your settings, switched with one click. A "
+        "macro can be linked to a profile, so opening it switches; in a chain, each part can use a profile's "
+        "speed and random timing.",
+        "Phone remote: /stats, /profile and /keepgoing (cancels \"Stop by itself\"); the status card shows a "
+        "planned stop, reconnects and the chain part that's playing.",
+        "Emergency stop: Ctrl+Alt+End always stops playing and recording, whatever the hotkeys are set to.",
+        "Edit keeps unapplied changes safe: if the app closes unexpectedly, it offers them back next time.",
+        "Run dashboard (the Dashboard link at the bottom of the main window): the macro, its chain, what it's "
+        "doing now, today's results, picture watch, stop by itself, profile, Discord and the phone remote on "
+        "one page, with Play, Pause and Stop.",
+        "Share in one file (Settings > General > Share): Export writes the open macro with the macros it plays, "
+        "the Picture watch pictures and their actions, and its linked profile. Import puts it all in place and "
+        "asks before adding pictures or a profile. Your Discord link and the phone remote are never inside.",
+        "Chains: \"If a run of it fails, play\" for each part, and a chart of the chain (in Edit, drag a box to "
+        "move the step) that also shows what each watched picture does.",
+        "Settings has a search box (bottom left), and a first start asks three questions to set the app up.",
+        "Discord: \"One card that updates\" changes the same card after each run instead of posting a new one. "
+        "Phone remote: /pingme pings you once when a fragment drops, a run fails, it disconnects, it stops, or "
+        "after a number of runs.",
+        "Lighter during long loops: Picture watch no longer searches the whole screen every second for a "
+        "picture that hasn't shown yet (like the Disconnected box), and looks for the Disconnected box only "
+        "in the middle of the screen. Results look for MISSION FAILED where MISSION COMPLETED showed, and "
+        "Wait for a picture steps rest between looks. Searching the whole screen is also several times quicker.",
+        "While a macro plays, the PC doesn't go to sleep or turn the screen off by itself (Stop by itself can "
+        "still put it to sleep).",
+        "Discord: a message that Discord turned away (too many at once) or that couldn't get through is sent "
+        "again a little later instead of being lost.",
+        "Run stats are saved after every run, so a crash or power cut loses none.",
+        "Windows: the app starts much quicker. It now comes as MacroRecorder.exe with a hidden folder named "
+        "_internal beside it (keep the two together if you move it), so it no longer unpacks about 150 MB each "
+        "time it starts. Updates unpack the new version beside the app and swap it in only after the app has "
+        "closed; if anything goes wrong, the old version is put back. A one-file copy moves over to this by "
+        "itself on its next update.",
+        "Windows: a \"Starting…\" picture shows at once when you open the app, until its window is ready.",
+        "Smaller things: a GIF background lets go of memory while a macro plays, playback uses less CPU "
+        "between actions, and the log notes every 30 minutes how much memory and CPU the app uses.",
+    ]),
+    ("2.7", "15 November 2026", [
+        "A phone remote through Discord (Settings > Discord > Phone remote…): start, stop, pause and resume "
+        "the macro, see what it's doing, get a screenshot and switch to another saved macro, with slash "
+        "commands (/start, /stop, /pause, /resume, /status, /screenshot, /macro) or the buttons under the "
+        "status message. It uses your own small Discord bot (free; the window shows the steps).",
+        "Only Discord accounts you pair are obeyed: type /pair with the code the window shows. The bot's "
+        "token stays in this PC's settings.",
+        "Start from the phone puts the game's window in front first, and a problem that would show a box on "
+        "the PC is told in Discord instead.",
+    ]),
     ("2.6.3", "15 November 2026", [
         "Fixed: the Saved macros row counted a macro whose file had been deleted, so the first macro you "
         "opened showed as number 2. Deleted files are now taken off the list by themselves.",

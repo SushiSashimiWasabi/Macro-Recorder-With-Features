@@ -162,6 +162,53 @@ def bring_to_front(hwnd):
         return False
 
 
+def force_to_front(hwnd):
+    """Put a window in front even when another program is in front (Windows normally only lets
+    the program in front do that). Used when Play comes from the phone remote: nobody is at the
+    PC to click the game. True when the window ended up in front."""
+    if not is_window(hwnd):
+        return False
+    try:
+        import time
+
+        if user32.IsIconic(hwnd):
+            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+        if user32.GetForegroundWindow() == hwnd:
+            return True
+        user32.SetForegroundWindow(hwnd)
+        time.sleep(0.05)
+        if user32.GetForegroundWindow() == hwnd:
+            return True
+        # as if this thread belonged to the program in front: then Windows allows it
+        fg = user32.GetForegroundWindow()
+        me = kernel32.GetCurrentThreadId()
+        other = user32.GetWindowThreadProcessId(fg, None) if fg else 0
+        attached = bool(other and other != me and user32.AttachThreadInput(me, other, True))
+        try:
+            user32.BringWindowToTop(wintypes.HWND(hwnd))
+            user32.SetForegroundWindow(hwnd)
+        finally:
+            if attached:
+                user32.AttachThreadInput(me, other, False)
+        time.sleep(0.05)
+        if user32.GetForegroundWindow() == hwnd:
+            return True
+        # last try: after a tap of Alt, Windows lets any program choose the window in front
+        user32.keybd_event(0x12, 0, 0, 0)
+        user32.SetForegroundWindow(hwnd)
+        user32.keybd_event(0x12, 0, 2, 0)
+        time.sleep(0.05)
+        return user32.GetForegroundWindow() == hwnd
+    except Exception:
+        return False
+
+
+def close_window(hwnd):
+    """Ask a window to close, as its X button would."""
+    if IS_WIN and hwnd:
+        user32.PostMessageW(wintypes.HWND(hwnd), 0x0010, 0, 0)  # WM_CLOSE
+
+
 def cursor_hidden():
     """True while the mouse pointer is hidden (a game turning its camera). None = can't tell."""
     if not IS_WIN:
@@ -188,6 +235,58 @@ def held_mouse_buttons():
                 name = "right" if name == "left" else "left"
             held.append(name)
     return held
+
+
+ES_CONTINUOUS, ES_SYSTEM_REQUIRED, ES_DISPLAY_REQUIRED = 0x80000000, 0x00000001, 0x00000002
+
+
+def keep_awake(on):
+    """While on: Windows doesn't go to sleep or turn the screen off by itself (a long wait in a macro
+    has no key presses to keep it awake). Call it on/off from the same thread. Sleep or shut down
+    chosen by the user (or by "Stop by itself") still works."""
+    if not IS_WIN:
+        return
+    try:
+        kernel32.SetThreadExecutionState.restype = ctypes.c_uint
+        kernel32.SetThreadExecutionState.argtypes = [ctypes.c_uint]
+        flags = ES_CONTINUOUS | (ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED if on else 0)
+        kernel32.SetThreadExecutionState(flags)
+    except Exception:
+        pass
+
+
+def process_health():
+    """How heavy this app is right now, for the log: {"memory_mb", "gdi", "user"} (what can be read
+    here). Memory is the app's own (private) memory; gdi / user are Windows drawing and window handles
+    (a number that keeps growing over a long run means a leak)."""
+    info = {}
+    try:
+        if IS_WIN:
+            class PMC(ctypes.Structure):
+                _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD)] + \
+                           [(n, ctypes.c_size_t) for n in ("PeakWorkingSetSize", "WorkingSetSize",
+                                                           "QuotaPeakPagedPoolUsage", "QuotaPagedPoolUsage",
+                                                           "QuotaPeakNonPagedPoolUsage", "QuotaNonPagedPoolUsage",
+                                                           "PagefileUsage", "PeakPagefileUsage", "PrivateUsage")]
+            kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+            proc = kernel32.GetCurrentProcess()
+            pmc = PMC()
+            pmc.cb = ctypes.sizeof(PMC)
+            psapi = ctypes.WinDLL("psapi")
+            psapi.GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD]
+            if psapi.GetProcessMemoryInfo(proc, ctypes.byref(pmc), pmc.cb):
+                info["memory_mb"] = round(pmc.PrivateUsage / 1048576)
+            user32.GetGuiResources.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+            info["gdi"] = user32.GetGuiResources(proc, 0)
+            info["user"] = user32.GetGuiResources(proc, 1)
+        else:
+            import resource
+
+            peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            info["memory_mb"] = round(peak / (1048576 if sys.platform == "darwin" else 1024))  # (the peak)
+    except Exception:
+        pass
+    return info
 
 
 def set_thread_priority(level):

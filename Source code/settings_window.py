@@ -260,6 +260,9 @@ class SettingsWindowMixin:
         text += "\n\nDownload and install it now? Macro Recorder will restart by itself."
         if self.preview:
             text += "\n\n(Preview: this replaces the preview exe.)"
+        if info.get("name") == updater.WIN_ZIP and not updater.is_folder_build():
+            text += ("\n\nThis version starts much quicker: it comes as the exe plus a hidden folder named "
+                     "_internal beside it. Keep the two together if you move the app.")
         if messagebox.askyesno("Update available", text, parent=parent):
             self._install_update(info)
 
@@ -276,7 +279,7 @@ class SettingsWindowMixin:
                  width=40, anchor="w").pack()
         dark_title_bar(win)
         progress = {"done": 0, "total": info.get("size") or 0}
-        path = updater.download_path()
+        path = updater.download_path(info.get("name"))
 
         def tick():
             if win.winfo_exists() and self.update_busy:
@@ -514,7 +517,8 @@ class SettingsWindowMixin:
                      "discord_runs", "discord_ping_fragments", "discord_screenshot", "discord_stops", "watch_limit_count",
                      "watch_limit_seconds", "watch_shift_lock", "watch_save_with_macro", "discord_name",
                      "discord_ping", "discord_ping_when", "discord_capture", "discord_title", "discord_content",
-                     "discord_message", "results_enabled", "drops_enabled", "simplify_moves", "results_match", "result_pictures")
+                     "discord_message", "results_enabled", "drops_enabled", "simplify_moves", "results_match", "result_pictures",
+                     "game_closed", "auto_stop", "vary", "discord_summary", "discord_live")
 
     def _is_page_setting(self, key):
         if key in self.PAGE_SETTINGS:
@@ -696,6 +700,8 @@ class SettingsWindowMixin:
                 (self.simplify_var, bool(s.get("simplify_moves", False))),
                 (self.results_match_var, core.int_setting(s, "results_match", core.RESULTS_MATCH_DEFAULT, 50, 99))):
             var.set(value)
+        self._show_closed_choice()
+        self._show_automation()
         cap = str(s.get("discord_capture", "screen"))
         self.discord_capture_var.set(CAPTURE_CHOICES["program"] if cap.startswith("program:")
                                      else CAPTURE_CHOICES.get(cap, "Main screen"))
@@ -726,8 +732,7 @@ class SettingsWindowMixin:
         if image_watch is not None:
             self.watch_pictures = []
             for entry in s.get("watch_pictures") or []:
-                pic = core.saved_picture(entry["file"], screen_h=entry.get("screen_h")) \
-                    if isinstance(entry, dict) and entry.get("file") else None
+                pic = core.watch_picture_from(entry)
                 if pic is not None:
                     self.watch_pictures.append(pic)
             self._show_watch_pictures()

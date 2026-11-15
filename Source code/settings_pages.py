@@ -72,6 +72,7 @@ class SettingsPagesMixin:
         self.btn_reset = ttk.Button(bottom, text="Reset", width=8, command=self.reset_settings_changes)
         self.btn_undo = ttk.Button(bottom, text="Undo", width=8, command=self.undo_settings_change)
         self.btn_redo = ttk.Button(bottom, text="Redo", width=8, command=self.redo_settings_change)
+        self._build_settings_search(bottom)
         self.settings_redo = []  # changes taken back with Undo, newest last (Redo puts them back)
         self.settings_history = []  # earlier states of the page settings, oldest first
         self.settings_saved_state = None  # the state at the last Apply (or when the window opened)
@@ -208,7 +209,18 @@ class SettingsPagesMixin:
         return body
 
     def _build_general_tab(self, f):
-        self._section(f, "SHORTCUTS", first=True)
+        self._section(f, "PROFILE", first=True)
+        self._choice_row(f, "Profile", self.profile_summary, self.open_profiles, info=self.PROFILE_HELP,
+                         tip="a named set of all your settings")
+        row = self._row(f, "Share", "the open macro with its pictures, chain and profile, in one file",
+                        info=self.SHARE_HELP)
+        ttk.Button(row, text="Import…", command=self.import_pack).pack(side="right")
+        ttk.Button(row, text="Export…", command=self.export_pack).pack(side="right", padx=(0, 6))
+        row = self._row(f, "First-start questions", "windowed or fullscreen, AOT:R, Discord")
+        ttk.Button(row, text="Ask again…", command=self.open_first_start).pack(side="right")
+        self._section(f, "SHORTCUTS")
+        self._row(f, "Emergency stop", "Ctrl + Alt + End: stops playing and recording, always, whatever the "
+                  "keys below are")
         self.key_badges = {}
         self.change_links = {}
         for action in HOTKEY_ACTIONS:
@@ -755,8 +767,18 @@ class SettingsPagesMixin:
         row = self._row(f, "Stop after waiting", "seconds (0 = keep waiting)")
         ttk.Spinbox(row, from_=0, to=3600, width=5, textvariable=self.away_stop_var,
                     command=self._save_settings).pack(side="right")
+        row = self._row(f, "If the game closes", info=self.CLOSED_HELP)
+        self.closed_on_var = tk.BooleanVar(value=self._closed_settings()["on"])
+        Switch(row, self.closed_on_var, command=self.closed_switched).pack(side="right", padx=(10, 0))
+        ttk.Button(row, text="Change…", command=self.open_game_closed).pack(side="right")
+        self.closed_var = tk.StringVar(value=self.closed_summary())
+        self.closed_var.trace_add("write", lambda *a: self.root.after_idle(self._settings_text_changed))
+        tk.Label(row, textvariable=self.closed_var, bg=BG, fg=MUTED, font=F_SMALL).pack(side="right", padx=(0, 10))
+        self._choice_row(f, "Stop by itself", self.auto_stop_summary, self.open_auto_stop,
+                         info=self.AUTO_STOP_HELP)
         self._build_resolution_ui(f)
         adv = self._advanced(f)
+        self._choice_row(adv, "Small random timing", self.vary_summary, self.open_vary, info=self.VARY_HELP)
         row = self._row(adv, "Play into")
         self.target_box = ttk.Combobox(row, width=30, state="readonly", textvariable=self.target_var,
                                        postcommand=self._refresh_windows)

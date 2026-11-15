@@ -147,6 +147,47 @@ def feature_mask(gray):
     return mask
 
 
+# the quick rough look (see Matcher._look)
+ROUGH_MIN_AREA = 40   # only when the area looked at is at least this many times the picture
+ROUGH_MIN_SIDE = 8    # and the picture is still at least this big at half size
+ROUGH_SPOTS = 6       # how many of the rough look's best spots get the exact look
+ROUGH_TRUST = 0.0     # below this, the exact look goes over the whole area after all (0: never;
+# checked on the real AOT:R screenshots in tests/data: the rough look never missed a picture that was there)
+PLAIN_TRIES = 12      # best spots checked one by one for being plain, before checking every spot
+
+
+def _rough_spots(gray, t, count):
+    """The best few spots of a quick look (no mask), not right next to each other: [(x, y)]."""
+    th, tw = t.shape
+    if th > gray.shape[0] or tw > gray.shape[1]:
+        return []
+    res = cv2.matchTemplate(gray, t, cv2.TM_CCOEFF_NORMED)
+    res = np.nan_to_num(res, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
+    spots = []
+    for _ in range(count):
+        _, score, _, (x, y) = cv2.minMaxLoc(res)
+        if score <= 0.1:
+            break
+        spots.append((x, y))
+        res[max(0, y - th // 2):y + th // 2 + 1, max(0, x - tw // 2):x + tw // 2 + 1] = -1.0
+    return spots
+
+
+_half_cache = []  # [(prepared screenshot, at half size)], the last few
+
+
+def _half(gray):
+    with _prepared_lock:
+        for g, h in _half_cache:
+            if g is gray:
+                return h
+    half = cv2.resize(gray, (gray.shape[1] // 2, gray.shape[0] // 2), interpolation=cv2.INTER_AREA)
+    with _prepared_lock:
+        _half_cache.append((gray, half))
+        del _half_cache[:-6]
+    return half
+
+
 _prepared_cache = []  # [(screenshot, work, prepared picture)], the last few
 _prepared_lock = __import__("threading").Lock()
 
@@ -164,7 +205,7 @@ def _prepared(screen, work):
     gray = _soften(gray)
     with _prepared_lock:
         _prepared_cache.append((screen, work, gray))
-        del _prepared_cache[:-3]
+        del _prepared_cache[:-6]
     return gray
 
 
@@ -193,6 +234,14 @@ class Matcher:
             t = cv2.resize(gray, (tw, th), interpolation=cv2.INTER_AREA)
             mask = feature_mask(t) if ignore_background else None
             self.templates.append((_soften(t), mask, base * step))
+        # the same sizes at half size without the mask, for the quick rough look (None: too small for it)
+        self.rough = []
+        for t, mask, _ in self.templates:
+            th, tw = t.shape
+            if mask is None or min(th, tw) < 2 * ROUGH_MIN_SIDE:
+                self.rough.append(None)
+            else:
+                self.rough.append(cv2.resize(t, (tw // 2, th // 2), interpolation=cv2.INTER_AREA))
         self.last_best = SIZE_STEPS.index(1.0)
         self.last_rect = None  # where it was last found on the screen (x, y, w, h)
         # how much the picture varies (contrast); a matching spot on screen must vary about as much
@@ -212,30 +261,28 @@ class Matcher:
         area = self.near_last_area()
         if area is None:
             return 0.0, None
-        H, W = screen.shape[:2]
-        x0, y0 = max(0, area[0]), max(0, area[1])
-        x1, y1 = min(W, area[2]), min(H, area[3])
-        if x1 - x0 < 8 or y1 - y0 < 8:
-            return 0.0, None
-        # cut the part out of the whole prepared (shrunk) screenshot, not out of the screenshot itself:
-        # shrinking a cut-out lines its pixels up differently, which can cost a few % of the score
-        gray = _prepared(screen, self.work)
-        sx0, sy0 = int(x0 * self.work), int(y0 * self.work)
-        sx1, sy1 = int(np.ceil(x1 * self.work)), int(np.ceil(y1 * self.work))
-        score, rect = self._find(None, good_enough, True, gray=gray[sy0:sy1, sx0:sx1], offset=(sx0, sy0))
-        if rect is None:
-            return score, None
-        if good_enough is None or score >= good_enough:
-            self.last_rect = rect
-        return score, rect
+        return self.find(screen, good_enough, quick=True, area=area)
 
-    def find(self, screen, good_enough=None, quick=False, remember=True):
+    def find(self, screen, good_enough=None, quick=False, remember=True, area=None):
         """Best match on a BGR screenshot: (score 0..1, (x, y, w, h) on the screen).
 
         With good_enough, stops as soon as a size scores at least that much (tries the size that
         matched best last time first, so a normal check takes one pass). quick only tries that size
-        and the ones right next to it."""
-        result = self._find(screen, good_enough, quick)
+        and the ones right next to it. area (x0, y0, x1, y1 on the screenshot): only look there."""
+        if area is None:
+            result = self._find(screen, good_enough, quick)
+        else:
+            H, W = screen.shape[:2]
+            x0, y0 = max(0, int(area[0])), max(0, int(area[1]))
+            x1, y1 = min(W, int(area[2])), min(H, int(area[3]))
+            if x1 - x0 < 8 or y1 - y0 < 8:
+                return 0.0, None
+            # cut the part out of the whole prepared (shrunk) screenshot, not out of the screenshot
+            # itself: shrinking a cut-out lines its pixels up differently, which can cost a few % of the score
+            gray = _prepared(screen, self.work)
+            sx0, sy0 = int(x0 * self.work), int(y0 * self.work)
+            sx1, sy1 = int(np.ceil(x1 * self.work)), int(np.ceil(y1 * self.work))
+            result = self._find(None, good_enough, quick, gray=gray[sy0:sy1, sx0:sx1], offset=(sx0, sy0))
         if remember and result[1] is not None and (good_enough is None or result[0] >= good_enough):
             self.last_rect = result[1]
         return result
@@ -253,16 +300,7 @@ class Matcher:
             th, tw = t.shape
             if th > gray.shape[0] or tw > gray.shape[1]:
                 continue
-            if mask is not None:
-                res = cv2.matchTemplate(gray, t, cv2.TM_CCOEFF_NORMED, mask=mask)
-            else:
-                res = cv2.matchTemplate(gray, t, cv2.TM_CCOEFF_NORMED)
-            res = np.nan_to_num(res, nan=0.0, posinf=0.0, neginf=0.0)
-            np.clip(res, -1.0, 1.0, out=res)
-            # On a plain area (like a black loading screen) the score is meaningless: OpenCV
-            # reports a perfect 100% there. Only count spots with about as much detail as the picture.
-            res[_patch_std(gray, tw, th) < 0.35 * self.detail] = 0.0
-            _, score, _, (x, y) = cv2.minMaxLoc(res)
+            score, (x, y) = self._look(gray, i, good_enough)
             if score > best[0]:
                 inv = 1.0 / self.work
                 ox, oy = offset
@@ -273,3 +311,57 @@ class Matcher:
         if best[1] is not None and (good_enough is None or best[0] >= good_enough):
             self.last_best = best_i
         return best
+
+    def _look(self, gray, i, good_enough=None):
+        """The best score of template size i on the prepared screenshot, and where: (score, (x, y)).
+
+        On a big area a quick rough look (half size, without the mask) comes first and the exact look
+        only goes over the few spots it liked best, which is several times quicker. The exact look
+        alone is used when the area is small, or when the rough look found nothing clear."""
+        t, mask, _ = self.templates[i]
+        th, tw = t.shape
+        rough = self.rough[i]
+        if rough is not None and gray.size >= ROUGH_MIN_AREA * t.size:
+            spots = _rough_spots(_half(gray), rough, ROUGH_SPOTS)
+            if spots:
+                best = (0.0, (0, 0))
+                H, W = gray.shape
+                pad = max(4, min(tw, th) // 2)
+                for rx, ry in spots:
+                    x0, y0 = max(0, 2 * rx - pad), max(0, 2 * ry - pad)
+                    x1, y1 = min(W, 2 * rx + tw + pad), min(H, 2 * ry + th + pad)
+                    score, (x, y) = self._exact(gray[y0:y1, x0:x1], t, mask)
+                    if score > best[0]:
+                        best = (score, (x + x0, y + y0))
+                        if good_enough is not None and score >= good_enough:
+                            break
+                if best[0] >= ROUGH_TRUST:
+                    return best
+        return self._exact(gray, t, mask)
+
+    def _exact(self, gray, t, mask):
+        th, tw = t.shape
+        if th > gray.shape[0] or tw > gray.shape[1]:
+            return 0.0, (0, 0)
+        if mask is not None:
+            res = cv2.matchTemplate(gray, t, cv2.TM_CCOEFF_NORMED, mask=mask)
+        else:
+            res = cv2.matchTemplate(gray, t, cv2.TM_CCOEFF_NORMED)
+        res = np.nan_to_num(res, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
+        np.clip(res, -1.0, 1.0, out=res)
+        # On a plain area (like a black loading screen) the score is meaningless: OpenCV reports a
+        # perfect 100% there. Only spots with about as much detail as the picture count. That's
+        # checked at the best spots one by one (quick); when many of them are plain (a loading
+        # screen), the detail of every spot is worked out at once instead.
+        floor = 0.35 * self.detail
+        for _ in range(PLAIN_TRIES):
+            _, score, _, (x, y) = cv2.minMaxLoc(res)
+            if score <= 0.0:
+                return 0.0, (x, y)
+            if gray[y:y + th, x:x + tw].std() >= floor:
+                return float(score), (x, y)
+            # a plain spot: rule it and the spots right next to it out, then look at the next best
+            res[max(0, y - 2):y + 3, max(0, x - 2):x + 3] = 0.0
+        res[_patch_std(gray, tw, th) < floor] = 0.0
+        _, score, _, (x, y) = cv2.minMaxLoc(res)
+        return float(score), (x, y)

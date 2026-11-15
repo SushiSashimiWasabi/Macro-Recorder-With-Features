@@ -12,10 +12,10 @@ customized.
 
 | Folder or file | What it is |
 | --- | --- |
-| `Complete build version\MacroRecorder.exe` | The finished app, always the newest build. This is the one to use and send to friends. |
-| `Previous version\MacroRecorder.exe` | The build before the newest one, kept by `build.bat` to go back to if needed. |
+| `Complete build version\MacroRecorder.exe` | The finished app, always the newest build, with its hidden `_internal` folder beside it. This is the one to use. |
+| `Previous version\` | The build before the newest one, kept by `build.bat` to go back to if needed (`MacroRecorder.zip` for a folder build). |
 | `saved macro file\` | Your own macros. |
-| `Source code\` | The Python code: `macro_recorder.py` (recording and playback), `modern_ui.py` (the window; its parts are `ui_common.py`, `settings_pages.py`, `settings_window.py`, `discord_ui.py`, `results_ui.py`, `edit_window.py`, `macro_editor.py`, `video_ui.py`), `macro_steps.py` (macros made of steps), `backdrop.py` (background pictures), `sounds.py`, `background.py`, `importers.py` (other programs' macros, saving as .ahk), `image_watch.py` (finding pictures), `stats.py` (results), `discord_notify.py`, `text_styles.py`, `raw_mouse.py` (camera), `window_tools.py`, `diag.py` (log and report), `lazy.py`; `requirements.txt`, and `bg_test.py` for testing background playback. |
+| `Source code\` | The Python code: `macro_recorder.py` (recording and playback), `modern_ui.py` (the window; its parts are `ui_common.py`, `settings_pages.py`, `settings_window.py`, `discord_ui.py`, `results_ui.py`, `edit_window.py`, `macro_editor.py`, `video_ui.py`, `extras_ui.py`, `automation_ui.py`, `profiles_ui.py`, `picture_actions_ui.py`, `remote_ui.py`), `macro_steps.py` (macros made of steps), `backdrop.py` (background pictures), `sounds.py`, `background.py`, `importers.py` (other programs' macros, saving as .ahk), `image_watch.py` (finding pictures), `stats.py` and `run_history.py` (results and run stats), `discord_notify.py`, `discord_remote.py` (phone remote), `trim.py`, `updater.py`, `text_styles.py`, `raw_mouse.py` (camera), `window_tools.py`, `diag.py` (log and report), `lazy.py`; `requirements.txt`, and `bg_test.py` for testing background playback. |
 | `build.bat` | Builds a new `MacroRecorder.exe` from the source code. |
 | `run.bat` | Runs the app straight from the source code, without building. |
 | `build_mac.sh`, `run_mac.sh` | The same two for a Mac (they only work on a Mac). |
@@ -23,8 +23,11 @@ customized.
 
 ## Start it
 
-**Easiest:** double-click `Complete build version\MacroRecorder.exe`. It's a single file that runs
-without installing anything, so you can send it to friends as it is.
+**Easiest:** double-click `Complete build version\MacroRecorder.exe`. It runs without installing
+anything. Since 2.8 it comes with a hidden folder named `_internal` beside it, which makes it start much
+quicker: keep the two together if you move it. To send it to a friend, send `MacroRecorder-Windows.zip`
+from the newest GitHub Release (or zip the exe and `_internal` together). The Release also has a
+one-file `MacroRecorder.exe` that starts slower but is a single file.
 
 **Which Windows PCs it runs on:** Windows 10 and Windows 11, 64-bit. Almost every PC sold in the last
 ten years is 64-bit. It does **not** run on 32-bit Windows, on Windows 7 or 8, or on a PC in
@@ -44,7 +47,8 @@ py macro_recorder.py
 ```
 
 **Rebuilding the .exe** after changing the code: double-click `build.bat`. It installs PyInstaller
-and puts the new `MacroRecorder.exe` in `Complete build version`, replacing the old one. Close
+and puts the new `MacroRecorder.exe` and its `_internal` folder in `Complete build version`, replacing the
+old one (set `MR_ONEFILE=1` first to build the old one-file exe instead). Close
 Macro Recorder first, because Windows won't let a running program be replaced. PyInstaller's
 working files go to your Temp folder, so they don't clutter this one.
 
@@ -289,8 +293,9 @@ were moved or deleted are skipped, and the app asks first if the open macro has 
 ## Updates
 
 When the app starts, it checks this project's newest GitHub Release. If there's a newer version,
-it asks first, then downloads it, puts it in place of the old `MacroRecorder.exe` (or
-`MacroRecorder.app` on a Mac) and restarts. It never updates in the middle of recording or
+it asks first, then downloads it, puts it in place of the old `MacroRecorder.exe` and its `_internal`
+folder (or `MacroRecorder.app` on a Mac) after the app has closed, and restarts. If anything goes
+wrong, the old version is put back. A one-file copy moves over to the folder build by itself. It never updates in the middle of recording or
 playing. Turn the check off, or check by hand, in **Settings > About > Updates**. Your settings
 and macros are kept. Versions from before 2.1 can't update themselves: download 2.1 once from
 the Releases page.
@@ -365,6 +370,7 @@ In **Settings > General**, pick other keys you don't use in the game.
 ## Good to know
 
 - Press the stop key (F12 unless you changed it) at any time to stop a macro that's doing something you didn't expect.
+  Ctrl+Alt+End always stops playing and recording, whatever the hotkeys are set to.
 - If a key or mouse button was held down when playback stopped, it's released automatically.
 - To record or control apps that run as administrator, start the recorder as administrator too.
 - Some games block simulated input, so macros may not work in them.

@@ -64,6 +64,7 @@ PLACEHOLDERS = [
     ("{fragments}", "divine fragments dropped this run"),
     ("{fragments_session}", "divine fragments this session"),
     ("{fragments_total}", "divine fragments in total (all time)"),
+    ("{reconnects}", "times the rejoin macro got the game back"),
     ("{time}", "the time now"),
 ]
 
@@ -89,6 +90,8 @@ class Session:
         self.streak = 0
         self.fragments = []  # divine fragments dropped in each run
         self.fragments_before = fragments_before  # all-time count when the session started
+        self.reconnects = 0  # times a rejoin macro got the game back after a disconnect
+        self.failed_reconnects = 0
 
     def add(self, status, seconds, fragments=0):
         self.runs.append((status, seconds))
@@ -117,6 +120,7 @@ class Session:
             "fragments": self.fragments[-1] if self.fragments else 0,
             "fragments_session": sum(self.fragments),
             "fragments_total": self.fragments_before + sum(self.fragments),
+            "reconnects": self.reconnects,
         }
 
     def summary(self):
@@ -124,6 +128,8 @@ class Session:
         text = f"{self.count(WIN)} won · {self.count(LOSS)} failed · {self.count(UNKNOWN)} unknown"
         if sum(self.fragments):
             text += f" · {sum(self.fragments)} fragment{'s' if sum(self.fragments) != 1 else ''}"
+        if self.reconnects:
+            text += f" · {self.reconnects} reconnect{'s' if self.reconnects != 1 else ''}"
         return text
 
 

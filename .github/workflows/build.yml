@@ -1,9 +1,10 @@
 # Builds the app for Windows and Mac on GitHub's computers, every time code is pushed
 # (or by hand: Actions > Build > Run workflow). The results are on the run's page, under
-# "Artifacts": MacroRecorder-Windows, MacroRecorder-Mac-AppleSilicon, MacroRecorder-Mac-Intel.
+# "Artifacts": MacroRecorder-Windows (the folder build as MacroRecorder-Windows.zip, and the same app
+# as one file, MacroRecorder.exe), MacroRecorder-Mac-AppleSilicon, MacroRecorder-Mac-Intel.
 #
 # Releases: when APP_VERSION in "Source code/version.py" is a version that has no Release yet,
-# a push to main also publishes Release v<version>. The Windows exe goes out first, so a slow
+# a push to main also publishes Release v<version>. The Windows files go out first, so a slow
 # Mac queue never holds Windows updates back; each Mac zip is added to that Release when its
 # build finishes. Every copy of the app checks the latest Release when it starts.
 name: Build
@@ -39,18 +40,25 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Build MacroRecorder.exe
+      - name: Build the folder build (zip) and the one-file MacroRecorder.exe
         shell: cmd
         run: |
           py -m pip install --upgrade pyinstaller -r "Source code\requirements.txt" || exit /b 1
-          py -m PyInstaller --noconfirm --clean "Source code\MacroRecorder_win.spec"
+          py -m PyInstaller --noconfirm --clean "Source code\MacroRecorder_win.spec" || exit /b 1
+          tar -a -c -f MacroRecorder-Windows.zip -C dist\MacroRecorder MacroRecorder.exe _internal || exit /b 1
+          set MR_ONEFILE=1
+          py -m PyInstaller --noconfirm --clean "Source code\MacroRecorder_win.spec" || exit /b 1
+          copy /y dist\MacroRecorder.exe MacroRecorder.exe || exit /b 1
       - uses: actions/upload-artifact@v4
         with:
           name: MacroRecorder-Windows
-          path: dist/MacroRecorder.exe
+          path: |
+            MacroRecorder-Windows.zip
+            MacroRecorder.exe
 
   release:
-    # only from main; publishes the Windows exe as soon as it's built
+    # only from main; publishes the Windows files as soon as they're built (the zip for copies from
+    # 2.8 on, the one-file exe for older copies, which can only update to one file)
     if: github.ref == 'refs/heads/main'
     needs: [windows]
     runs-on: ubuntu-latest
@@ -82,7 +90,7 @@ jobs:
             --title "Macro Recorder ${{ steps.ver.outputs.version }}" \
             --notes "$(git log -1 --format=%B | grep -v '^Co-Authored-By:')" \
             --target "${{ github.sha }}" \
-            builds/MacroRecorder.exe
+            builds/MacroRecorder-Windows.zip builds/MacroRecorder.exe
         env:
           GH_TOKEN: ${{ github.token }}
 

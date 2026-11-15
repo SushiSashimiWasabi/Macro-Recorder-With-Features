@@ -4,6 +4,8 @@ message editor window.
 Part of the dark window: ModernMacroRecorder (modern_ui.py) inherits this class.
 """
 
+import time
+
 from ui_common import *  # noqa: F401,F403  (colours, fonts, widgets, tk, core, the other modules)
 
 
@@ -40,6 +42,9 @@ class DiscordMixin:
         self._switch_row(f, "After each run", self.discord_runs_var, "a card with the run's results")
         self._switch_row(f, "When playback stops", self.discord_stop_var, "finished, stopped or a problem")
         self._switch_row(f, "With a screenshot", self.discord_shot_var)
+        self._choice_row(f, "One card that updates", self.live_summary, self.toggle_live_card,
+                         tip="instead of a new card each run (no screenshot)")
+        self._choice_row(f, "Daily or weekly summary", self.summary_summary, self.open_summary_options)
         row = self._row(f, "Screenshot of")
         self.discord_program_box = ttk.Combobox(row, width=20, textvariable=self.discord_program_var,
                                                 postcommand=self._list_programs)
@@ -55,6 +60,7 @@ class DiscordMixin:
         row.pack(fill="x", pady=(10, 4))
         ttk.Button(row, text="Edit the message…", command=self.edit_discord_message).pack(side="left")
         ttk.Button(row, text="Send a test message", command=self._discord_test).pack(side="left", padx=(6, 0))
+        ttk.Button(row, text="Phone remote…", command=self.open_remote_window).pack(side="right")
         tk.Label(f, textvariable=self.discord_status_var, bg=BG, fg=MUTED, font=F_SMALL, anchor="w",
                  wraplength=460, justify="left").pack(fill="x")
         tk.Label(f, text="Don't share the link: anyone who has it can post in that channel.",
@@ -138,10 +144,11 @@ class DiscordMixin:
         content = stats.fill(s.get("discord_content", stats.DEFAULT_CONTENT), values).strip()
         return content, {"title": title, "description": text, "color": RESULT_COLORS.get(status)}
 
-    def _send_card(self, content, card, png):
+    def _send_card(self, content, card, png, live=None):
         if self.settings.get("discord_enabled"):
+            more = {"live": live} if live else {}
             self.notifier.send(content, png=png, embed=card,
-                               username=str(self.settings.get("discord_name") or "Macro Recorder"))
+                               username=str(self.settings.get("discord_name") or "Macro Recorder"), **more)
 
     def _run_finished(self, count, how):
         """After each run (on the playback thread): the run's results to Discord."""
@@ -153,8 +160,18 @@ class DiscordMixin:
         status = self.session.runs[-1][0] if self.session.runs else stats.UNKNOWN
         values = self.session.values(self._ping_for(status == stats.LOSS, dropped))
         content, card = self._run_card(status, values)
+        # an unknown result or a divine fragment: always a message of its own with a screenshot, so it
+        # can be looked at afterwards (only won and failed runs go into the card that updates)
+        keep = status == stats.UNKNOWN or dropped
+        if s.get("discord_live") and not content.strip() and not keep:
+            # "One card that updates": the same message is changed after each run (a run that pings
+            # still gets a message of its own, or the ping wouldn't reach anyone)
+            card = dict(card, description=card.get("description", "") + "\n*Updated " + time.strftime("%H:%M:%S")
+                        + "*")
+            self._send_card("", card, None, live=f"runs:{self.session.started}")
+            return
         # taken now, before the macro goes on (clicks Retry, starts over)
-        png = self._screenshot() if s.get("discord_screenshot", True) else None
+        png = self._screenshot() if (s.get("discord_screenshot", True) or keep) else None
         self._send_card(content, card, png)
 
     def _discord_summary(self, text, problem=False):
@@ -171,6 +188,19 @@ class DiscordMixin:
         card = {"title": f"{values['macro']} · {'Problem' if problem else 'Session ended'}",
                 "description": "\n".join(lines), "color": 0xFF4757 if problem else 0x4F7CFF}
         png = self._screenshot() if problem and s.get("discord_screenshot", True) else None
+        self._send_card(values["ping"], card, png)
+
+    def _discord_recovery(self, kind, text):
+        """A disconnect screen showed ("lost") or the rejoin macro got the game back ("back").
+        (When it couldn't, playback stops and the usual "Problem" message says why.)"""
+        s = self.settings
+        if not s.get("discord_enabled") or kind not in ("lost", "back"):
+            return
+        values = self.session.values(self._ping_for(kind == "lost"))
+        card = {"title": f"{values['macro']} · {'Disconnected' if kind == 'lost' else 'Back in the game'}",
+                "description": text + "\nReconnects this session: " + str(self.session.reconnects),
+                "color": 0xFFB238 if kind == "lost" else 0x2ECC71}
+        png = self._screenshot() if kind == "lost" and s.get("discord_screenshot", True) else None
         self._send_card(values["ping"], card, png)
 
     def _discord_test(self):

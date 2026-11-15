@@ -138,6 +138,8 @@ class ResultsMixin:
 
     def _build_results_tab(self, f):
         self._section(f, "MISSION RESULTS", first=True)
+        row = self._row(f, "Run stats", "win rate, run times, fragments an hour, a chart of each day")
+        ttk.Button(row, text="Open…", command=self.open_stats).pack(side="right")
         self._switch_row(f, "Count wins and losses while playing", self.results_var, info=self.RESULTS_HELP)
         self.result_lists = {}
         self.result_buttons = []

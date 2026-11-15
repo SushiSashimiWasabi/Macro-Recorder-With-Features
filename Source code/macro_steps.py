@@ -32,6 +32,7 @@ ADDABLE = [
     ("retry", "Retry…", "steps that run again until a picture shows"),
     ("restart", "Start over", "start the macro again from step 1"),
     ("stop", "Stop", "end the macro here"),
+    ("play_macro", "Play another macro", "a saved macro plays here, as often as you say (chains)"),
     ("note", "Note", "a comment for yourself; does nothing"),
     ("record_here", "Record keys and mouse…", "record now; it goes where you choose"),
     ("insert_macro", "Insert another macro…", "copy a saved macro's actions in here, to change"),
@@ -60,6 +61,7 @@ def new_action(kind):
         "retry": {"condition": {"shows": True, "png": None, "screen_h": None, "match": 85}, "tries": 3,
                   "actions": []},
         "note": {"text": ""},
+        "play_macro": {"file": "", "times": 1, "counts": True, "on_fail": ""},
         "recorded": {"events": []},
     }
     a.update(copy.deepcopy(defaults.get(kind, {})))
@@ -92,7 +94,7 @@ def walk(actions, parent=None):
     """Every step (also inside groups): (step, the list it's in, its index there, the group or None)."""
     for i, a in enumerate(actions):
         yield a, actions, i, parent
-        if a.get("kind") in GROUPS:
+        if a.get("kind") in GROUPS or a.get("kind") == "macro":  # ("macro": a played macro's steps)
             yield from walk(a.get("actions", []), a)
 
 
@@ -217,6 +219,12 @@ def describe(a):
         return name, "the macro ends here"
     if kind == "note":
         return name, a.get("text", "")[:50]
+    if kind == "play_macro":
+        import os
+
+        times = int(a.get("times", 1) or 1)
+        macro = os.path.splitext(os.path.basename(a.get("file") or ""))[0] or "no macro chosen yet"
+        return name, macro + (f" × {times}" if times > 1 else "")
     return name, ""
 
 

@@ -15,6 +15,7 @@ recorded event (remove some, add or change waits, Wait for a picture inside it).
 import copy
 import json
 import os
+import time
 
 from ui_common import *  # noqa: F401,F403
 
@@ -205,7 +206,83 @@ class MacroEditor:
         except tk.TclError:
             pass
         self.app.capture_callback = None
+        self._forget_autosave()
         self.win.destroy()
+
+    # ------------------------------------------------------------ crash-safe autosave
+
+    @staticmethod
+    def autosave_path():
+        return os.path.join(os.path.dirname(core.settings_path()), "edit_autosave.json")
+
+    def _autosave_soon(self):
+        """A moment after each change, the unapplied steps are written to a file, so a crash or a
+        power cut doesn't lose them (the next time Edit opens, it offers them back)."""
+        if not hasattr(self, "win") or not hasattr(self, "steps"):
+            return
+        if getattr(self, "autosave_job", None) is not None:
+            try:
+                self.win.after_cancel(self.autosave_job)
+            except tk.TclError:
+                pass
+        try:
+            self.autosave_job = self.win.after(1500, self.autosave_now)
+        except tk.TclError:
+            self.autosave_job = None
+
+    def autosave_now(self):
+        self.autosave_job = None
+        if self.current is None or not self._changed():
+            self._forget_autosave(cancel=False)
+            return
+        try:
+            data = {"path": self.entries[self.current][1], "name": self.name_var.get().strip(),
+                    "saved": time.time(), "steps": self.steps}
+            tmp = self.autosave_path() + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+            os.replace(tmp, self.autosave_path())
+        except (OSError, TypeError, ValueError) as exc:
+            core.diag.error("Edit: couldn't autosave", exc)
+
+    def _forget_autosave(self, cancel=True):
+        if cancel and getattr(self, "autosave_job", None) is not None:
+            try:
+                self.win.after_cancel(self.autosave_job)
+            except tk.TclError:
+                pass
+            self.autosave_job = None
+        try:
+            os.remove(self.autosave_path())
+        except OSError:
+            pass
+
+    def offer_autosave(self):
+        """Changes left over from a crash: offer to bring them back. True when they were."""
+        try:
+            with open(self.autosave_path(), encoding="utf-8") as f:
+                data = json.load(f)
+            steps = data["steps"]
+            if not isinstance(steps, list) or not steps:
+                raise ValueError
+        except (OSError, ValueError, KeyError, TypeError):
+            return False
+        path = data.get("path")
+        index = next((i for i, (_label, p) in enumerate(self.entries) if p == path), None)
+        when = time.strftime("%d %b %H:%M", time.localtime(data.get("saved") or 0))
+        name = data.get("name") or "a macro"
+        if index is None or not self.app.boxes.askyesno(
+                "Edit", f"Changes to \"{name}\" from {when} were never applied (the app closed "
+                "unexpectedly).\n\nBring them back? They'll show as unapplied changes: Apply keeps them, "
+                "Reset throws them away.", parent=self.win):
+            self._forget_autosave()
+            return False
+        self._open_entry(index, ask=False)
+        self.change(lambda: setattr(self, "steps", workflow.ensure_ids(steps)))
+        if data.get("name"):
+            self.name_var.set(data["name"])
+        self._show_buttons()
+        return True
 
     # ------------------------------------------------------------ the macros on the left
 
@@ -374,6 +451,7 @@ class MacroEditor:
         self._show_buttons()
 
     def _show_buttons(self):
+        self._autosave_soon()
         if not hasattr(self, "btn_apply"):
             return
         changed = self._changed() if hasattr(self, "base_steps") else False
@@ -473,6 +551,7 @@ class MacroEditor:
         sections = [("KEYS AND MOUSE", ("key", "type", "click", "move", "scroll")),
                     ("WAITING", ("wait", "wait_picture")),
                     ("GROUPS", ("if", "repeat", "retry")),
+                    ("CHAIN (PLAY OTHER MACROS)", ("play_macro",)),
                     ("MACRO", ("restart", "stop", "note")),
                     ("RECORD OR COPY IN", ("record_here", "insert_macro"))]
         pop = self.add_popup = tk.Toplevel(self.win, bg=BORDER)
@@ -1001,6 +1080,93 @@ class MacroEditor:
                 self.change(lambda: a.__setitem__("events", new_events), select=a["id"])
             self.app._events_window(self.win, [dict(ev) for ev in evs], done)
         ttk.Button(row, text="Edit the recorded events…", command=edit_events).pack(side="left")
+        ttk.Button(row, text="Trim…", command=lambda: self.trim_window(a)).pack(side="left", padx=6)
+
+    def trim_window(self, a):
+        """Cut dead time out of a recorded part: the wait at its start, mouse wandering at its end and
+        long pauses in the middle, each one ticked (or not) before anything changes."""
+        import trim
+
+        evs = a.get("events", [])
+        win = tk.Toplevel(self.win, bg=BG)
+        win.title("Trim")
+        win.transient(self.win)
+        win.attributes("-topmost", True)
+        win.resizable(False, False)
+        body = tk.Frame(win, bg=BG)
+        body.pack(fill="both", padx=18, pady=14)
+        tk.Label(body, text="Cut out time where nothing happens", bg=BG, fg=TEXT, font=F_BOLD, anchor="w").pack(
+            fill="x")
+        tk.Label(body, text="Tick what should go. A pause only counts when no key or button is held down. "
+                            "Careful with pauses that wait for the game (a loading screen): leave those.",
+                 bg=BG, fg=MUTED, font=F_SMALL, anchor="w", justify="left", wraplength=470).pack(fill="x", pady=(2, 8))
+        top = tk.Frame(body, bg=BG)
+        top.pack(fill="x")
+        tk.Label(top, text="Suggest pauses longer than (seconds)", bg=BG, fg=TEXT, font=F_BASE).pack(side="left")
+        gap_var = tk.StringVar(value=f"{trim.MIN_GAP:g}")
+        tk.Entry(top, textvariable=gap_var, width=6, bg=FIELD, fg=TEXT, font=F_BASE, relief="flat",
+                 insertbackground=TEXT, highlightthickness=1, highlightbackground=BORDER,
+                 highlightcolor=ACCENT).pack(side="right", ipady=3)
+        lst = tk.Frame(body, bg=BG)
+        lst.pack(fill="x", pady=(8, 0))
+        total = tk.Label(body, text="", bg=BG, fg=MUTED, font=F_BASE, anchor="w")
+        total.pack(fill="x", pady=(8, 0))
+        state = {"found": [], "vars": []}
+
+        def chosen():
+            return [c for c, v in zip(state["found"], state["vars"]) if v.get()]
+
+        def show_total():
+            secs = trim.saved_seconds(chosen())
+            length = evs[-1].get("t", 0) if evs else 0
+            total.config(text=f"{secs:.1f} s shorter: {length:.1f} s becomes {length - secs:.1f} s."
+                         if secs else "Nothing ticked.")
+
+        def fill(*_a):
+            try:
+                min_gap = max(0.2, float(gap_var.get().strip().replace(",", ".")))
+            except ValueError:
+                return
+            for child in lst.winfo_children():
+                child.destroy()
+            state["found"] = trim.suggestions(evs, min_gap=min_gap)
+            state["vars"] = []
+            if not state["found"]:
+                tk.Label(lst, text="Nothing to cut: no dead time found.", bg=BG, fg=DIM, font=F_BASE,
+                         anchor="w").pack(fill="x")
+            for c in state["found"][:40]:
+                var = tk.BooleanVar(value=c["kind"] != "gap")  # start and end ticked; pauses are yours to tick
+                state["vars"].append(var)
+                tk.Checkbutton(lst, text=c["text"], variable=var, command=show_total, bg=BG, fg=TEXT,
+                               selectcolor=FIELD, activebackground=BG, activeforeground=TEXT, font=F_BASE,
+                               anchor="w").pack(fill="x")
+            if len(state["found"]) > 40:
+                tk.Label(lst, text=f"…and {len(state['found']) - 40} more (raise the seconds to see fewer).",
+                         bg=BG, fg=DIM, font=F_SMALL, anchor="w").pack(fill="x")
+            show_total()
+        gap_var.trace_add("write", fill)
+        fill()
+
+        def every(on):
+            for v in state["vars"]:
+                v.set(on)
+            show_total()
+
+        def cut():
+            picked = chosen()
+            if picked:
+                new_events = trim.apply(evs, picked)
+                self.change(lambda: a.__setitem__("events", new_events), select=a["id"])
+            win.destroy()
+        bottom = tk.Frame(win, bg=BG)
+        bottom.pack(fill="x", padx=18, pady=(0, 14))
+        link(bottom, "Tick all", lambda: every(True), bg=BG).pack(side="left")
+        link(bottom, "Untick all", lambda: every(False), bg=BG).pack(side="left", padx=10)
+        ttk.Button(bottom, text="Cut", style="Accent.TButton", width=8, command=cut).pack(side="right")
+        ttk.Button(bottom, text="Cancel", width=8, command=win.destroy).pack(side="right", padx=6)
+        dark_title_bar(win)
+        win.cut, win.state, win.every, win.gap_var = cut, state, every, gap_var
+        return win
 
     def _detail_wait(self, box, a):
         self._field(box, "Wait (seconds)", a, "seconds", float, 0, 36000)
@@ -1151,6 +1317,55 @@ class MacroEditor:
                            "it isn't true yet, they run again.", bg=BG, fg=DIM, font=F_SMALL, anchor="w",
                  justify="left", wraplength=460).pack(fill="x", pady=(8, 0))
 
+    def _detail_play_macro(self, box, a):
+        here = self.entries[self.current][1] if self.current is not None else None
+        macros = {label: path for label, path in self.entries if path and path != here}
+        if a.get("file"):
+            macros.setdefault(os.path.splitext(os.path.basename(a["file"]))[0], a["file"])
+        row = self._row(box, "Macro")
+        now = next((label for label, path in macros.items() if path == a.get("file")), "(choose a macro)")
+        var = tk.StringVar(value=now)
+
+        def set_file(path):
+            if path and path != a.get("file"):
+                self.change(lambda: a.__setitem__("file", path), select=a["id"])
+
+        def from_file():
+            path = filedialog.askopenfilename(parent=self.win, filetypes=core.OPEN_FILE_TYPES)
+            if path:
+                set_file(path)
+        ttk.Button(row, text="A macro file…", command=from_file).pack(side="right")
+        combo = ttk.Combobox(row, textvariable=var, state="readonly", values=list(macros), width=24)
+        combo.pack(side="right", padx=(0, 6))
+        combo.bind("<<ComboboxSelected>>", lambda e: (combo.selection_clear(), set_file(macros.get(var.get()))))
+        self._field(box, "Play it how many times", a, "times", int, 1, 100000)
+        chart = tk.Frame(box, bg=BG)
+        chart.pack(fill="x", pady=(2, 4))
+        ttk.Button(chart, text="Show the chain as a chart…",
+                   command=lambda: self.app.open_chain_chart(self)).pack(side="left")
+        profiles = {None: "(the settings in use)"}
+        profiles.update({n: n for n in sorted(self.app.settings.get("profiles") or {}, key=str.lower)})
+        if a.get("profile") not in profiles:
+            a.pop("profile", None)
+        a.setdefault("profile", None)
+        self._choice(box, "Profile for this part", a, "profile", profiles)
+        fails = {"": "(just go on)"}
+        fails.update({path: label for label, path in macros.items()})
+        if a.get("on_fail") and a["on_fail"] not in fails:
+            fails[a["on_fail"]] = os.path.splitext(os.path.basename(a["on_fail"]))[0]
+        a.setdefault("on_fail", "")
+        self._choice(box, "If a run of it fails, play", a, "on_fail", fails)
+        counts = tk.BooleanVar(value=bool(a.get("counts", True)))
+        row = self._row(box, "Each time counts as a run", "in the results and on Discord")
+        Switch(row, counts, command=lambda: self.change(lambda: a.__setitem__("counts", bool(counts.get())),
+                                                        select=a["id"])).pack(side="right")
+        tk.Label(box, text="The saved macro plays here, as it is when you press Play (it isn't copied in, so "
+                           "changing that macro later changes this too). Put a few of these under each other to "
+                           "make a chain: macro A 5 times, then macro B, and with Repeat on it all starts again. "
+                           "Picture watch works in every part: when its picture shows, that part's run is over "
+                           "and the chain goes on.", bg=BG, fg=DIM, font=F_SMALL, anchor="w", justify="left",
+                 wraplength=460).pack(fill="x", pady=(8, 0))
+
     def _detail_restart(self, box, a):
         tk.Label(box, text="Starts the macro again from step 1 (it stops by itself if this happens more than 10 "
                            "times in 60 seconds). Usually inside an If, as a failsafe.", bg=BG, fg=MUTED, font=F_BASE,
@@ -1172,6 +1387,7 @@ class MacroEditorMixin:
             return
         self.macro_editor = MacroEditor(self)
         self.edit_win = self.macro_editor.win
+        self.edit_win.after(200, self.macro_editor.offer_autosave)
 
     def _pick_point(self, parent, on_pick, hidden=()):
         """Freeze the screen and let the user click a spot: on_pick(x, y) in screen pixels.

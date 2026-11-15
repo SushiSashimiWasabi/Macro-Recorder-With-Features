@@ -16,16 +16,21 @@ made of parts, each in its own file:
 """
 
 from ui_common import *  # noqa: F401,F403
+from automation_ui import AutomationMixin
 from discord_ui import DiscordMixin
+from extras_ui import ExtrasMixin
 from edit_window import EditWindowMixin
 from macro_editor import MacroEditorMixin
+from picture_actions_ui import PictureActionsMixin
+from profiles_ui import ProfilesMixin
+from remote_ui import RemoteMixin
 from results_ui import ResultsMixin
 from settings_pages import SettingsPagesMixin
 from settings_window import SettingsWindowMixin
 from video_ui import VideoMixin
 
 
-class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, SettingsWindowMixin, MacroEditorMixin, EditWindowMixin, VideoMixin, core.MacroRecorder):
+class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, SettingsPagesMixin, PictureActionsMixin, AutomationMixin, DiscordMixin, RemoteMixin, ResultsMixin, SettingsWindowMixin, MacroEditorMixin, EditWindowMixin, VideoMixin, core.MacroRecorder):
     def __init__(self, root, preview=False):
         self.preview = preview
         self.sub_note = "Record something, or open a macro"
@@ -36,6 +41,7 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
         messagebox.use(self.boxes)  # every part of the window now shows the dark message boxes
         core.messagebox = self.boxes
         super().__init__(root)
+        self._init_remote()  # the phone remote (Settings > Discord > Phone remote), if it's on
 
     # ------------------------------------------------------------ main window
 
@@ -216,6 +222,14 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
         self.mac_next.pack(side="left")
         self.mac_remove = link(sw, "Remove", self.remove_macro_from_list, bg=PANEL)
         self.mac_remove.pack(side="right")
+        # one line that's always there (empty most of the time), so a message about the profile appears in
+        # place: the window never changes size and the background picture isn't cut again for it
+        self.profile_notice_row = tk.Frame(body, bg=PANEL)
+        self.profile_notice_row.pack(fill="x", pady=(0, 8))
+        self.profile_notice = tk.Label(self.profile_notice_row, text="", bg=PANEL, fg=AMBER, font=F_SMALL, anchor="w")
+        self.profile_notice.pack(side="left", fill="x", expand=True)
+        self.profile_notice_ok = link(self.profile_notice_row, "", lambda: self.show_profile_notice(None), bg=PANEL)
+        self.profile_notice_ok.pack(side="right")
 
         # a YouTube video or playlist in a window over the game
         vid = tk.Frame(body, bg=PANEL)
@@ -254,6 +268,7 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
         self.statusbar_label = tk.Label(foot, bg=BG, fg=DIM, font=F_SMALL, anchor="w")
         self.statusbar_label.pack(side="left")
         link(foot, "About", lambda: self.open_settings("About"), fg=MUTED).pack(side="right")
+        link(foot, "Dashboard", self.open_dashboard, fg=MUTED).pack(side="right", padx=(0, 10))
         tk.Label(foot, text=f"v{APP_VERSION}", bg=BG, fg=DIM, font=F_SMALL).pack(side="right", padx=(0, 8))
 
         # an optional picture behind the window (Settings > Background)
@@ -573,6 +588,10 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
         now = self.play_paused_at if self.play_paused_at is not None else time.perf_counter()
         return now - self.play_pause_total
 
+    def _clock_back(self, seconds):
+        if self.play_paused_at is None:  # (while paused the clock isn't running anyway)
+            self.play_pause_total += seconds
+
     def _user_paused(self):
         return self.play_paused_at is not None and not getattr(self, "away_paused", False)
 
@@ -711,6 +730,10 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
             self.sub_note = short(reason, 60)
             self._sound("error")
             text = f"Stopped after {runs_text}. {reason}"
+        elif getattr(self, "auto_stopped", None):
+            self.sub_note = "Stopped by itself"
+            self._sound("play_end")
+            text = f"Stopped by itself after {runs_text}: {self.auto_stopped}."
         elif getattr(self, "stopped_by_user", False):
             self.sub_note = "Stopped"
             self._sound("play_end")
@@ -725,6 +748,9 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
         if self.discord_stop_var.get():
             self._discord_summary(text, problem=bool(reason))
         self._refresh()
+        self._pings_on_stop(text)
+        if getattr(self, "auto_stopped", None) and not reason:
+            self._auto_stop_then()
         if reason:
             extra = ("\n\nSettings > About > Make a report saves the details in a file, to send to whoever helps you."
                      if "error" in reason else "")
@@ -761,6 +787,9 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
         import base64
         import hashlib
 
+        if getattr(self, "skip_file_pictures", False):  # (opened from the phone remote: nobody to ask)
+            self.skip_file_pictures = False
+            return
         pics = (getattr(self, "file_data", None) or {}).get("watch_pictures")
         if image_watch is None or not isinstance(pics, list) or not pics:
             return
@@ -799,6 +828,10 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
     # action, name, what the page does, how much
 
     def _on_close(self):
+        try:
+            self.remote.stop()
+        except Exception:
+            pass
         try:
             self.video.close(wait=True)
         except Exception:
@@ -990,6 +1023,10 @@ class ModernMacroRecorder(SettingsPagesMixin, DiscordMixin, ResultsMixin, Settin
             data["screen"] = {"width": self.macro_screen[0], "height": self.macro_screen[1]}
         if self.macro_program:
             data["program"] = self.macro_program
+        if getattr(self, "macro_vary", None):
+            data["vary"] = self.macro_vary
+        if getattr(self, "macro_profile", None):
+            data["profile"] = self.macro_profile
         pictures = self._pictures_for_file()
         if pictures:
             data["watch_pictures"] = pictures
@@ -1023,6 +1060,16 @@ def use_preview_settings():
     core.settings_path = lambda: os.path.join(preview_dir, "settings.json")
 
 
+def _close_splash():
+    """Close the "Starting..." picture the exe shows while it unpacks (only in a built exe)."""
+    try:
+        import pyi_splash
+
+        pyi_splash.close()
+    except Exception:
+        pass
+
+
 def main(preview=False):
     if preview:
         use_preview_settings()
@@ -1043,6 +1090,10 @@ def main(preview=False):
     threading.excepthook = lambda a: diag.error(f"Error on a helper thread ({a.thread.name if a.thread else '?'})",
                                                 a.exc_value)
     app._whats_new_on_start()
+    root.after_idle(_close_splash)
+    root.after(20000, app._summary_tick)  # the Discord daily / weekly summary
+    if app.first_start_due() and not preview:
+        root.after(800, app.open_first_start)
     if app.update_check_var.get():
         root.after(4000, app.check_for_update)
     if len(sys.argv) > 1 and os.path.isfile(sys.argv[1]):
