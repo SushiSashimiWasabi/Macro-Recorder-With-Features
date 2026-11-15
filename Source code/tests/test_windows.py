@@ -77,6 +77,7 @@ check("using Settings: Picture watch stays in front of it", above(pw.win, sett),
 use(sett)
 other = tk.Toplevel(root)
 other.title("Other")
+other.attributes("-topmost", True)  # (like the app's own windows: on Windows the main window is on top)
 pump(0.3)
 use(other)
 check("a second window from Settings remembers it", stack.opener_of(str(other)) == str(sett),
