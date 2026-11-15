@@ -1316,6 +1316,10 @@ class MacroRecorder:
         (default: add it to the pictures to watch for). hidden: other windows to show again after."""
         def show_again():
             self.root.deiconify()
+            stack = getattr(self, "window_stack", None)
+            if stack is not None:
+                stack.bring_back(list(hidden))  # (the window it was picked from in front again)
+                return
             for w in hidden:
                 try:
                     w.deiconify()

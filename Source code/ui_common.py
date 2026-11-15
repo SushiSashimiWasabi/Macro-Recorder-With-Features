@@ -946,6 +946,130 @@ def hover_text(widget, full):
     return widget
 
 
+class WindowStack:
+    """Which window stays in front of which (2.9): a window opened from another one always stays in
+    front of it (Settings in front of the main window, Picture watch in front of Settings, a box in
+    front of Picture watch...). Windows opened from the same window: the one clicked last is in
+    front. The window you click comes to the front, with the windows opened from it in front of it.
+
+    It's done by the app itself (not with Windows' "owner" windows, which would also hide them all
+    when the main window is minimized): each window remembers the window that was in use when it
+    opened, and when a window is used, the windows opened from it are put back in front of it."""
+
+    def __init__(self, root):
+        self.root = root
+        self.opener = {}     # window path -> the window path it was opened from
+        self.used = {}       # window path -> when it was last used (siblings keep this order)
+        self.current = str(root)
+        self.job = None
+        root.bind_all("<FocusIn>", self._focus, add="+")
+        root.bind_class("Toplevel", "<Map>", self._mapped, add="+")
+
+    @staticmethod
+    def _skip(w):
+        """Tooltips, menus and the full-screen picker: not part of the stack."""
+        try:
+            return bool(w.wm_overrideredirect())
+        except tk.TclError:
+            return True
+
+    def _top(self, widget):
+        try:
+            if isinstance(widget, str):
+                widget = self.root.nametowidget(widget)
+            return widget.winfo_toplevel()
+        except (KeyError, tk.TclError, AttributeError):
+            return None
+
+    def _mapped(self, event):
+        w = event.widget
+        if not isinstance(w, tk.Toplevel) or self._skip(w):
+            return
+        path = str(w)
+        if path not in self.opener and path != self.current:
+            self.opener[path] = self.current  # (opened from the window that was in use)
+
+    def _focus(self, event):
+        top = self._top(event.widget)
+        if top is None or self._skip(top):
+            return
+        path = str(top)
+        self.used[path] = time.monotonic()
+        if path == self.current:
+            return
+        if path not in self.opener and path != str(self.root):
+            self.opener[path] = self.current
+        self.current = path
+        if self.job is not None:
+            try:
+                self.root.after_cancel(self.job)
+            except tk.TclError:
+                pass
+        self.job = self.root.after_idle(lambda: self.restack(path))
+
+    def _alive(self, path):
+        try:
+            return bool(self.root.nametowidget(path).winfo_exists())
+        except (KeyError, tk.TclError):
+            return False
+
+    def opener_of(self, path):
+        """The window it was opened from (if that one is closed, the one that was opened from)."""
+        seen = set()
+        parent = self.opener.get(path)
+        while parent is not None and parent not in seen and not self._alive(parent):
+            seen.add(parent)
+            parent = self.opener.get(parent)
+        return parent
+
+    def children(self, path):
+        kids = [p for p in list(self.opener) if self._alive(p) and self.opener_of(p) == path]
+        return sorted(kids, key=lambda p: self.used.get(p, 0.0))
+
+    def restack(self, path):
+        """Put the windows opened from this one (and from those, and so on) back in front of it;
+        among windows opened from the same one, the one used last ends up in front."""
+        self.job = None
+        for gone in [p for p in self.opener if not self._alive(p)]:
+            self.opener.pop(gone, None)
+            self.used.pop(gone, None)
+        todo, done = [path], set()
+        while todo:
+            p = todo.pop(0)
+            if p in done:
+                continue
+            done.add(p)
+            for kid in self.children(p):
+                try:
+                    w = self.root.nametowidget(kid)
+                    if w.winfo_viewable():
+                        w.lift()
+                except (KeyError, tk.TclError):
+                    continue
+                todo.append(kid)
+
+    def bring_back(self, windows):
+        """Windows that were hidden for a moment (like while picking a picture from the screen):
+        shown again in the right order, the first one in use."""
+        windows = [w for w in windows if w is not None]
+        for w in windows:
+            try:
+                w.deiconify()
+            except tk.TclError:
+                pass
+        if windows:
+            try:
+                windows[0].focus_force()
+            except tk.TclError:
+                pass
+            self.restack(str(self.root))
+            try:
+                windows[0].lift()
+            except tk.TclError:
+                pass
+            self.restack(str(windows[0]))
+
+
 class _MessageBoxes:
     """The message boxes every part of the window uses: Windows' own at first, the dark ones
     (ThemedBoxes) as soon as the window exists (use_boxes)."""

@@ -53,6 +53,7 @@ class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, PictureWatchMixin, Setting
         root.resizable(False, False)
         root.attributes("-topmost", bool(s.get("always_on_top", True)))
         apply_theme(root)
+        self.window_stack = WindowStack(root)  # (a window opened from another stays in front of it)
         # ready-made sizes of the icon and logo (read by Tk directly next time: a quicker start)
         icon_picture.CACHE_DIR = os.path.join(os.path.dirname(core.settings_path()), "icon_cache")
         self.logo_same_var = tk.BooleanVar(value=bool(s.get("app_logo_same", False)))
