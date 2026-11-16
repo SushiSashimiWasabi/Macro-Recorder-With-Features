@@ -266,8 +266,8 @@ def link(parent, text, command, bg=BG, fg=MUTED, font=F_LINK):
     if IS_MAC:
         # Mac (2.9.2): runs when the mouse button is let go over it, like a real button. A box opened
         # while the button is still down froze the whole app on a Mac (the ⓘ icons).
-        lab.bind("<ButtonRelease-1>", lambda e: command() if lab.winfo_containing(e.x_root, e.y_root) is lab
-                 else None)
+        lab.bind("<ButtonRelease-1>", lambda e: command()
+                 if 0 <= e.x < lab.winfo_width() and 0 <= e.y < lab.winfo_height() else None)
     else:
         lab.bind("<Button-1>", lambda e: command())
     lab.bind("<Enter>", lambda e: lab.config(fg=TEXT))
@@ -907,8 +907,8 @@ class ThemedBoxes:
             try:
                 if not win.winfo_exists():
                     return
-                order = str(win.tk.call("wm", "stackorder", self.app.root)).split()
-                if order and order[-1] != str(win):
+                order = win.tk.splitlist(win.tk.call("wm", "stackorder", self.app.root))
+                if order and str(order[-1]) != str(win):
                     win.lift()
                 win.after(300, check)
             except tk.TclError:
