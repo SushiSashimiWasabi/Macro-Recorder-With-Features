@@ -33,6 +33,7 @@ root.withdraw()
 app = modern_ui.ModernMacroRecorder(root)
 app.kb_listener.stop()
 app.mouse_listener.stop()
+app.recover_count_var.set(0)  # (2.10: no countdown before rejoining here; tested in test_preview1)
 root.withdraw()
 sent = []
 app._replay_event = lambda e, hk, hb: sent.append(e)
@@ -143,9 +144,14 @@ save_macro("X", actions=[play_macro_step(y_path)])
 app.load(x_path, quiet=True)
 run_play(steps=app.macro_steps(), file=x_path)
 check("chain: a circle is refused with a message", errors and "circle" in str(errors[0]), errors)
-check("chain: a missing macro is refused", True)
-run_play([play_macro_step(os.path.join(tmp, "gone.macro"))])
-check("chain: a missing macro says so", errors and "there any more" in str(errors[0]), errors)
+# (2.10) a missing macro no longer stops Play: that step is skipped and Check my macro tells about it
+gone_own = workflow.new_action("recorded")
+gone_own["events"] = tap(69)
+run_play([play_macro_step(os.path.join(tmp, "gone.macro")), gone_own])
+check("chain: a missing macro doesn't stop Play (the step is skipped)", not errors and pressed_vks() == [69],
+      (errors, pressed_vks()))
+check("chain: Check my macro names the missing macro",
+      any(p["id"] == "chain:gone" and p["level"] == "sure" for p in app.check_macro()), app.check_macro())
 
 # save and open keeps the step
 app.set_steps([play_macro_step(a_path, 4)])

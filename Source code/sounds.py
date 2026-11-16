@@ -33,6 +33,13 @@ EVENTS = [
     ("picture_seen", "Picture seen", "picture watch restarts the macro", False),
     ("error", "Problem", "playback stopped by itself or an error", True),
     ("click", "Button click", "buttons and switches in this app", False),
+    ("win", "Win", "a run ended with MISSION COMPLETED", False),
+    ("loss", "Loss", "a run ended with MISSION FAILED", False),
+    ("fragment", "Divine fragment", "a divine fragment dropped", True),
+    ("milestone", "Milestone", "a number of wins or fragments was reached", True),
+    ("timed_warning", "Timed start warning", "shortly before a timed start", True),
+    ("recover_disconnect", "Rejoin countdown (disconnect)", "before the rejoin macro plays", True),
+    ("recover_close", "Reopen countdown (game closed)", "before the game opens again", True),
 ]
 EVENT_IDS = [e[0] for e in EVENTS]
 
@@ -48,6 +55,13 @@ TONES = {
     "picture_seen": [(1318, 60), (1568, 60), (2093, 90)],
     "error": [(523, 110), (392, 160)],
     "click": [(1400, 14)],
+    "win": [(784, 70), (988, 70), (1318, 120)],
+    "loss": [(659, 90), (587, 90), (494, 160)],
+    "fragment": [(1568, 50), (2093, 50), (2637, 50), (3136, 110)],
+    "milestone": [(1046, 70), (1318, 70), (1568, 70), (2093, 140)],
+    "timed_warning": [(988, 80), (0, 60), (988, 80)],
+    "recover_disconnect": [(740, 70)],
+    "recover_close": [(587, 80)],
 }
 OLD_VOLUMES = {"Quiet": 25, "Normal": 50, "Loud": 80}  # the volume used to be one of these words
 DEFAULT_VOLUME = 50

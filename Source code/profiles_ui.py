@@ -20,7 +20,7 @@ from ui_common import *  # noqa: F401,F403
 SKIP_KEYS = {"profiles", "profile_active", "macro_library", "stats_all", "last_seen_version", "last_game_exe",
              "builtin_failed_added", "check_updates", "app_icon_file", "app_logo_file", "app_logo_same",
              "video_history", "video_link", "first_start_done", "warn_big_pictures",
-             "video_playlist_note"}
+             "video_playlist_note", "check_ignore"}
 SKIP_PREFIXES = ("remote_", "video_rect")
 SKIP_ENDINGS = ("_geometry",)
 NO_PROFILE = "(none)"
@@ -204,6 +204,9 @@ class ProfilesMixin:
         if self.profile_notice.cget("text") != (text or ""):
             self.profile_notice.config(text=text or "")
             self.profile_notice_ok.config(text="OK" if text else "")
+            see = getattr(self, "check_notice_see", None)
+            if see is not None and see.cget("text"):
+                see.config(text="")  # (a Check my macro notice is replaced)
             self._refresh()
 
     PROFILE_HELP = (

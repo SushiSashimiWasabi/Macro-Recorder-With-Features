@@ -2074,7 +2074,9 @@ class MacroRecorder:
         # "If the game closes": its rejoin macro is read now, so a missing file shows at once
         self.closed_steps = None
         closed = self._closed_settings()
-        if closed["action"] == "reopen" and closed["macro"]:
+        if closed["action"] == "reopen" and closed["macro"] and not self._find_macro_file(closed["macro"]):
+            diag.info("The rejoin macro of \"If the game closes\" isn't there any more: only the game is opened")
+        elif closed["action"] == "reopen" and closed["macro"]:
             try:
                 self.closed_steps = self._load_for_play(closed["macro"], play_on)
                 self.wait_matchers.update(self._make_wait_matchers(self.closed_steps))
@@ -2275,6 +2277,15 @@ class MacroRecorder:
                     continue
                 if not a.get("file"):
                     raise ValueError("a \"Play another macro\" step has no macro chosen yet: choose one in Edit")
+                if not self._find_macro_file(a["file"]):
+                    # (2.10: nothing stops Play; Check my macro tells about it)
+                    diag.info(f"Skipped a \"Play another macro\" step: \"{os.path.basename(a['file'])}\" "
+                              "isn't there any more")
+                    continue
+                if a.get("on_fail") and not self._find_macro_file(a["on_fail"]):
+                    diag.info(f"A \"Play another macro\" step's macro for when it fails isn't there any more "
+                              f"(\"{os.path.basename(a['on_fail'])}\"): left out")
+                    a = dict(a, on_fail=None)
                 out.append({"kind": "macro", "id": a.get("id"), "times": max(1, int(a.get("times", 1) or 1)),
                             "counts": bool(a.get("counts", True)),
                             "name": os.path.splitext(os.path.basename(a["file"]))[0],
@@ -2301,7 +2312,10 @@ class MacroRecorder:
         for n, pic in enumerate(self._active_watch_pictures(), start=1):
             action = pic.get("action", "restart")
             if action in WATCH_NEED_MACRO:
-                if pic.get("macro"):
+                if pic.get("macro") and not self._find_macro_file(pic["macro"]):
+                    diag.info(f"{watch_name(pic, n)}: its macro \"{os.path.basename(pic['macro'])}\" isn't "
+                              "there any more, so it only does the rest of its action")
+                elif pic.get("macro"):
                     if pic["macro"] not in watch["macros"]:
                         steps = self._load_for_play(pic["macro"], play_on)
                         watch["macros"][pic["macro"]] = steps
@@ -2343,7 +2357,9 @@ class MacroRecorder:
                 holders.extend(ev for ev in a.get("events", []) if ev.get("type") == "wait_picture")
         for n, h in enumerate(holders, start=1):
             if not h.get("png"):
-                raise ValueError(f"a picture step or condition ({n}) has no picture yet: choose one in Edit")
+                # (2.10: nothing stops Play; the step is skipped and Check my macro tells about it)
+                diag.info(f"A picture step or condition ({n}) has no picture: it's skipped")
+                continue
             if image_watch is None:
                 raise ValueError("this copy was built without picture support")
             import base64
@@ -2831,6 +2847,8 @@ class MacroRecorder:
                     self._set_note(f"Still not back in the game. Try {n + 1} of {tries} in {left} s...")
                     if self.stop_play.wait(1.0):
                         return "stop"
+            if not self._recovery_countdown("disconnect"):
+                return "stop"
             self._set_note(f"Getting back into the game (try {n + 1} of {tries})"
                            + (f": playing \"{name}\"..." if steps else "..."))
             if play_it() == "stop":
@@ -2929,6 +2947,29 @@ class MacroRecorder:
                 parts.append(f"{kind} {s[0]} looks, {s[1] / s[0] * 1000:.0f} ms on average, "
                              f"slowest {s[2] * 1000:.0f} ms")
         return "; ".join(parts)
+
+    def _recovery_countdown(self, kind):
+        """A few seconds' warning (Settings > Playback > Countdown before rejoining) before the app takes
+        over the mouse to get back into the game. kind: "disconnect" or "close". Each second is told to
+        _recovery_tick (the dark window plays a sound). It follows playback's clock, so a pause holds
+        it. False when playback was stopped meanwhile (also when stopped while paused)."""
+        seconds = int_setting(self.settings, "recovery_countdown", 5, 0, 60)
+        what = "Rejoining" if kind == "disconnect" else "Opening the game again"
+        try:
+            for left in range(seconds, 0, -1):
+                self.recover_left = (kind, left)  # (the dark window's top-of-screen timer shows it)
+                self._set_note(f"{what} in {left} s...")
+                self._recovery_tick(kind, left)
+                end = self._play_clock() + 1.0
+                while self._play_clock() < end:  # (stands still while paused)
+                    if self.stop_play.wait(0.05):
+                        return False
+        finally:
+            self.recover_left = None
+        return not self.stop_play.is_set()
+
+    def _recovery_tick(self, kind, seconds_left):
+        """Each second of the countdown before rejoining (the dark window plays a sound)."""
 
     def _recovery_event(self, kind, text):
         """A disconnect screen showed ("lost"), the game is back ("back") or it couldn't be got back
@@ -3637,6 +3678,8 @@ class MacroRecorder:
                     self._set_note(f"The game isn't back yet. Try {n + 1} of {tries} in {left} s...")
                     if self.stop_play.wait(1.0):
                         return True
+            if not self._recovery_countdown("close"):
+                return True
             wins = window_tools.windows_of(exe)
             if not wins and opts["open"]:
                 self._set_note(f"Opening the game again (try {n + 1} of {tries})...")

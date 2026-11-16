@@ -1,12 +1,40 @@
 # The app's version. Raising it (and pushing to main) makes GitHub publish a new Release,
 # which every copy of the app offers to install when it starts.
-APP_VERSION = "2.9.1"
+APP_VERSION = "2.10"
 
 # Every version, newest first: (version, the day it was finalized, changes). The newest is shown once after an update;
 # Settings > About > What's new shows them all. Each change is one paragraph (shown as a bullet).
 # Version numbers started at 2.1 (the first one that could update itself); the earlier steps have
 # names instead.
 HISTORY = [
+    ("2.10", "16 November 2026", [
+        "New sounds (Settings > Sounds): Win, Loss, Divine fragment, Milestone, Timed start warning, Rejoin "
+        "countdown (disconnect) and Reopen countdown (game closed). Each can have its own sound file or be "
+        "turned off. Win and Loss start off; the others start on.",
+        "Before the app gets you back into the game (the rejoin macro after a disconnect, or opening the "
+        "game again after it closed) it now counts down with a sound each second, also on the timer at the "
+        "top of the screen, so you know it's about to use the mouse. Pause holds the countdown and Stop "
+        "ends it. Change its length in Settings > Playback > Countdown before rejoining (5 s; 0 = none).",
+        "Check my macro: when you press Play (or Check at the bottom of the main window) the app looks for "
+        "things that would make the macro go wrong: a macro a \"Play another macro\" step plays is gone, a "
+        "picture or a picture's rejoin macro is missing, the game isn't open, or the screen is very "
+        "different from the one it was recorded on. It never stops Play: a line under Saved macros says so "
+        "and See… lists them. Each warning can be turned off for one macro, and turned on again in Check.",
+        "A missing macro of a \"Play another macro\" step, or a picture step without a picture, no longer "
+        "stops Play: that part is skipped (Check my macro tells you).",
+        "Older versions of a macro: each time a macro is saved, the version it had before is kept (the last "
+        "10, in the app's own folder, never beside the macro). Edit > choose the macro on the left > More > "
+        "Restore an older version… puts one back; the macro as it was is kept too, so you can go back.",
+        "Run stats > Export… saves every kept run and the daily totals as a file that opens in Excel (dates, "
+        "macro names, results, times and fragments only).",
+        "Run stats > Open file… shows a stats file someone exported (or drop the file on the app's icon): "
+        "the same numbers, chart and latest runs, and Compare with can put one of your own macros next to "
+        "one of theirs. It's only looked at: it's never added to your own stats, and Back to my stats "
+        "switches back. Lines that don't make sense are left out, and the file can't run anything.",
+        "Edit window: More opens again when an action is chosen.",
+        "Mac: ⓘ links react to a normal click, message boxes no longer lock up or stick to their window, and "
+        "windows are no longer pinned to the window they came from. (Not tried on a real Mac yet.)",
+    ]),
     ("2.9.1", "16 November 2026", [
         "Safer sharing: a saved macro no longer carries whole paths of your PC (they could show your Windows "
         "user name). A chain step's macro is saved relative to the macro's own folder, or by its file name, "

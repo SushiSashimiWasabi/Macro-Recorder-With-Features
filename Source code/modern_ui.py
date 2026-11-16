@@ -17,6 +17,8 @@ made of parts, each in its own file:
 
 from ui_common import *  # noqa: F401,F403
 from automation_ui import AutomationMixin
+from check_ui import CheckMixin
+import macro_versions
 from discord_ui import DiscordMixin
 from extras_ui import ExtrasMixin
 from edit_window import EditWindowMixin
@@ -31,7 +33,7 @@ from settings_window import SettingsWindowMixin
 from video_ui import VideoMixin
 
 
-class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, PictureWatchMixin, SettingsPagesMixin, PictureActionsMixin, AutomationMixin, DiscordMixin, RemoteMixin, ResultsMixin, SettingsWindowMixin, MacroEditorMixin, EditWindowMixin, VideoMixin, core.MacroRecorder):
+class ModernMacroRecorder(CheckMixin, ExtrasMixin, ProfilesMixin, PictureWatchMixin, SettingsPagesMixin, PictureActionsMixin, AutomationMixin, DiscordMixin, RemoteMixin, ResultsMixin, SettingsWindowMixin, MacroEditorMixin, EditWindowMixin, VideoMixin, core.MacroRecorder):
     def __init__(self, root, preview=False):
         self.preview = preview
         self.sub_note = "Record something, or open a macro"
@@ -99,6 +101,7 @@ class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, PictureWatchMixin, Setting
         # playing: pause when the game leaves the front, offer to switch to it, fit to its window
         self.away_var = tk.BooleanVar(value=bool(s.get("pause_when_away", True)))
         self.away_stop_var = tk.IntVar(value=core.int_setting(s, "away_stop_seconds", 0, 0, 3600))
+        self.recover_count_var = tk.IntVar(value=core.int_setting(s, "recovery_countdown", 5, 0, 60))
         self.switch_prog_var = tk.BooleanVar(value=bool(s.get("switch_to_program", True)))
         self.fit_var = tk.StringVar(value=FIT_TO.get(s.get("fit_to"), FIT_TO["window"]))
         # messages to your own Discord channel (a webhook link)
@@ -239,6 +242,9 @@ class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, PictureWatchMixin, Setting
         self.profile_notice.pack(side="left", fill="x", expand=True)
         self.profile_notice_ok = link(self.profile_notice_row, "", lambda: self.show_profile_notice(None), bg=PANEL)
         self.profile_notice_ok.pack(side="right")
+        # (2.10) Check my macro uses the same line: "See…" opens the list
+        self.check_notice_see = link(self.profile_notice_row, "", self.open_check, bg=PANEL)
+        self.check_notice_see.pack(side="right", padx=(0, 8))
 
         # a YouTube video or playlist in a window over the game
         vid = tk.Frame(body, bg=PANEL)
@@ -292,6 +298,7 @@ class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, PictureWatchMixin, Setting
         self.statusbar_label.pack(side="left")
         link(foot, "About", lambda: self.open_settings("About"), fg=MUTED).pack(side="right")
         link(foot, "Dashboard", self.open_dashboard, fg=MUTED).pack(side="right", padx=(0, 10))
+        link(foot, "Check", self.open_check, fg=MUTED).pack(side="right", padx=(0, 10))
         self.picture_link = link(foot, "Picture watch", lambda: self.open_picture_watch(), fg=MUTED)
         self.picture_link.pack(side="right", padx=(0, 10))
         tk.Label(foot, text=f"v{APP_VERSION}", bg=BG, fg=DIM, font=F_SMALL).pack(side="right", padx=(0, 8))
@@ -454,6 +461,10 @@ class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, PictureWatchMixin, Setting
                 s["away_stop_seconds"] = max(0, min(3600, int(self.away_stop_var.get())))
             except (tk.TclError, ValueError):
                 pass
+            try:
+                s["recovery_countdown"] = max(0, min(60, int(self.recover_count_var.get())))
+            except (tk.TclError, ValueError):
+                pass
             s["switch_to_program"] = bool(self.switch_prog_var.get())
             s["fit_to"] = next((k for k, v in FIT_TO.items() if v == self.fit_var.get()), "screen")
             s["discord_enabled"] = bool(self.discord_var.get())
@@ -570,6 +581,7 @@ class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, PictureWatchMixin, Setting
         wins = window_tools.windows_of(exe)
         name = self._program_name()
         if not wins:
+            self.game_asked = True  # (Check my macro doesn't tell it again)
             return messagebox.askyesno(
                 "Macro Recorder", f"This macro was recorded in {name} ({exe}), which isn't open.\n\n"
                 "Play it anyway?", parent=self.root)
@@ -582,9 +594,18 @@ class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, PictureWatchMixin, Setting
             self.root.after(0, lambda: window_tools.bring_to_front(wins[0]))
         return True
 
+    def open_path(self, path):
+        """A file dropped on the app's icon or opened with it: a stats file (.csv, 2.10) opens in Run stats
+        to look at, anything else as a macro."""
+        if path.lower().endswith(".csv"):
+            self.open_stats_file(path)
+        else:
+            self.load(path)
+
     def play(self):
         if self.recording or self.playing or not (self.events or self.actions) or self.capture_callback is not None:
             return
+        self.game_asked = False
         if not self._check_program():
             return
         self.play_name = self.name_var.get().strip()
@@ -594,6 +615,9 @@ class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, PictureWatchMixin, Setting
         self.away_paused = False
         self.held_now = None
         super().play()
+        if self.playing:
+            # Check my macro (2.10): only tells, never stops Play
+            self.check_on_play(self._read_play_on(quiet=True), skip=("game",) if self.game_asked else ())
         if self.playing and getattr(self, "fit_note", ""):
             self.sub_note = "Clicks " + self.fit_note
             if self.old_macro_var.get():  # (the note shows for a moment when Play is pressed)
@@ -676,6 +700,24 @@ class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, PictureWatchMixin, Setting
     def _picture_seen(self):
         self._sound("picture_seen")
 
+    def _recovery_tick(self, kind, seconds_left):
+        self._call_ui(lambda: self._sound("recover_disconnect" if kind == "disconnect" else "recover_close"))
+
+    def _run_finished(self, count, how):
+        super()._run_finished(count, how)
+        sound = self._run_sound()
+        if sound:
+            self._call_ui(lambda: self._sound(sound))
+
+    def _run_sound(self):
+        """The sound for the run that just ended: a divine fragment (it matters most, and only one
+        sound plays at a time), else a win or a loss; None for an unknown result."""
+        s = self.session
+        if s.fragments and s.fragments[-1] > 0 and self.sound_choice("fragment")["mode"] != "off":
+            return "fragment"
+        status = s.runs[-1][0] if s.runs else None
+        return {"win": "win", "loss": "loss"}.get(status)
+
     def _recording_clock(self):
         """How long it has been recording (the time paused not counted)."""
         now = self.pause_started if self.paused else time.perf_counter()
@@ -707,6 +749,10 @@ class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, PictureWatchMixin, Setting
                     self.overlay.show("Recording", clock, note, RED, rec_keys, stop_word="Stop rec.")
             elif self.countdown_left > 0:
                 self.overlay.show("Starting in", str(self.countdown_left), name, AMBER, keys)
+            elif getattr(self, "recover_left", None) and self.play_paused_at is None:
+                kind, left = self.recover_left
+                self.overlay.show("Rejoining in" if kind == "disconnect" else "Reopening in", str(left),
+                                  name, AMBER, keys)
             else:
                 if self.play_began is None:
                     self.play_began = self._play_clock()
@@ -1121,6 +1167,7 @@ class ModernMacroRecorder(ExtrasMixin, ProfilesMixin, PictureWatchMixin, Setting
         pictures = self._pictures_for_file(path)
         if pictures:
             data["watch_pictures"] = pictures
+        macro_versions.keep(path)  # (2.10: the version it had stays in Restore an older version…)
         try:
             with open(path, "w", encoding="utf-8") as f:
                 core.dump_macro(data, f)
@@ -1188,11 +1235,11 @@ def main(preview=False):
     if app.update_check_var.get():
         root.after(4000, app.check_for_update)
     if len(sys.argv) > 1 and os.path.isfile(sys.argv[1]):
-        root.after(100, lambda: app.load(sys.argv[1]))
+        root.after(100, lambda: app.open_path(sys.argv[1]))
     if IS_MAC:
         def open_documents(*paths):
             if paths:
-                app.load(paths[0])
+                app.open_path(paths[0])
         root.createcommand("::tk::mac::OpenDocument", open_documents)
         missing = core.mac_missing_permissions()
         if missing:

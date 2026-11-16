@@ -32,6 +32,7 @@ root.withdraw()
 app = modern_ui.ModernMacroRecorder(root)
 app.kb_listener.stop()
 app.mouse_listener.stop()
+app.recover_count_var.set(0)  # (2.10: no countdown before rejoining here; tested in test_preview1)
 root.withdraw()
 boxes = []
 for name in ("showwarning", "showinfo", "showerror"):

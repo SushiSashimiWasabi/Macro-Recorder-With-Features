@@ -17,6 +17,8 @@ import json
 import os
 import time
 
+import macro_versions
+
 from ui_common import *  # noqa: F401,F403
 
 OWN_EXTS = (".macro", ".json")
@@ -498,11 +500,16 @@ class MacroEditor:
             data["events"] = workflow.all_events(steps)
             if not workflow.is_simple(steps):
                 data["actions"] = steps
+            if own:
+                macro_versions.keep(path)  # (2.10: the version it had stays in Restore an older version…)
             try:
                 with open(new_path, "w", encoding="utf-8") as f:
                     core.dump_macro(data, f)
                 if os.path.normcase(new_path) != os.path.normcase(path) and own:
                     os.remove(path)  # renamed: the old name goes (it was this same macro)
+                    macro_versions.renamed(path, new_path)  # (its older versions and warnings go along)
+                    if hasattr(app, "rename_check_ignored"):
+                        app.rename_check_ignored(macro_versions._key(path), macro_versions._key(new_path))
             except OSError as exc:
                 app.boxes.showerror("Edit", f"Couldn't save the macro:\n{exc}", parent=self.win)
                 return False
@@ -877,6 +884,9 @@ class MacroEditor:
         if self.focus == "macros":
             m.add_command(label="Open it in the main window", command=self._open_in_app)
             m.add_command(label="Show the file in its folder", command=self._show_file)
+            path = self.entries[self.current][1] if self.current is not None else None
+            m.add_command(label="Restore an older version…", command=self._restore_version,
+                          state="normal" if path and macro_versions.versions(path) else "disabled")
         else:
             found = self._selected()
             a = found[0] if found else {}
@@ -981,6 +991,63 @@ class MacroEditor:
     def _show_file(self):
         if self.current is not None and self.entries[self.current][1]:
             self.app._show_in_folder(self.entries[self.current][1])
+
+    def _restore_version(self):
+        """(2.10) Pick one of the versions the macro had before it was saved over, and put it back."""
+        if self.current is None or not self.entries[self.current][1]:
+            return
+        label, path = self.entries[self.current]
+        kept = macro_versions.versions(path)
+        if not kept:
+            self.app.boxes.showinfo("Edit", f"{label} has no older versions yet. One is kept each time it's "
+                                    "saved.", parent=self.win)
+            return
+        win = tk.Toplevel(self.win, bg=BG)
+        win.title("Restore an older version")
+        win.transient(self.win)
+        win.resizable(False, False)
+        dark_title_bar(win)
+        body = tk.Frame(win, bg=BG)
+        body.pack(fill="both", padx=18, pady=14)
+        tk.Label(body, text=f"Older versions of {short(label, 40)}", bg=BG, fg=TEXT, font=F_BOLD,
+                 anchor="w").pack(fill="x")
+        tk.Label(body, text=f"The last {macro_versions.KEEP} saves are kept, newest first.", bg=BG, fg=DIM,
+                 font=F_SMALL, anchor="w").pack(fill="x", pady=(0, 6))
+        lst = ttk.Treeview(body, show="tree", selectmode="browse", height=min(10, len(kept)))
+        lst.column("#0", width=300)  # (room for the whole date)
+        lst.pack(fill="x")
+        for i, (_p, when) in enumerate(kept):
+            lst.insert("", "end", iid=str(i), text="Before the save of " + macro_versions.when_text(when))
+        lst.selection_set("0")
+
+        def restore():
+            sel = lst.selection()
+            if not sel:
+                return
+            version, when = kept[int(sel[0])]
+            if not self.app.boxes.askyesno(
+                    "Edit", f"Put back {label} as it was before the save of {macro_versions.when_text(when)}?\n\n"
+                    "The macro as it is now is kept as an older version too, so you can go back to it."
+                    + ("\n\nThe changes not applied in Edit are thrown away." if self._changed() else ""),
+                    parent=win):
+                return
+            try:
+                macro_versions.restore(version, path)
+            except OSError as exc:
+                self.app.boxes.showerror("Edit", f"Couldn't restore it:\n{exc}", parent=win)
+                return
+            win.destroy()
+            if path == self.app.current_file:
+                self.app.load(path, quiet=True)
+                self.app.sub_note = "An older version was put back"
+                self.app._refresh()
+            self._fill_macros()
+            self._open_entry(self.current, ask=False)
+
+        row = tk.Frame(body, bg=BG)
+        row.pack(fill="x", pady=(10, 0))
+        ttk.Button(row, text="Close", command=win.destroy).pack(side="right")
+        ttk.Button(row, text="Restore", command=restore).pack(side="right", padx=(0, 6))
 
     # ------------------------------------------------------------ the details on the right
 

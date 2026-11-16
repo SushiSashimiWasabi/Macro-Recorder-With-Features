@@ -2,6 +2,7 @@
 
 Each of the first three is one line in Settings (what's chosen now, and Change…) that opens a
 small window; the choice is kept as one settings entry ("auto_stop", "vary", "discord_summary")."""
+import os
 import time
 import tkinter as tk
 from tkinter import ttk
@@ -435,13 +436,15 @@ class AutomationMixin:
 
     # ------------------------------------------------------------ the Stats window
 
-    def stats_numbers(self, macro=None, period="all"):
+    def stats_numbers(self, macro=None, period="all", src=None):
+        """src: run_history.MINE (your own runs, the default) or a run_history.FileHistory."""
+        src = src or run_history.MINE
         since = None
         if period == "today":
             since = time.mktime(time.strptime(run_history.day_of(), "%Y-%m-%d"))
         elif period in ("7", "30"):
             since = time.time() - int(period) * 86400
-        return run_history.summary(run_history.runs(macro, since))
+        return run_history.summary(src.runs(macro, since))
 
     @staticmethod
     def stats_lines(s):
@@ -456,9 +459,52 @@ class AutomationMixin:
                 ("Fragments an hour", f"{s['fragments_per_hour']:.2f}" if s["runs"] else "-"),
                 ("Time in runs", clock_text(s["seconds"]) if s["runs"] else "-")]
 
+    def export_stats(self, parent=None):
+        """(2.10) Save every kept run and the daily totals as a CSV file (opens in Excel)."""
+        run_history.save()  # (the newest run too)
+        path = filedialog.asksaveasfilename(
+            parent=parent or self.root, title="Export run stats", defaultextension=".csv",
+            initialfile=f"Macro Recorder stats {time.strftime('%Y-%m-%d')}.csv",
+            filetypes=[("CSV (opens in Excel)", "*.csv"), ("All files", "*.*")])
+        if not path:
+            return None
+        try:
+            n_runs, n_days = run_history.export_csv(path)
+        except OSError as exc:
+            self.boxes.showerror("Run stats", f"Couldn't save the file:\n{exc}\n\nIf it's open in Excel, close it "
+                                 "there first.", parent=parent)
+            return None
+        self.boxes.showinfo("Run stats", f"Saved {n_runs} run{'s' if n_runs != 1 else ''} and {n_days} "
+                            f"day{'s' if n_days != 1 else ''} to {os.path.basename(path)}.", parent=parent)
+        return path
+
+    STATS_FILE_NOTE = ("From a file: anyone can change these numbers. Runs older than the newest 5,000 only show "
+                       "in the chart.")
+    MINE_PREFIX = "Mine: "
+
+    def open_stats_file(self, path=None, parent=None):
+        """(2.10) Look at someone's exported stats file in Run stats (only looked at: never added to your
+        own stats). Returns the Run stats window, or None."""
+        if path is None:
+            path = filedialog.askopenfilename(parent=parent or self.root, title="Open a stats file",
+                                              filetypes=[("Stats file (CSV)", "*.csv"), ("All files", "*.*")])
+            if not path:
+                return None
+        try:
+            src = run_history.read_csv(path)
+        except ValueError as exc:
+            self.boxes.showerror("Run stats", f"Couldn't open {short(os.path.basename(path), 40)}:\n{exc}",
+                                 parent=parent)
+            return None
+        core.diag.info(f"Run stats: looking at a stats file ({len(src.runs())} runs, {src.skipped} line(s) skipped)")
+        win = self.open_stats()
+        win.view(src)
+        return win
+
     def open_stats(self):
         """Run stats: numbers for one macro (or all), next to another macro to compare, the last 14
-        days as a chart, and the latest runs with unusually slow ones marked."""
+        days as a chart, and the latest runs with unusually slow ones marked. (2.10) It can also show
+        someone's exported stats file (view["src"]), and compare your own macros with its macros."""
         old = getattr(self, "stats_win", None)
         if old is not None and old.winfo_exists():
             old.lift()
@@ -472,17 +518,28 @@ class AutomationMixin:
         body = tk.Frame(win, bg=BG)
         body.pack(fill="both", padx=18, pady=14)
         everything = "All macros"
-        names = [everything] + run_history.macros()
+        nothing = "(nothing)"
+        mine_head = "── My macros ──"
+        view = {"src": run_history.MINE}
         macro_var = tk.StringVar(value=everything)
-        other_var = tk.StringVar(value="(nothing)")
+        other_var = tk.StringVar(value=nothing)
         period_var = tk.StringVar(value=PERIODS["7"])
+        # (2.10) the line that says whose stats these are (empty for your own)
+        banner = tk.Frame(body, bg=BG)
+        # (shown only while looking at a file: see set_view)
+        banner_text = tk.Label(banner, text="", bg=BG, fg=ACCENT, font=F_BOLD, anchor="w")
+        banner_text.pack(side="left")
+        back = ttk.Button(banner, text="Back to my stats", command=lambda: set_view(run_history.MINE))
+        banner_note = tk.Label(body, text="", bg=BG, fg=DIM, font=F_SMALL, anchor="w", justify="left",
+                               wraplength=640)
+        # (the same)
         top = tk.Frame(body, bg=BG)
-        top.pack(fill="x")
+        top.pack(fill="x", pady=(4, 0))
         tk.Label(top, text="Macro", bg=BG, fg=TEXT, font=F_BASE).pack(side="left")
-        b1 = ttk.Combobox(top, textvariable=macro_var, state="readonly", width=20, values=names)
+        b1 = ttk.Combobox(top, textvariable=macro_var, state="readonly", width=20)
         b1.pack(side="left", padx=(6, 14))
         tk.Label(top, text="Compare with", bg=BG, fg=TEXT, font=F_BASE).pack(side="left")
-        b2 = ttk.Combobox(top, textvariable=other_var, state="readonly", width=20, values=["(nothing)"] + names)
+        b2 = ttk.Combobox(top, textvariable=other_var, state="readonly", width=20)
         b2.pack(side="left", padx=(6, 14))
         b3 = ttk.Combobox(top, textvariable=period_var, state="readonly", width=14, values=list(PERIODS.values()))
         b3.pack(side="left")
@@ -499,18 +556,42 @@ class AutomationMixin:
         latest.tag_configure("loss", foreground=RED)
         latest.tag_configure("dim", foreground=MUTED)
 
+        def fill_lists():
+            src = view["src"]
+            names = [everything] + src.macros()
+            b1.config(values=names)
+            others = [nothing] + names
+            if src is not run_history.MINE:  # your own macros too, to compare with the file's
+                mine = run_history.MINE.macros()
+                if mine:
+                    others += [mine_head, self.MINE_PREFIX + everything] + [self.MINE_PREFIX + m for m in mine]
+            b2.config(values=others)
+            if macro_var.get() not in names:
+                macro_var.set(everything)
+            if other_var.get() not in others or other_var.get() == mine_head:
+                other_var.set(nothing)
+
         def pick(var):
-            return None if var.get() in (everything, "(nothing)") else var.get()
+            """(the source, the macro or None for all of them) of a box's choice"""
+            text = var.get()
+            src = view["src"]
+            if src is not run_history.MINE and text.startswith(self.MINE_PREFIX):
+                src, text = run_history.MINE, text[len(self.MINE_PREFIX):]
+            return src, (None if text in (everything, nothing) else text)
 
         def show(_e=None):
             for b in (b1, b2, b3):
                 b.selection_clear()
+            if other_var.get() == mine_head:
+                other_var.set(nothing)
             period = next(k for k, v in PERIODS.items() if v == period_var.get())
             for child in grid.winfo_children():
                 child.destroy()
-            columns = [(macro_var.get(), self.stats_numbers(pick(macro_var), period))]
-            if other_var.get() != "(nothing)":
-                columns.append((other_var.get(), self.stats_numbers(pick(other_var), period)))
+            src, macro = pick(macro_var)
+            columns = [(macro_var.get(), self.stats_numbers(macro, period, src))]
+            if other_var.get() != nothing:
+                osrc, omacro = pick(other_var)
+                columns.append((other_var.get(), self.stats_numbers(omacro, period, osrc)))
             for c, (name, _s) in enumerate(columns, start=1):
                 tk.Label(grid, text=short(name, 24), bg=BG, fg=ACCENT, font=F_BOLD).grid(row=0, column=c, sticky="e",
                                                                                          padx=(24, 0))
@@ -522,7 +603,7 @@ class AutomationMixin:
                                                                                  padx=(24, 0))
             # the chart
             chart.delete("all")
-            day_list = run_history.days(14)
+            day_list = view["src"].days(14)
             biggest = max([d["runs"] for _date, d in day_list] + [1])
             slot = 640 / len(day_list)
             for i, (date, d) in enumerate(day_list):
@@ -538,14 +619,15 @@ class AutomationMixin:
                 if d.get("fragments"):
                     chart.create_text((x0 + x1) / 2, 162, text=f"+{d['fragments']}", fill=ACCENT, font=F_SMALL)
             # the latest runs
-            rs = run_history.runs(pick(macro_var))[-60:]
+            rs = src.runs(macro)[-60:]
             usual = {}
             for name in {r["macro"] for r in rs}:
-                usual[name] = run_history.summary(run_history.runs(name))["usual"]
+                usual[name] = run_history.summary(src.runs(name))["usual"]
             latest.config(state="normal")
             latest.delete("1.0", "end")
             if not rs:
-                latest.insert("end", "No runs yet. They're kept from this version on.", "dim")
+                latest.insert("end", "No runs yet. They're kept from this version on." if src is run_history.MINE
+                              else "No runs for this macro in the file.", "dim")
             for r in reversed(rs):
                 slow = run_history.is_slow(r, usual.get(r["macro"]))
                 when = time.strftime("%d %b %H:%M", time.localtime(r["t"]))
@@ -555,20 +637,59 @@ class AutomationMixin:
                         + ("   unusually slow" if slow else "") + "\n")
                 latest.insert("end", line, "slow" if slow else ("loss" if r["status"] == stats.LOSS else ""))
             latest.config(state="disabled")
+
+        def set_view(src):
+            """Show your own stats (run_history.MINE) or a stats file's (a FileHistory)."""
+            view["src"] = src
+            from_file = src is not run_history.MINE
+            if from_file:
+                banner_text.config(text="Viewing: " + short(src.name, 50))
+                many = src.skipped != 1
+                skipped = (f" {src.skipped} line{'s' if many else ''} of the file didn't make sense and "
+                           f"{'were' if many else 'was'} left out." if src.skipped else "")
+                banner_note.config(text=self.STATS_FILE_NOTE + skipped)
+                back.pack(side="right")
+                banner.pack(fill="x", before=top)
+                banner_note.pack(fill="x", before=top)
+                period_var.set(PERIODS["all"])  # (a file can be old: "last 7 days" could show nothing)
+            else:
+                banner_text.config(text="")
+                banner_note.config(text="")
+                back.pack_forget()
+                banner.pack_forget()
+                banner_note.pack_forget()
+            for w in (export_btn, refresh_btn):
+                w.config(state="disabled" if from_file else "normal")
+            forget.config(text="" if from_file else "Forget all runs", cursor="arrow" if from_file else "hand2")
+            macro_var.set(everything)
+            other_var.set(nothing)
+            fill_lists()
+            show()
         for b in (b1, b2, b3):
             b.bind("<<ComboboxSelected>>", show)
 
         def clear():
+            if view["src"] is not run_history.MINE:
+                return
             if self.boxes.askyesno("Run stats", "Forget every kept run and day? This can't be undone.",
                                    parent=win):
                 run_history.clear()
+                fill_lists()
                 show()
         bottom = tk.Frame(win, bg=BG)
         bottom.pack(fill="x", padx=18, pady=(0, 14))
         ttk.Button(bottom, text="Close", width=8, command=win.destroy).pack(side="right")
-        ttk.Button(bottom, text="Refresh", width=8, command=show).pack(side="right", padx=6)
-        link(bottom, "Forget all runs", clear, bg=BG).pack(side="left")
+        refresh_btn = ttk.Button(bottom, text="Refresh", width=8, command=lambda: (fill_lists(), show()))
+        refresh_btn.pack(side="right", padx=6)
+        export_btn = ttk.Button(bottom, text="Export…", width=8, command=lambda: self.export_stats(win))
+        export_btn.pack(side="right")
+        ttk.Button(bottom, text="Open file…", command=lambda: self.open_stats_file(parent=win)).pack(side="right",
+                                                                                                    padx=(0, 6))
+        forget = link(bottom, "Forget all runs", clear, bg=BG)
+        forget.pack(side="left")
         dark_title_bar(win)
+        fill_lists()
         show()
-        win.show, win.vars = show, {"macro": macro_var, "other": other_var, "period": period_var}
+        win.show, win.vars, win.view = show, {"macro": macro_var, "other": other_var, "period": period_var}, set_view
+        win.state = view
         return win

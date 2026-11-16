@@ -81,7 +81,7 @@ def _log_tail(lines=80):
 SAFE_SETTINGS = ("speed", "loop", "repeat_count", "ready_seconds", "record_mouse_moves", "mouse_detail",
                  "record_camera", "watch_enabled", "watch_click", "watch_wait", "watch_match", "watch_end_wait",
                  "watch_ignore_bg", "watch_limit_count", "watch_limit_seconds", "watch_shift_lock",
-                 "pause_when_away", "away_stop_seconds", "switch_to_program", "fit_to", "play_resolution",
+                 "pause_when_away", "away_stop_seconds", "recovery_countdown", "switch_to_program", "fit_to", "play_resolution",
                  "play_overlay", "sounds", "check_updates", "discord_enabled")
 
 

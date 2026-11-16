@@ -774,6 +774,9 @@ class SettingsPagesMixin:
         self.closed_var = tk.StringVar(value=self.closed_summary())
         self.closed_var.trace_add("write", lambda *a: self.root.after_idle(self._settings_text_changed))
         tk.Label(row, textvariable=self.closed_var, bg=BG, fg=MUTED, font=F_SMALL).pack(side="right", padx=(0, 10))
+        row = self._row(f, "Countdown before rejoining", "seconds, with a sound each second (0 = none)")
+        ttk.Spinbox(row, from_=0, to=60, width=5, textvariable=self.recover_count_var,
+                    command=self._save_settings).pack(side="right")
         self._choice_row(f, "Stop by itself", self.auto_stop_summary, self.open_auto_stop,
                          info=self.AUTO_STOP_HELP)
         self._build_resolution_ui(f)
