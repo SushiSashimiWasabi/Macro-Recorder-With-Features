@@ -883,7 +883,7 @@ class MacroEditor:
             in_group = bool(found and found[3] is not None)
             above_group = bool(found and found[2] > 0 and found[1][found[2] - 1].get("kind") in workflow.GROUPS)
             is_group = a.get("kind") in workflow.GROUPS
-            for label, accel, fn, ok in (
+            for item in (
                     ("Move up", "Alt+Up", lambda: self.move(-1), True),
                     ("Move down", "Alt+Down", lambda: self.move(1), True),
                     ("Duplicate", "Ctrl+D", self.duplicate, True),
@@ -902,10 +902,10 @@ class MacroEditor:
                     None,
                     ("Turn this action on" if a.get("off") else "Turn this action off", "Ctrl+E", self.toggle_off,
                      True)):
-                if label is None:
+                if item is None:  # (a line between parts; 2.9.2: this used to stop the menu opening)
                     m.add_separator()
                     continue
-                label, accel, fn, ok = label, accel, fn, ok
+                label, accel, fn, ok = item
                 m.add_command(label=label, accelerator=accel, command=fn, state="normal" if ok else "disabled")
         b = self.btn_more
         m.tk_popup(b.winfo_rootx(), b.winfo_rooty() - 10 - 22 * m.index("end"))
