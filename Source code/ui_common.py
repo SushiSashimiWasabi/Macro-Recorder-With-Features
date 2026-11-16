@@ -49,6 +49,16 @@ video_overlay = lazy.module("video_overlay")
 updater = lazy.module("updater")
 from version import APP_VERSION, HISTORY, WHATS_NEW
 
+if IS_MAC:
+    # Mac (2.9.2): "transient" glues a window to the one it was opened from (it moves along with it
+    # and can't be put on its own). Windows still use it; on a Mac every window stays free, and the
+    # window you click comes in front (the app's windows are all "on top" already).
+    def _mac_transient(self, master=None):
+        if master is None:
+            return ""  # (asking which window it's glued to: none)
+        return None
+    tk.Wm.wm_transient = tk.Wm.transient = _mac_transient
+
 # ---------------------------------------------------------------- look
 
 if IS_WIN:
