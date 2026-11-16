@@ -253,7 +253,13 @@ def rounded_rect(canvas, x0, y0, x1, y1, r, **kw):
 
 def link(parent, text, command, bg=BG, fg=MUTED, font=F_LINK):
     lab = tk.Label(parent, text=text, bg=bg, fg=fg, font=font, cursor="hand2")
-    lab.bind("<Button-1>", lambda e: command())
+    if IS_MAC:
+        # Mac (2.9.2): runs when the mouse button is let go over it, like a real button. A box opened
+        # while the button is still down froze the whole app on a Mac (the ⓘ icons).
+        lab.bind("<ButtonRelease-1>", lambda e: command() if lab.winfo_containing(e.x_root, e.y_root) is lab
+                 else None)
+    else:
+        lab.bind("<Button-1>", lambda e: command())
     lab.bind("<Enter>", lambda e: lab.config(fg=TEXT))
     lab.bind("<Leave>", lambda e: lab.config(fg=fg))
     return lab
@@ -803,7 +809,8 @@ class ThemedBoxes:
         win.resizable(False, False)
         win.attributes("-topmost", True)
         try:
-            if parent.winfo_viewable():
+            # (Mac: a transient box is glued to its window and could go behind it: 2.9.2)
+            if parent.winfo_viewable() and not IS_MAC:
                 win.transient(parent)
         except tk.TclError:
             pass
@@ -868,15 +875,35 @@ class ThemedBoxes:
         dark_title_bar(win)
         only_close_button(win)
         win.lift()
-        try:
-            win.grab_set()
-        except tk.TclError:
-            pass
+        if IS_MAC:
+            # Mac (2.9.2): no lock on the rest of the app. A locked app with the box out of sight
+            # froze it for good; instead the box is kept in front of the app's other windows.
+            self._mac_keep_in_front(win)
+        else:
+            try:
+                win.grab_set()
+            except tk.TclError:
+                pass
         (e if entry is not None else (first or win)).focus_force()
         win.wait_window()
         if entry is not None:
             return result["value"], result.get("text")
         return result["value"]
+
+    def _mac_keep_in_front(self, win):
+        """Mac: while the box is open, put it back in front whenever another of the app's windows
+        came over it (checked 3 times a second; other apps' windows aren't touched)."""
+        def check():
+            try:
+                if not win.winfo_exists():
+                    return
+                order = str(win.tk.call("wm", "stackorder", self.app.root)).split()
+                if order and order[-1] != str(win):
+                    win.lift()
+                win.after(300, check)
+            except tk.TclError:
+                pass
+        win.after(100, check)
 
     def close_all(self):
         """Close every message box that's open, as if its X was pressed (the phone remote does this
