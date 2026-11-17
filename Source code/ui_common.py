@@ -844,6 +844,7 @@ class ThemedBoxes:
                      justify="left").pack(fill="x", pady=(0, 6))
         tk.Label(right, text=str(message or ""), bg=BG, fg=MUTED if heading else TEXT, font=F_BASE, anchor="w",
                  justify="left", wraplength=460).pack(fill="x")
+        tk.Frame(right, bg=BG, width=440, height=1).pack(anchor="w")  # (2.11: short boxes as wide as others)
         entry_var = None
         if entry is not None:
             entry_var = tk.StringVar(value=entry)
@@ -964,6 +965,101 @@ class ThemedBoxes:
         except ValueError:
             return None
         return number if low <= number <= high else None
+
+
+class TreeDrag:
+    """(2.11) A list where you choose many by dragging over them (as well as Ctrl+click and Shift+click),
+    and drag chosen ones to another place: a blue line shows where they'll go. on_drop(ids, target id,
+    "before" / "after") does the moving."""
+
+    def __init__(self, tree, on_drop, is_group=None):
+        self.tree, self.on_drop, self.is_group = tree, on_drop, is_group
+        self.mode = None
+        self.line = tk.Frame(tree, bg=ACCENT, height=2)
+        self.lit = None  # a group row lit up: the drop goes inside it
+        tree.tag_configure("drop_into", background="#2b3f7a")
+        tree.bind("<ButtonPress-1>", self.press, add="+")
+        tree.bind("<B1-Motion>", self.motion, add="+")
+        tree.bind("<ButtonRelease-1>", self.release, add="+")
+
+    def rows(self):
+        out = []
+
+        def go(parent):
+            for iid in self.tree.get_children(parent):
+                out.append(iid)
+                if self.tree.item(iid, "open"):
+                    go(iid)
+        go("")
+        return out
+
+    def press(self, e):
+        iid = self.tree.identify_row(e.y)
+        self.start, self.start_y, self.mode = iid, e.y, None
+        if e.state & 0x0005:  # (Shift or Ctrl: the list's own choosing)
+            return None
+        if iid and iid in self.tree.selection():
+            self.mode = "maybe_move"
+            return "break"  # (keep the others chosen: this may be the start of a move)
+        self.mode = "select"
+        return None
+
+    def motion(self, e):
+        iid = self.tree.identify_row(e.y)
+        if self.mode == "maybe_move" and abs(e.y - self.start_y) > 6:
+            self.mode = "move"
+        if self.mode == "move":
+            box = self.tree.bbox(iid) if iid else None
+            where = self.where(iid, e.y) if box else None
+            self.light(iid if where == "into" else None)
+            if box and where != "into":
+                x, y, w, h = box
+                self.line.place(x=0, y=y + (h if where == "after" else 0) - 1, relwidth=1.0)
+                self.line.lift()
+            else:
+                self.line.place_forget()
+        elif self.mode == "select" and self.start and iid:
+            rows = self.rows()
+            if self.start in rows and iid in rows:
+                a, b = sorted((rows.index(self.start), rows.index(iid)))
+                self.tree.selection_set(rows[a:b + 1])
+
+    def where(self, iid, y):
+        """"before" / "after" the row, or "into" it (the middle half of a group's row)."""
+        box = self.tree.bbox(iid)
+        if not box:
+            return None
+        top, h = box[1], box[3]
+        if self.is_group and iid not in self.tree.selection() and self.is_group(iid) \
+                and top + h * 0.25 <= y <= top + h * 0.75:
+            return "into"
+        return "after" if y > top + h / 2 else "before"
+
+    def light(self, iid):
+        if self.lit == iid:
+            return
+        if self.lit and self.tree.exists(self.lit):
+            self.tree.item(self.lit, tags=tuple(t for t in self.tree.item(self.lit, "tags") if t != "drop_into"))
+        self.lit = iid
+        if iid:
+            self.tree.item(iid, tags=tuple(self.tree.item(iid, "tags")) + ("drop_into",))
+
+    def release(self, e):
+        mode, self.mode = self.mode, None
+        self.line.place_forget()
+        self.light(None)
+        if mode == "maybe_move":  # just a click on a chosen one: only that one is chosen now
+            if self.start:
+                self.tree.selection_set(self.start)
+                self.tree.focus(self.start)
+            return
+        if mode != "move":
+            return
+        iid = self.tree.identify_row(e.y)
+        box = self.tree.bbox(iid) if iid else None
+        if not iid or not box or iid in self.tree.selection():
+            return
+        self.on_drop(list(self.tree.selection()), iid, self.where(iid, e.y))
 
 
 def short(text, n=26):

@@ -19,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 here = os.path.dirname(os.path.abspath(__file__))
 src = os.path.dirname(here)
 # these open windows (Edit, Settings, Picture watch, dashboards...): one at a time
-WINDOW_TESTS = {"test_automation.py", "test_chains.py", "test_editor.py", "test_pictures.py", "test_preview1.py", "test_remote.py",
+WINDOW_TESTS = {"test_automation.py", "test_chains.py", "test_editor.py", "test_pictures.py", "test_preview1.py", "test_preview2.py", "test_remote.py",
                 "test_settings_undo.py", "test_stage3.py", "test_stage4.py", "test_windows.py"}
 AT_ONCE = 4  # how many of the other tests run side by side
 

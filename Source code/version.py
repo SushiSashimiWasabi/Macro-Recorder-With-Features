@@ -1,12 +1,54 @@
 # The app's version. Raising it (and pushing to main) makes GitHub publish a new Release,
 # which every copy of the app offers to install when it starts.
-APP_VERSION = "2.10"
+APP_VERSION = "2.11"
 
 # Every version, newest first: (version, the day it was finalized, changes). The newest is shown once after an update;
 # Settings > About > What's new shows them all. Each change is one paragraph (shown as a bullet).
 # Version numbers started at 2.1 (the first one that could update itself); the earlier steps have
 # names instead.
 HISTORY = [
+    ("2.11", "17 November 2026", [
+        "Edit window: choose many actions (or macros) at once: Ctrl+click adds or takes away one, Shift+click "
+        "chooses everything in between, or drag over them. Duplicate, Remove, Copy, Cut (Ctrl+X), Paste, Move "
+        "up / down, Turn off / on and Group into then work on all of them, and one Undo puts them back. Drag "
+        "chosen actions to move them (a blue line shows where they go). Removing more than 5 asks first.",
+        "Test from an action: right-click it > Play from here, or Play only this action. The usual countdown "
+        "comes first, Stop and Ctrl+Alt+End work, the timer says TEST, and a test never counts: no results, "
+        "run stats, Discord or Stop by itself, and picture watch and rejoining stay off.",
+        "Show without playing: the same, but nothing is pressed or clicked. A dot shows where the mouse "
+        "would go and the timer shows the keys. Picture steps aren't looked for: they count as found (or as "
+        "not found, if you tick that in the menu).",
+        "Show my clicks (right-click or More): a picture of your screen with the macro's clicks as numbered "
+        "dots and its mouse moves as lines, all at once or one part at a time. Click a dot to choose its "
+        "action. The picture is only shown, never saved or sent.",
+        "Counters: new actions Add to a counter, Set a counter and If a counter reaches… (whole numbers). "
+        "They show in the timer at the top while playing and start at 0 on each Play, unless Keep between "
+        "plays is on. Older versions of the app skip these actions and still play the rest.",
+        "Record in which window?: pressing Record in the app lists the open windows (and the desktop); the "
+        "one you pick comes to the front and the countdown starts. The Record key from a game skips it, and "
+        "Settings > Recording can turn it off. It can also link the new macro to a profile (an existing one "
+        "or a new one), which only happens when you save it. The record countdown is now 5 s for new users.",
+        "Edit the recorded events…: choose many (also by dragging over rows), drag them to move them, "
+        "Duplicate, Copy, Cut, Paste, Up / Down, and Undo / Redo. A key's or button's press and let-go always "
+        "go together, so nothing stays held down. Removing more than 5 asks first.",
+        "Edit the recorded events…: try the chosen rows (right-click or Preview): Play the chosen rows (test, "
+        "never counted), Show without playing (nothing is pressed) or Show my clicks. The matching let-go "
+        "comes along, and the time between rows that are far apart is skipped.",
+        "Record keys and mouse… and Insert another macro… can put the actions inside the chosen group (also "
+        "an empty one), and dropping actions on the middle of a group's row puts them inside it.",
+        "Show without playing: \"Pretend pictures are NOT found\" is a green (on) / red (off) switch, with "
+        "\"What does that mean?\" next to it.",
+        "Fixed: a test from Edit did nothing when no macro was open in the main window (it now always starts, "
+        "or says why).",
+        "Fixed: mouse movement recorded with camera recording on could play back off to the side (up to "
+        "hundreds of pixels with a fast mouse). Each camera step now keeps where the pointer was. Record "
+        "again to get this in an older macro.",
+        "Fixed: camera recording sometimes didn't start (\"Camera recording couldn't start\" in the log), "
+        "so a recording had no camera turns.",
+        "Short dark message boxes are as wide as the others.",
+        "A recording made in Edit (Record keys and mouse…, Record here…) is fitted to the size the macro was "
+        "made for, so a macro made on another screen still clicks the right spots everywhere.",
+    ]),
     ("2.10", "16 November 2026", [
         "New sounds (Settings > Sounds): Win, Loss, Divine fragment, Milestone, Timed start warning, Rejoin "
         "countdown (disconnect) and Reopen countdown (game closed). Each can have its own sound file or be "

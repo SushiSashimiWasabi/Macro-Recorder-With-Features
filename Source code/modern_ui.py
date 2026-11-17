@@ -18,6 +18,7 @@ made of parts, each in its own file:
 from ui_common import *  # noqa: F401,F403
 from automation_ui import AutomationMixin
 from check_ui import CheckMixin
+from record_window_ui import RecordWindowMixin
 import macro_versions
 from discord_ui import DiscordMixin
 from extras_ui import ExtrasMixin
@@ -33,7 +34,7 @@ from settings_window import SettingsWindowMixin
 from video_ui import VideoMixin
 
 
-class ModernMacroRecorder(CheckMixin, ExtrasMixin, ProfilesMixin, PictureWatchMixin, SettingsPagesMixin, PictureActionsMixin, AutomationMixin, DiscordMixin, RemoteMixin, ResultsMixin, SettingsWindowMixin, MacroEditorMixin, EditWindowMixin, VideoMixin, core.MacroRecorder):
+class ModernMacroRecorder(CheckMixin, RecordWindowMixin, ExtrasMixin, ProfilesMixin, PictureWatchMixin, SettingsPagesMixin, PictureActionsMixin, AutomationMixin, DiscordMixin, RemoteMixin, ResultsMixin, SettingsWindowMixin, MacroEditorMixin, EditWindowMixin, VideoMixin, core.MacroRecorder):
     def __init__(self, root, preview=False):
         self.preview = preview
         self.sub_note = "Record something, or open a macro"
@@ -68,7 +69,8 @@ class ModernMacroRecorder(CheckMixin, ExtrasMixin, ProfilesMixin, PictureWatchMi
         self.loop_var = tk.BooleanVar(value=bool(s.get("loop", True)))
         self.speed_var = tk.StringVar(value=format_speed(parse_speed(s.get("speed", 1)) or 1.0))
         self.ready_var = tk.IntVar(value=core.int_setting(s, "ready_seconds", 3, 0, 600))
-        self.rec_ready_var = tk.IntVar(value=core.int_setting(s, "record_ready_seconds", 3, 0, 600))
+        self.rec_ready_var = tk.IntVar(value=core.int_setting(s, "record_ready_seconds", 5, 0, 600))
+        self.rec_ask_window_var = tk.BooleanVar(value=s.get("record_ask_window", True) is not False)
         self.target_windows = []
         self.target_var = tk.StringVar(value=SCREEN_TARGET)
         self.name_var = tk.StringVar(value="")  # empty until a macro is opened or saved
@@ -456,6 +458,7 @@ class ModernMacroRecorder(CheckMixin, ExtrasMixin, ProfilesMixin, PictureWatchMi
                 s["record_ready_seconds"] = max(0, min(600, int(self.rec_ready_var.get())))
             except (tk.TclError, ValueError):
                 pass
+            s["record_ask_window"] = bool(self.rec_ask_window_var.get())
             s["pause_when_away"] = bool(self.away_var.get())
             try:
                 s["away_stop_seconds"] = max(0, min(3600, int(self.away_stop_var.get())))
@@ -525,12 +528,15 @@ class ModernMacroRecorder(CheckMixin, ExtrasMixin, ProfilesMixin, PictureWatchMi
             self._tick_overlay()
             return
         if counting and not self.recording and self.record_countdown_left == 0:  # cancelled
+            self.pending_profile = None
+            self._record_stopped_here()
             self.sub_note = "Recording cancelled"
             if self.overlay is not None:
                 self.overlay.hide()
             self._refresh()
             return
         if was and not self.recording:
+            self._record_stopped_here()
             self._sound("record_stop")
             self.sub_note = "The recording was put in the Edit window" if into_editor \
                 else f"Recorded {len(self.events)} actions"
@@ -538,6 +544,8 @@ class ModernMacroRecorder(CheckMixin, ExtrasMixin, ProfilesMixin, PictureWatchMi
             self._refresh()
 
     def _record_countdown_tick(self, seconds_left):
+        if self._record_window_gone():
+            return
         self._sound("countdown")
 
     def _recording_began(self):
@@ -603,7 +611,8 @@ class ModernMacroRecorder(CheckMixin, ExtrasMixin, ProfilesMixin, PictureWatchMi
             self.load(path)
 
     def play(self):
-        if self.recording or self.playing or not (self.events or self.actions) or self.capture_callback is not None:
+        if self.recording or self.playing or self.capture_callback is not None \
+                or not (self.events or self.actions or getattr(self, "test_play", None)):
             return
         self.game_asked = False
         if not self._check_program():
@@ -615,7 +624,7 @@ class ModernMacroRecorder(CheckMixin, ExtrasMixin, ProfilesMixin, PictureWatchMi
         self.away_paused = False
         self.held_now = None
         super().play()
-        if self.playing:
+        if self.playing and not getattr(self, "test_play", None):
             # Check my macro (2.10): only tells, never stops Play
             self.check_on_play(self._read_play_on(quiet=True), skip=("game",) if self.game_asked else ())
         if self.playing and getattr(self, "fit_note", ""):
@@ -629,7 +638,10 @@ class ModernMacroRecorder(CheckMixin, ExtrasMixin, ProfilesMixin, PictureWatchMi
             if pictures is not None and pictures.alive():
                 pictures.win.withdraw()  # (the same; its changes stay: Picture watch shows it again)
             if self.edit_win is not None and self.edit_win.winfo_exists():
-                self.edit_win.destroy()
+                if getattr(self, "test_play", None):
+                    self.edit_win.withdraw()  # (a test from Edit: it comes back afterwards, changes and all)
+                else:
+                    self.edit_win.destroy()
             self.stopped_by_user = False
             self.play_began = None
             self._tick_overlay()
@@ -739,7 +751,8 @@ class ModernMacroRecorder(CheckMixin, ExtrasMixin, ProfilesMixin, PictureWatchMi
             rec_keys = {"pause": hotkey_name(self.hotkeys["pause"]), "stop": hotkey_name(self.hotkeys["record"])}
             what = "Recording for the Edit window" if self.record_into is not None else "Recording a new macro"
             if self.record_countdown_left > 0:
-                self.overlay.show("Recording in", str(self.record_countdown_left), what, AMBER)
+                self.overlay.show("Recording in", str(self.record_countdown_left),
+                                  what + self.record_window_text(), AMBER)
             elif self.recording:
                 clock = format_clock(self._recording_clock())
                 note = f"{what}  ·  {len(self.events)} actions"
@@ -757,13 +770,25 @@ class ModernMacroRecorder(CheckMixin, ExtrasMixin, ProfilesMixin, PictureWatchMi
                 if self.play_began is None:
                     self.play_began = self._play_clock()
                 note = self.play_note.rstrip(".").replace("…", "").replace("Playing run", "Run") or name
+                extra = []
                 if self.result_matchers and self.session.runs:
-                    note = short(note, 34) + "  ·  " + self.session.summary()
+                    extra.append(self.session.summary())
+                counters = getattr(self, "counters", None)
+                if counters:  # (2.11) "Wins 3 · Tries 1"
+                    extra += [f"{short(n, 14)} {v}" for n, v in list(counters.items())[:4]]
+                if extra:
+                    note = "  ·  ".join([short(note, 34)] + extra)
                 clock = format_clock(self._play_clock() - self.play_began)
+                test = getattr(self, "test_play", None)
+                word = ("WATCH ONLY" if getattr(self, "ghost", False) else "TEST") if test else "Playing"
+                if test and getattr(self, "ghost", False):
+                    also = getattr(self, "ghost_keys", "") or ("" if "nothing is pressed" in note.lower()
+                                                              else short(note, 40))
+                    note = "Nothing is pressed" + (f"  ·  {also}" if also else "")
                 if self.play_paused_at is not None:
                     self.overlay.show("Paused", clock, note, AMBER, keys)
                 else:
-                    self.overlay.show("Playing", clock, note, ACCENT, keys)
+                    self.overlay.show(word, clock, note, AMBER if test else ACCENT, keys)
                     # the next look is when the shown second changes (at most half a second away, so
                     # a pause or a new note still shows quickly)
                     left = 1.0 - (self._play_clock() - self.play_began) % 1.0
@@ -821,6 +846,9 @@ class ModernMacroRecorder(CheckMixin, ExtrasMixin, ProfilesMixin, PictureWatchMi
             self.sub_note = "Finished playing"
             self._sound("play_end")
             text = f"Finished ({runs_text})."
+        if getattr(self, "test_play", None):
+            self._test_done(reason)
+            return
         self._add_to_all_time()
         self._remember_found_sizes()
         self._show_session()
@@ -835,9 +863,95 @@ class ModernMacroRecorder(CheckMixin, ExtrasMixin, ProfilesMixin, PictureWatchMi
                      if "error" in reason else "")
             messagebox.showwarning("Macro Recorder", reason + extra, parent=self.root)
 
+    # ------------------------------------------------------------ (2.11) test plays from the Edit window
+
+    def play_test(self, steps, mode="test", screen=None, program=None, found=True):
+        """Play some steps as a test (mode "test") or only show them (mode "ghost": nothing is pressed).
+        A test never counts: no results, run stats, Discord, Stop by itself, picture watch or rejoining.
+        screen / program: those of the macro the steps come from. found: in a ghost test, picture steps
+        take the "found" way (else "not found")."""
+        why = ("recording is going on" if self.recording or self.record_countdown_left > 0 else
+               "a macro is playing" if self.playing else "nothing is chosen to play" if not steps else None)
+        if why:
+            core.diag.info(f"Test from Edit didn't start: {why}")
+            self.boxes.showinfo("Test", f"The test can't start now: {why}.",
+                                parent=getattr(self, "edit_win", None) or self.root)
+            return False
+        core.diag.info(f"Test from Edit ({'watch only' if mode == 'ghost' else 'test'}): {len(steps)} action(s)")
+        self.test_play = {"mode": mode, "steps": steps, "screen": screen, "program": program, "found": found}
+        self.ghost_keys = ""
+        if mode == "ghost":
+            # belt and braces: even if something asked them, these controllers press nothing
+            self.real_controllers = (self.kb_ctrl, self.mouse_ctrl)
+            self.kb_ctrl = self.mouse_ctrl = NoInput()
+        try:
+            self.play()
+        finally:
+            if not self.playing:
+                self._end_test()
+                core.diag.info("Test from Edit didn't start (not played)")
+        return self.playing
+
+    def _end_test(self):
+        if getattr(self, "real_controllers", None):
+            self.kb_ctrl, self.mouse_ctrl = self.real_controllers
+            self.real_controllers = None
+        self.test_play = None
+        self.ghost = False
+        self.ghost_keys = ""
+        dot = getattr(self, "ghost_dot", None)
+        if dot is not None:
+            dot.hide()
+
+    def _test_done(self, reason):
+        ghost = getattr(self, "ghost", False)
+        back, self.test_restore = getattr(self, "test_restore", None) or [], []
+        self._end_test()
+        for w in back:  # (e.g. "Edit the recorded events…", hidden while its rows played)
+            try:
+                if w.winfo_exists():
+                    w.deiconify()
+                    w.lift()
+            except tk.TclError:
+                pass
+        what = "Watch-only test" if ghost else "Test"
+        self.sub_note = (f"{what} stopped" if getattr(self, "stopped_by_user", False) else f"{what} done") \
+            + " (not counted)"
+        self._refresh()
+        ed = getattr(self, "edit_win", None)
+        if ed is not None and ed.winfo_exists():
+            ed.deiconify()
+            ed.lift()
+        if reason:
+            messagebox.showwarning("Macro Recorder", reason, parent=self.root)
+
+    def _ghost_event(self, ev):
+        """Watch only: show where the mouse would be and which key would be pressed (sends nothing)."""
+        kind = ev.get("type")
+        if kind in ("move", "click", "scroll") and "x" in ev:
+            self.ghost_at = (int(ev["x"]), int(ev["y"]), kind == "click" and ev.get("pressed"))
+        elif kind == "key":
+            if ev.get("pressed"):
+                self.ghost_keys = "Pressing " + workflow.key_text(ev.get("key") or {})
+        if not getattr(self, "ghost_job", False):
+            self.ghost_job = True
+            self._call_ui(self._ghost_show)
+
+    def _ghost_show(self):
+        self.ghost_job = False
+        if not getattr(self, "ghost", False):
+            return
+        at = getattr(self, "ghost_at", None)
+        if at is None:
+            return
+        if getattr(self, "ghost_dot", None) is None:
+            self.ghost_dot = GhostDot(self.root)
+        self.ghost_dot.show(*at)
+
     def load(self, path=None, quiet=False):
         ok = super().load(path, quiet=quiet)
         if ok:
+            self.pending_profile = None  # (another macro: a profile chosen for a new recording is dropped)
             self.name_var.set(os.path.splitext(os.path.basename(self.current_file))[0])
             self.sub_note = "Macro opened"
             self.unsaved = False
@@ -1162,6 +1276,7 @@ class ModernMacroRecorder(CheckMixin, ExtrasMixin, ProfilesMixin, PictureWatchMi
             data["program"] = self.macro_program
         if getattr(self, "macro_vary", None):
             data["vary"] = self.macro_vary
+        self.apply_pending_profile()  # (2.11: a profile chosen in "Record in which window?")
         if getattr(self, "macro_profile", None):
             data["profile"] = self.macro_profile
         pictures = self._pictures_for_file(path)
@@ -1184,6 +1299,65 @@ class ModernMacroRecorder(CheckMixin, ExtrasMixin, ProfilesMixin, PictureWatchMi
 
 
 # ---------------------------------------------------------------- start
+
+class NoInput:
+    """Stands in for the keyboard and mouse controllers during a watch-only test: presses nothing."""
+    position = (0, 0)
+
+    def __getattr__(self, name):
+        return lambda *a, **k: None
+
+
+class GhostDot:
+    """Watch only (2.11): a dot where the mouse would be (bigger and red on a click). Clicks go through
+    it and it never takes the focus."""
+    SIZE = 26
+
+    def __init__(self, root):
+        self.win = win = tk.Toplevel(root)
+        win.withdraw()
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        key = "#010203"
+        win.config(bg=key)
+        try:
+            win.attributes("-transparentcolor", key)
+        except tk.TclError:
+            pass
+        self.canvas = tk.Canvas(win, width=self.SIZE, height=self.SIZE, bg=key, highlightthickness=0)
+        self.canvas.pack()
+        self.made_through = False
+
+    def show(self, x, y, click=False):
+        c = self.canvas
+        c.delete("all")
+        r = 12 if click else 7
+        mid = self.SIZE // 2
+        c.create_oval(mid - r, mid - r, mid + r, mid + r, fill=RED if click else ACCENT, outline="white", width=2)
+        self.win.geometry(f"+{x - mid}+{y - mid}")
+        if self.win.state() == "withdrawn":
+            self.win.deiconify()
+        if not self.made_through and IS_WIN:
+            # (only once it's on screen: before that the outer window doesn't exist yet, and the setting
+            # would land on the inner one and hide the dot)
+            self.win.update_idletasks()
+            try:
+                import ctypes
+
+                u = ctypes.windll.user32
+                hwnd = u.GetParent(self.win.winfo_id())
+                if hwnd:
+                    u.SetWindowLongW(hwnd, -20, u.GetWindowLongW(hwnd, -20) | 0x80000 | 0x20 | 0x80 | 0x8000000)
+                    self.made_through = True
+            except Exception:
+                pass
+
+    def hide(self):
+        try:
+            self.win.withdraw()
+        except tk.TclError:
+            pass
+
 
 def use_preview_settings():
     """The preview keeps its own settings folder (a copy of the real one on first start), so trying

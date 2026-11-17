@@ -7,6 +7,7 @@ far the mouse moved. Raw Input reports how far the mouse itself moved, every tim
 RawMouse(callback).start() runs a hidden window on its own thread and calls callback(dx, dy) for
 every movement (on that thread). Only on Windows; elsewhere start() returns False."""
 
+import os
 import sys
 import threading
 
@@ -64,10 +65,12 @@ if IS_WIN:
     user32.GetMessageW.argtypes = [ctypes.POINTER(wintypes.MSG), wintypes.HWND, wintypes.UINT, wintypes.UINT]
     user32.DestroyWindow.argtypes = [wintypes.HWND]
     kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+    user32.UnregisterClassW.argtypes = [wintypes.LPCWSTR, wintypes.HINSTANCE]
 
 
 class RawMouse:
     _class_registered = False
+    _made = 0  # (2.11) every helper window gets its own name: one made from id() could come back
 
     def __init__(self, callback):
         self.callback = callback
@@ -119,7 +122,9 @@ class RawMouse:
         try:
             hinst = kernel32.GetModuleHandleW(None)
             self._wndproc = WNDPROC(self._proc)  # kept, so it isn't freed while Windows uses it
-            name = "MacroRecorderRawMouse%d" % id(self)
+            RawMouse._made += 1
+            name = "MacroRecorderRawMouse%d_%d" % (os.getpid(), RawMouse._made)
+            self._class_name = name
             wc = WNDCLASSW()
             wc.lpfnWndProc = self._wndproc
             wc.hInstance = hinst
@@ -146,5 +151,9 @@ class RawMouse:
         try:
             dev = RAWINPUTDEVICE(0x01, 0x02, RIDEV_REMOVE, None)
             user32.RegisterRawInputDevices(ctypes.byref(dev), 1, ctypes.sizeof(dev))
+        except Exception:
+            pass
+        try:  # (its window is gone now: the name can be let go of)
+            user32.UnregisterClassW(self._class_name, kernel32.GetModuleHandleW(None))
         except Exception:
             pass

@@ -20,7 +20,7 @@ from ui_common import *  # noqa: F401,F403
 SKIP_KEYS = {"profiles", "profile_active", "macro_library", "stats_all", "last_seen_version", "last_game_exe",
              "builtin_failed_added", "check_updates", "app_icon_file", "app_logo_file", "app_logo_same",
              "video_history", "video_link", "first_start_done", "warn_big_pictures",
-             "video_playlist_note", "check_ignore"}
+             "video_playlist_note", "check_ignore", "counter_values"}
 SKIP_PREFIXES = ("remote_", "video_rect")
 SKIP_ENDINGS = ("_geometry",)
 NO_PROFILE = "(none)"

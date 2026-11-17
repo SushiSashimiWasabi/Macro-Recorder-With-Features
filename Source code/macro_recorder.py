@@ -450,6 +450,7 @@ def expand_steps(steps):
         for a in actions:
             if not isinstance(a, dict):
                 continue
+            workflow.clean_counter_step(a)  # (2.11: counters from someone's file are checked)
             if a.get("kind") == "recorded" and isinstance(a.get("events"), list):
                 a["events"] = expand_moves(a["events"], budget=MAX_EXPANDED - total)
                 total += len(a["events"])
@@ -1741,6 +1742,8 @@ class MacroRecorder:
                 "Macro Recorder", "Start a new recording? The current one will be replaced."
             ):
                 return
+            if not self._before_record():  # (2.11: the dark window asks which window to record in)
+                return
             seconds = self._record_ready_seconds()
             if seconds > 0:
                 self._start_record_countdown(seconds)
@@ -1750,8 +1753,12 @@ class MacroRecorder:
         self._refresh()
 
     def _record_ready_seconds(self):
-        """The countdown before recording starts (Settings > Recording; 0 = at once)."""
-        return int_setting(self.settings, "record_ready_seconds", 3, 0, 600)
+        """The countdown before recording starts (Settings > Recording; 0 = at once; 5 s since 2.11)."""
+        return int_setting(self.settings, "record_ready_seconds", 5, 0, 600)
+
+    def _before_record(self):
+        """Just before the countdown before recording (the dark window may ask things here)."""
+        return True
 
     def _start_record_countdown(self, seconds):
         self.record_countdown_left = seconds
@@ -1876,7 +1883,15 @@ class MacroRecorder:
         self.camera_dx = self.camera_dy = 0
         self.camera_last = time.perf_counter()
         if (dx or dy) and self.recording:
-            self._add({"type": "move_rel", "dx": int(dx), "dy": int(dy)})
+            ev = {"type": "move_rel", "dx": int(dx), "dy": int(dy)}
+            try:
+                # (2.11) where the pointer was: Windows speeds up added-together moves differently on
+                # playback, so the pointer is put back on this spot after each turn
+                x, y = self.mouse_ctrl.position
+                ev["x"], ev["y"] = int(x), int(y)
+            except Exception:
+                pass
+            self._add(ev)
 
     # ------------------------------------------------------------ the program a macro is recorded in
 
@@ -2012,14 +2027,17 @@ class MacroRecorder:
     # ------------------------------------------------------------ playback
 
     def play(self):
-        if self.recording or self.playing or self.record_countdown_left > 0 or not (self.events or self.actions) \
-                or self.capture_callback is not None:
+        test = getattr(self, "test_play", None)  # (2.11) {"mode": "test" / "ghost", "steps", "screen", "program"}
+        if self.recording or self.playing or self.record_countdown_left > 0 \
+                or not (self.events or self.actions or test) or self.capture_callback is not None:
             return
         try:
             repeats = max(1, int(self.repeat_var.get()))
         except (tk.TclError, ValueError):
             repeats = 1
         loop = self.loop_var.get()
+        if test:
+            repeats, loop = 1, False
         speed = self._check_speed()
         if speed is None:
             return
@@ -2027,7 +2045,10 @@ class MacroRecorder:
         if play_on is None or not self._read_made_for():
             return
         # move mouse positions from the size the macro was made for to the size it's played on
-        events = self._events_for_play(play_on)  # (the macro's steps, fitted to this screen)
+        if test:
+            events, self.fit_note = self._fit_steps(test["steps"], test.get("screen"), test.get("program"), play_on)
+        else:
+            events = self._events_for_play(play_on)  # (the macro's steps, fitted to this screen)
         try:
             # "Play another macro" steps: those macros are read now, so a missing file shows at once
             own = (self._macro_key(self.current_file),) if self.current_file else ()
@@ -2036,13 +2057,14 @@ class MacroRecorder:
             messagebox.showerror("Macro Recorder", f"Couldn't use a \"Play another macro\" step:\n{exc}")
             return
         try:
-            self.wait_matchers = self._make_wait_matchers(events)
+            # (2.11: a watch-only test never looks for pictures)
+            self.wait_matchers = {} if test and test["mode"] == "ghost" else self._make_wait_matchers(events)
         except Exception as exc:
             messagebox.showerror("Macro Recorder", f"Couldn't use a \"Wait for a picture\" step:\n{exc}")
             return
         ready = self._ready_seconds()
         bg = None
-        if self.target_var.get() != SCREEN_TARGET:
+        if self.target_var.get() != SCREEN_TARGET and not (test and test["mode"] == "ghost"):
             hwnd = self._selected_hwnd()
             if not hwnd or not background.is_usable(hwnd):
                 messagebox.showerror("Macro Recorder", "That window is gone. Pick it again in \"Play into\".")
@@ -2055,7 +2077,7 @@ class MacroRecorder:
             bg = background.BackgroundPlayer(hwnd)
         self._save_settings()
         watch = None
-        if image_watch is not None and self.watch_var.get() and self._active_watch_pictures():
+        if image_watch is not None and self.watch_var.get() and self._active_watch_pictures() and not test:
             # (with no picture on for this macro, it plays without watching: the status line says so)
             try:
                 watch = {
@@ -2074,7 +2096,9 @@ class MacroRecorder:
         # "If the game closes": its rejoin macro is read now, so a missing file shows at once
         self.closed_steps = None
         closed = self._closed_settings()
-        if closed["action"] == "reopen" and closed["macro"] and not self._find_macro_file(closed["macro"]):
+        if test:
+            pass  # (a test never gets the game back: it stops instead)
+        elif closed["action"] == "reopen" and closed["macro"] and not self._find_macro_file(closed["macro"]):
             diag.info("The rejoin macro of \"If the game closes\" isn't there any more: only the game is opened")
         elif closed["action"] == "reopen" and closed["macro"]:
             try:
@@ -2084,16 +2108,18 @@ class MacroRecorder:
                 messagebox.showerror("Macro Recorder", "Couldn't use the rejoin macro of \"If the game "
                                      "closes\" (Settings > Playback):\n" + str(exc))
                 return
-        self.result_matchers = self._build_result_matchers()
+        self.result_matchers = [] if test else self._build_result_matchers()
         alltime = self.settings.get("stats_all") if isinstance(self.settings.get("stats_all"), dict) else {}
-        self.session = stats.Session(self._macro_name(), fragments_before=int(alltime.get("fragments", 0)))
+        if not test or getattr(self, "session", None) is None:  # (a test keeps the last real session on show)
+            self.session = stats.Session(self._macro_name(), fragments_before=int(alltime.get("fragments", 0)))
         if watch is not None:
             watch["limit_count"] = int_setting(self.settings, "watch_limit_count", 10, 0, 1000)
             watch["limit_seconds"] = int_setting(self.settings, "watch_limit_seconds", 60, 1, 3600)
             watch["shift_lock"] = bool(self.settings.get("watch_shift_lock", True))
-        self.auto_stop = self._prepare_auto_stop()
+        self.auto_stop = None if test else self._prepare_auto_stop()
         self.auto_stopped = None
         self.play_vary = self._vary_now()
+        self._start_counters(events)
         self.stop_play.clear()
         self.stop_reason = None
         self.away_started = None
@@ -2101,7 +2127,10 @@ class MacroRecorder:
         self.playing = True
         self.countdown_left = ready
         self.play_note = ""
-        if image_watch is not None and self.watch_var.get():
+        self.ghost = bool(test and test["mode"] == "ghost")
+        if test:
+            self.play_note = ("Watch only: nothing is pressed" if self.ghost else "Test play: not counted")
+        elif image_watch is not None and self.watch_var.get():
             n = len(watch["matchers"]) if watch else 0
             self.play_note = (f"Watching {n} picture{'s' if n != 1 else ''}" if n
                               else "Picture watch: no picture is on for this macro")
@@ -2398,7 +2427,7 @@ class MacroRecorder:
     def _free_shift_lock(self):
         """If the game hides the pointer (Roblox's Shift Lock is on), press Shift once to get the
         pointer back, so a click can land on a button. Returns True if the pointer is visible now."""
-        if window_tools.cursor_hidden() is not True:
+        if getattr(self, "ghost", False) or window_tools.cursor_hidden() is not True:
             return True
         try:
             self.kb_ctrl.press(keyboard.Key.shift_l)
@@ -2413,6 +2442,8 @@ class MacroRecorder:
 
     def _click_at(self, x, y):
         """Left-click a spot like a person would: move there, nudge so the game sees the mouse, click."""
+        if getattr(self, "ghost", False):
+            return self._ghost_event({"type": "click", "x": x, "y": y, "button": "left", "pressed": True})
         move_to(self.mouse_ctrl, x, y)
         time.sleep(0.05)
         move_relative(self.mouse_ctrl, 1, 0)
@@ -2425,6 +2456,10 @@ class MacroRecorder:
 
     def _release_held(self, bg, held_keys, held_buttons):
         """Let go of every key and mouse button the macro is holding down."""
+        if getattr(self, "ghost", False):  # (watch only held nothing down)
+            held_keys.clear()
+            held_buttons.clear()
+            return
         if bg is not None:
             try:
                 bg.release_all(held_keys)
@@ -2607,8 +2642,9 @@ class MacroRecorder:
                     return
             self._set_countdown(0)
             self.play_game_exe = self._game_exe_now()
-            closed = self._closed_watcher(bg)
-            away = self._away_watcher(bg, closed) or closed
+            test = getattr(self, "test_play", None)
+            closed = None if test else self._closed_watcher(bg)
+            away = None if getattr(self, "ghost", False) else (self._away_watcher(bg, closed) or closed)
             if self.result_matchers:
                 self.result_state = {}
                 threading.Thread(target=self._result_worker, args=(self.result_matchers, watch_done),
@@ -2652,7 +2688,7 @@ class MacroRecorder:
         held_keys, held_buttons = ctx["held"]
         bg = ctx["bg"]
         # a macro that plays other macros doesn't count as a run itself: its parts do
-        counts = counts and not self._has_counted_macro(steps)
+        counts = counts and not self._has_counted_macro(steps) and not getattr(self, "test_play", None)
         done = 0
         while not self.stop_play.is_set() and (times is None or done < times):
             if top and (times is None or times > 1 or watch):
@@ -2968,6 +3004,9 @@ class MacroRecorder:
             self.recover_left = None
         return not self.stop_play.is_set()
 
+    def _ghost_event(self, ev):
+        """Watch only (2.11): what would have been pressed (the dark window shows it). Sends nothing."""
+
     def _recovery_tick(self, kind, seconds_left):
         """Each second of the countdown before rejoining (the dark window plays a sound)."""
 
@@ -3243,6 +3282,8 @@ class MacroRecorder:
             return self._pause(seconds, ctx)
         if kind == "note":
             return "ok"
+        if kind in workflow.COUNTER_KINDS:
+            return self._counter_step(a, ctx)
         if kind == "macro":  # a "Play another macro" step: that macro's steps, a number of times
             self.chain_step = a.get("name")
             part = (self.settings.get("profiles") or {}).get(a.get("profile")) if a.get("profile") else None
@@ -3415,6 +3456,12 @@ class MacroRecorder:
     def _condition_true(self, condition, wait=0.0):
         """Whether an If / Retry condition holds now ("shows": the picture is on screen, or isn't).
         wait: look again for up to that many seconds before saying it doesn't."""
+        if getattr(self, "ghost", False):  # watch only: no look, the way chosen for the test
+            found = self.test_play.get("found", True)
+            label = condition.get("name") or "the picture"
+            self._set_note(f"Watch only: {label} counts as {'found' if found else 'not found'}")
+            self.stop_play.wait(0.6)
+            return found if condition.get("shows", True) else not found
         matcher = self.wait_matchers.get(id(condition))
         if matcher is None:
             return not condition.get("shows", True)
@@ -3817,6 +3864,15 @@ class MacroRecorder:
     def _wait_for_picture(self, ev, bg, held_keys, held_buttons, away):
         """A step that waits until a picture shows on screen (up to its time limit), then maybe clicks
         it. Returns "stop" when the macro should stop, else "go on"."""
+        if getattr(self, "ghost", False):  # watch only: no look, the way chosen for the test
+            found = self.test_play.get("found", True)
+            self._set_note(f"Watch only: {ev.get('name') or 'the picture'} counts as {'found' if found else 'not found'}")
+            if self.stop_play.wait(0.8):
+                return "stop"
+            if not found and ev.get("otherwise") == "stop":
+                self.stop_reason = None
+                return "stop"
+            return "go on"
         matcher = self.wait_matchers.get(id(ev))
         if matcher is None:
             return "go on"
@@ -3873,6 +3929,8 @@ class MacroRecorder:
         return "go on"
 
     def _replay_event(self, ev, held_keys, held_buttons):
+        if getattr(self, "ghost", False):
+            return self._ghost_event(ev)  # (2.11: watch only, nothing is pressed)
         kind = ev["type"]
         if kind == "wait_picture":
             return
@@ -3880,6 +3938,10 @@ class MacroRecorder:
             move_to(self.mouse_ctrl, ev["x"], ev["y"])
         elif kind == "move_rel":
             move_relative(self.mouse_ctrl, ev["dx"], ev["dy"], held_buttons)
+            if "x" in ev and "y" in ev:
+                # the game turned by the move above; the pointer goes on the exact recorded spot (the
+                # game doesn't see this as movement, so the camera isn't turned twice)
+                self.mouse_ctrl.position = (ev["x"], ev["y"])
         elif kind == "click":
             button = button_from_name(ev["button"])
             if "x" in ev and self.mouse_ctrl.position != (ev["x"], ev["y"]):
@@ -3934,7 +3996,50 @@ class MacroRecorder:
         now = self.away_started if self.away_started is not None else time.perf_counter()
         return now - self.away_total
 
+    # ------------------------------------------------------------ (2.11) counters
+
+    COUNTER_MAX = 10 ** 9
+
+    def _counters_key(self):
+        return os.path.splitext(os.path.basename(self.current_file or ""))[0].lower() or "_"
+
+    def _start_counters(self, steps):
+        """Every counter starts at 0 on Play, except the ones a step says to keep (their last value is
+        kept in this PC's settings, never in the macro file)."""
+        self.counters = {}
+        self.kept_counter_names = workflow.kept_counters(steps)
+        saved = self.settings.get("counter_values")
+        saved = saved.get(self._counters_key()) if isinstance(saved, dict) else None
+        for name in self.kept_counter_names:
+            value = saved.get(name) if isinstance(saved, dict) else None
+            self.counters[name] = workflow.clean_whole(value, 0) if value is not None else 0
+
+    def _counter_step(self, a, ctx):
+        kind = a.get("kind")
+        name = workflow.clean_counter_name(a.get("counter"))
+        counters = self.__dict__.setdefault("counters", {})
+        now = counters.get(name, 0)
+        if kind == "counter_add":
+            counters[name] = max(-self.COUNTER_MAX, min(self.COUNTER_MAX, now + workflow.clean_whole(a.get("amount"), 1)))
+        elif kind == "counter_set":
+            counters[name] = workflow.clean_whole(a.get("value"), 0)
+        elif now >= workflow.clean_whole(a.get("at_least"), 1):  # "if_counter"
+            return self._run_steps(a.get("actions", []), ctx)
+        return "ok"
+
+    def _save_kept_counters(self):
+        names = getattr(self, "kept_counter_names", None)
+        if not names:
+            return
+        store = self.settings.get("counter_values")
+        if not isinstance(store, dict):
+            store = self.settings["counter_values"] = {}
+        store[self._counters_key()] = {n: self.counters.get(n, 0) for n in sorted(names)}
+        save_settings(self.settings)
+
     def _playback_done(self):
+        if not getattr(self, "test_play", None):
+            self._save_kept_counters()
         self.playing = False
         self.countdown_left = 0
         self.play_note = ""

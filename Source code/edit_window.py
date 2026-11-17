@@ -192,14 +192,215 @@ class EditWindowMixin:
                     ("step",) if ev.get("type") == "wait_picture" else ())
                 tree.insert("", "end", iid=str(i), values=(f"{ev['t']:.2f} s", action, detail), tags=tags)
             length = events[-1]["t"] if events else 0
-            summary.set(f"{len(events)} actions, {length:.1f} s. Select rows (Ctrl/Shift for more) to remove them.")
+            summary.set(f"{len(events)} actions, {length:.1f} s. Choose rows to change them.")
 
-        def remove_selected():
-            picked = {int(i) for i in tree.selection()}
-            if not picked:
+        # (2.11) Undo / Redo: a copy of the list before each change
+        undo_stack, redo_stack = [], []
+        note = tk.StringVar()
+
+        def snap():
+            undo_stack.append([dict(ev) for ev in events])
+            del undo_stack[:-100]
+            redo_stack.clear()
+            show_undo()
+
+        def jump(src, dst):
+            if not src:
                 return
-            events[:] = [ev for i, ev in enumerate(events) if i not in picked]
-            fill(min(picked))
+            dst.append([dict(ev) for ev in events])
+            events[:] = src.pop()
+            fill()
+            show_undo()
+
+        def show_undo():
+            if "undo_btn" in buttons:
+                buttons["undo_btn"].config(state="normal" if undo_stack else "disabled")
+                buttons["redo_btn"].config(state="normal" if redo_stack else "disabled")
+
+        def chosen():
+            return sorted(int(i) for i in tree.selection())
+
+        def with_partners(rows):
+            """The chosen rows, plus the let-go of a chosen press (and the press of a chosen let-go),
+            so a key or mouse button is never left held down. Returns (rows, names of what was added)."""
+            rows = set(rows)
+            added = []
+
+            def same(a, b):
+                if a.get("type") != b.get("type"):
+                    return False
+                return a.get("key") == b.get("key") if a.get("type") == "key" else a.get("button") == b.get("button")
+            for i in sorted(rows):
+                ev = events[i]
+                if ev.get("type") not in ("key", "click"):
+                    continue
+                if ev.get("pressed"):
+                    k = next((j for j in range(i + 1, len(events)) if same(events[j], ev)
+                              and not events[j].get("pressed")), None)
+                else:
+                    k = next((j for j in range(i - 1, -1, -1) if same(events[j], ev) and events[j].get("pressed")),
+                             None)
+                if k is not None and k not in rows:
+                    rows.add(k)
+                    added.append(describe(events[k])[1] or describe(events[k])[0])
+            return sorted(rows), added
+
+        def tell(added):
+            note.set((", ".join(added[:3]) + ("…" if len(added) > 3 else "") + ": the matching press or let-go "
+                      "was taken along too, so nothing stays held down.") if added else "")
+
+        def take(rows):
+            """Copies of these rows, timed from 0, and how long they last."""
+            first = events[rows[0]]["t"]
+            block = [dict(events[i], t=round(events[i]["t"] - first, 4)) for i in rows]
+            return block, block[-1]["t"] + 0.03
+
+        def remove_selected(ask=True):
+            rows, added = with_partners(chosen())
+            if not rows:
+                return
+            if ask and len(rows) > 5 and not self.boxes.askyesno(
+                    "Remove actions", f"Remove these {len(rows)} actions?\n\nUndo puts them back.", parent=win):
+                return
+            snap()
+            gone = set(rows)
+            events[:] = [ev for i, ev in enumerate(events) if i not in gone]
+            fill(min(rows))
+            tell(added)
+
+        def copy_rows():
+            rows, added = with_partners(chosen())
+            if rows:
+                self.events_clipboard = take(rows)
+                tell(added)
+
+        def cut_rows():
+            if chosen():
+                copy_rows()
+                remove_selected(ask=False)
+
+        def paste_rows():
+            clip = getattr(self, "events_clipboard", None)
+            if not clip:
+                return
+            snap()
+            insert_block([dict(ev) for ev in clip[0]], clip[1], "after" if chosen() else "end", snapped=True)
+
+        def duplicate_rows():
+            rows, added = with_partners(chosen())
+            if not rows:
+                return
+            block, length = take(rows)
+            snap()
+            tree.selection_set([str(i) for i in rows])
+            insert_block(block, length, "after", snapped=True)
+            tell(added)
+
+        def move_rows(rows, target, where):
+            """Move rows before / after another row: they keep their own timing, the gap they leave
+            closes, and what comes after their new place moves later by their length."""
+            rows, added = with_partners(rows)
+            if not rows or target in rows:
+                return
+            snap()
+            gone = set(rows)
+            block, length = take(rows)
+            last = events[rows[-1]]["t"]
+            target_ev = events[target]
+            rest = [ev for i, ev in enumerate(events) if i not in gone]
+            for ev in rest:  # (the gap closes)
+                if ev["t"] > last:
+                    ev["t"] = round(max(0.0, ev["t"] - length), 4)
+            pos = next(k for k, ev in enumerate(rest) if ev is target_ev)
+            if where == "after":
+                pos += 1
+                start = target_ev["t"] + 0.03
+            else:
+                start = target_ev["t"]
+            for ev in rest[pos:]:
+                ev["t"] = round(ev["t"] + length + (0.03 if where == "after" else 0.0), 4)
+            for ev in block:
+                ev["t"] = round(start + ev["t"], 4)
+            events[:] = rest[:pos] + block + rest[pos:]
+            fill(0)
+            new = [str(pos + k) for k in range(len(block))]
+            tree.selection_set(new)
+            tree.see(new[0])
+            tell(added)
+
+        # (2.11) preview the chosen rows: play them as a test, show them without pressing, Show my clicks
+        def chosen_rows_step():
+            """A recorded step with copies of the chosen rows (and the matching press / let-go), timed
+            from the first one; the time between rows that are far apart is skipped."""
+            rows, added = with_partners(chosen())
+            if not rows:
+                messagebox.showinfo("Macro Recorder", "Choose the rows to preview first.", parent=win)
+                return None, []
+            out, t, prev = [], 0.0, None
+            for i in rows:
+                if prev is not None:
+                    t += events[i]["t"] - events[prev]["t"] if i == prev + 1 else 0.05
+                out.append(dict(events[i], t=round(t, 4)))
+                prev = i
+            step = workflow.new_action("recorded")
+            step["events"] = out
+            return step, added
+
+        def fit_of():
+            ed = getattr(self, "macro_editor", None)
+            if ed is not None and ed.win.winfo_exists():
+                return ed._macro_fit()
+            return self.macro_screen, self.macro_program
+
+        def preview(mode):
+            step, added = chosen_rows_step()
+            if step is None:
+                return
+            tell(added)
+            if mode == "clicks":
+                ed = getattr(self, "macro_editor", None)
+                if ed is None or not ed.win.winfo_exists():
+                    return
+                import clicks_view
+
+                return clicks_view.open_clicks(ed, steps=[step], owner=win)
+            screen, program = fit_of()
+            ed = getattr(self, "macro_editor", None)
+            found = not (ed is not None and getattr(ed, "ghost_not_found", None) is not None
+                         and ed.ghost_not_found.get())
+            self.test_restore = [w for w in (parent, win) if w.winfo_exists()]
+            for w in self.test_restore:
+                w.withdraw()
+            if not self.play_test([step], mode, screen, program, found=found):
+                for w in self.test_restore:
+                    w.deiconify()
+                self.test_restore = []
+            return True
+
+        def preview_menu(x, y):
+            m = tk.Menu(win, tearoff=False, bg=PANEL, fg=TEXT, activebackground=ACCENT, activeforeground="white",
+                        bd=0, font=F_BASE)
+            ok = "normal" if chosen() and not self.playing and not self.recording else "disabled"
+            m.add_command(label="Play the chosen rows (test)", command=lambda: preview("test"), state=ok)
+            m.add_command(label="Show without playing (nothing is pressed)", command=lambda: preview("ghost"),
+                          state=ok)
+            m.add_command(label="Show my clicks…", command=lambda: preview("clicks"), state=ok)
+            m.tk_popup(x, y)
+
+        def right_click(e):
+            iid = tree.identify_row(e.y)
+            if iid and iid not in tree.selection():
+                tree.selection_set(iid)
+            preview_menu(e.x_root, e.y_root)
+
+        def move_by(d):
+            rows = chosen()
+            if not rows:
+                return
+            if d < 0 and rows[0] > 0:
+                move_rows(rows, rows[0] - 1, "before")
+            elif d > 0 and rows[-1] + 1 < len(events):
+                move_rows(rows, rows[-1] + 1, "after")
 
         def remove_moves():
             n = sum(1 for ev in events if ev.get("type") == "move")
@@ -208,6 +409,7 @@ class EditWindowMixin:
                 return
             if messagebox.askyesno("Macro Recorder", f"Remove all {n} mouse moves? Clicks keep their position, "
                                    "and camera turns are kept.", parent=win):
+                snap()
                 events[:] = [ev for ev in events if ev.get("type") != "move"]
                 fill()
 
@@ -215,6 +417,7 @@ class EditWindowMixin:
             if not events or events[0]["t"] <= 0:
                 return
             gap = events[0]["t"]
+            snap()
             for ev in events:
                 ev["t"] = round(ev["t"] - gap, 4)
             fill()
@@ -242,6 +445,7 @@ class EditWindowMixin:
             secs = ask_seconds("Add a wait", "Wait how many seconds before the selected action?", 1.0)
             if not secs:
                 return
+            snap()
             for ev in events[i:]:
                 ev["t"] = round(ev["t"] + secs, 4)
             show_row(i)
@@ -259,6 +463,7 @@ class EditWindowMixin:
             if secs is None:
                 return
             shift = secs - gap
+            snap()
             for ev in events[i:]:
                 ev["t"] = round(max(0.0, ev["t"] + shift), 4)
             show_row(i)
@@ -270,6 +475,7 @@ class EditWindowMixin:
             self._picture_step_dialog(win, lambda step: insert_step(i, step))
 
         def insert_step(i, step):
+            snap()
             step["t"] = events[i]["t"] if i < len(events) else (events[-1]["t"] if events else 0.0)
             events.insert(i, step)
             show_row(i)
@@ -279,6 +485,7 @@ class EditWindowMixin:
             if i is None or events[i].get("type") != "wait_picture":
                 return
             def replace(step):
+                snap()
                 step["t"] = events[i]["t"]
                 events[i] = step
                 show_row(i)
@@ -290,11 +497,13 @@ class EditWindowMixin:
                 choices += [("After the selected row", "after"), ("Before the selected row", "before")]
             return choices + [("At the end", "end"), ("At the start", "start")]
 
-        def insert_block(block, length, where):
+        def insert_block(block, length, where, snapped=False):
             """Put timed events (their "t" counted from 0, lasting `length` s) in the list; the
             events after them move later by that much."""
             if not block:
                 return
+            if not snapped:
+                snap()
             i = selected_index()
             if where == "start" or not events:
                 pos, start, shift = 0, (events[0]["t"] if events else 0.0), length
@@ -356,6 +565,9 @@ class EditWindowMixin:
                 win.lift()
                 if not recorded or not win.winfo_exists():
                     return
+                ed = getattr(self, "macro_editor", None)
+                if ed is not None and ed.win.winfo_exists():
+                    recorded = ed.to_macro_size(recorded)  # (2.11: the macro's own size)
                 first = recorded[0]["t"]
                 block = [dict(ev, t=round(ev["t"] - first, 4)) for ev in recorded]
                 insert_block(block, block[-1]["t"] + 0.05, where)
@@ -372,11 +584,25 @@ class EditWindowMixin:
             win.destroy()
             on_done(events)
 
+        buttons = {}
         tools0 = tk.Frame(win, bg=BG)
         tools0.pack(fill="x", padx=14, pady=(8, 0))
         add_btn = ttk.Button(tools0, text="Add action ▾", style="Accent.TButton", command=add_menu)
         add_btn.pack(side="left")
         ttk.Button(tools0, text="Record here…", command=record_here).pack(side="left", padx=6)
+        preview_btn = ttk.Button(tools0, text="Preview ▾", command=lambda: preview_menu(
+            preview_btn.winfo_rootx(), preview_btn.winfo_rooty() + preview_btn.winfo_height()))
+        preview_btn.pack(side="left")
+        buttons["redo_btn"] = ttk.Button(tools0, text="Redo", width=7, command=lambda: jump(redo_stack, undo_stack))
+        buttons["redo_btn"].pack(side="right")
+        buttons["undo_btn"] = ttk.Button(tools0, text="Undo", width=7, command=lambda: jump(undo_stack, redo_stack))
+        buttons["undo_btn"].pack(side="right", padx=6)
+        show_undo()
+        tools_many = tk.Frame(win, bg=BG)
+        tools_many.pack(fill="x", padx=14, pady=(6, 0))
+        for text, fn in (("Duplicate", duplicate_rows), ("Copy", copy_rows), ("Cut", cut_rows),
+                         ("Paste", paste_rows), ("▲ Up", lambda: move_by(-1)), ("▼ Down", lambda: move_by(1))):
+            ttk.Button(tools_many, text=text, width=len(text) + 3, command=fn).pack(side="left", padx=(0, 6))
         tools = tk.Frame(win, bg=BG)
         tools.pack(fill="x", padx=14, pady=(6, 0))
         ttk.Button(tools, text="Remove selected", command=remove_selected).pack(side="left")
@@ -390,11 +616,21 @@ class EditWindowMixin:
         b.pack(side="left")
         if image_watch is None:
             b.config(state="disabled")
-        tk.Label(win, text="Added actions and recordings go where you choose; waits and pictures go before "
-                           "the selected row. Double-click a \"Wait for a picture\" step to change it.",
+        tk.Label(win, text="Choose many with Ctrl+click, Shift+click or by dragging over rows; drag chosen rows "
+                           "to move them, right-click (or Preview) to try them. Added actions and recordings go where you choose; waits and pictures go "
+                           "before the selected row. Double-click a \"Wait for a picture\" step to change it.",
                  bg=BG, fg=DIM, font=F_SMALL, anchor="w", justify="left", wraplength=560).pack(
             fill="x", padx=14, pady=(6, 0))
+        tk.Label(win, textvariable=note, bg=BG, fg=AMBER, font=F_SMALL, anchor="w", justify="left",
+                 wraplength=560).pack(fill="x", padx=14)
         tree.bind("<Delete>", lambda e: remove_selected())
+        tree.bind("<Button-3>", right_click)
+        TreeDrag(tree, lambda ids, target, where: move_rows([int(i) for i in ids], int(target), where))
+        for seq, fn in (("<Control-z>", lambda: jump(undo_stack, redo_stack)),
+                        ("<Control-y>", lambda: jump(redo_stack, undo_stack)), ("<Control-c>", copy_rows),
+                        ("<Control-x>", cut_rows), ("<Control-v>", paste_rows), ("<Control-d>", duplicate_rows),
+                        ("<Alt-Up>", lambda: move_by(-1)), ("<Alt-Down>", lambda: move_by(1))):
+            win.bind(seq, lambda e, fn=fn: (fn(), "break")[1])
         tree.bind("<Double-1>", edit_step)
 
         bottom = tk.Frame(win, bg=BG)
@@ -403,6 +639,11 @@ class EditWindowMixin:
         ttk.Button(bottom, text="Cancel", command=win.destroy).pack(side="right", padx=6)
         fill()
         win.tree, win.add_action, win.record_here, win.apply = tree, add_action, record_here, apply  # (for tests)
+        win.ops = {"remove": remove_selected, "copy": copy_rows, "cut": cut_rows, "paste": paste_rows,
+                   "duplicate": duplicate_rows, "move": move_rows, "move_by": move_by,
+                   "undo": lambda: jump(undo_stack, redo_stack), "redo": lambda: jump(redo_stack, undo_stack),
+                   "preview": preview, "rows_step": chosen_rows_step,
+                   "note": note}
         return win
 
     def _picture_step_dialog(self, parent, on_done, step=None):

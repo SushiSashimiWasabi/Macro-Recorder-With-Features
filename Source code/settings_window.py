@@ -509,7 +509,7 @@ class SettingsWindowMixin:
     # settings the Settings window's pages change (the ones Undo and Reset put back). The pictures and
     # options of Picture watch have their own Undo / Reset / Apply in the Picture watch window (2.9)
     PAGE_SETTINGS = ("hotkeys", "status_bar", "always_on_top", "record_mouse_moves", "mouse_detail",
-                     "ready_seconds", "record_ready_seconds", "play_overlay", "play_resolution", "video_click_through",
+                     "ready_seconds", "record_ready_seconds", "record_ask_window", "play_overlay", "play_resolution", "video_click_through",
                      "video_opacity", "watch_enabled", "sounds", "sound_volume", "sound_choices",
                      "check_updates", "background_animate", "settings_background_per_page",
                      "app_icon_file", "app_logo_file", "app_logo_same", "record_camera", "pause_when_away",
@@ -658,7 +658,8 @@ class SettingsWindowMixin:
                 (self.rec_moves_var, bool(s.get("record_mouse_moves", True))),
                 (self.detail_var, detail if detail in MOUSE_DETAIL else "Smooth"),
                 (self.ready_var, core.int_setting(s, "ready_seconds", 3, 0, 600)),
-                (self.rec_ready_var, core.int_setting(s, "record_ready_seconds", 3, 0, 600)),
+                (self.rec_ready_var, core.int_setting(s, "record_ready_seconds", 5, 0, 600)),
+                (self.rec_ask_window_var, s.get("record_ask_window", True) is not False),
                 (self.overlay_var, bool(s.get("play_overlay", True))),
                 (self.video_through_var, through if through in VIDEO_THROUGH else VIDEO_THROUGH[0]),
                 (self.video_opacity_var, core.int_setting(s, "video_opacity", 100, 20, 100)),

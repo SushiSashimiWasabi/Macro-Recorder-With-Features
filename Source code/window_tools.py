@@ -126,6 +126,39 @@ def program_info(hwnd):
     return info
 
 
+def app_windows():
+    """(2.11) The windows a person would switch to: visible, with a title, not a tool window or hidden
+    by Windows (cloaked), minimized ones too. [(hwnd, title, program file name)], in Alt+Tab order."""
+    if not IS_WIN:
+        return []
+    found = []
+    try:
+        dwm = ctypes.windll.dwmapi
+    except Exception:
+        dwm = None
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def callback(hwnd, _):
+        try:
+            title = title_of(hwnd)
+            if not user32.IsWindowVisible(hwnd) or not title or title == "Program Manager":
+                return True
+            if user32.GetWindowLongW(hwnd, -20) & 0x80:  # (WS_EX_TOOLWINDOW)
+                return True
+            if dwm is not None:
+                cloaked = wintypes.DWORD()
+                if dwm.DwmGetWindowAttribute(hwnd, 14, ctypes.byref(cloaked), ctypes.sizeof(cloaked)) == 0 \
+                        and cloaked.value:
+                    return True
+            found.append((hwnd, title, exe_of(hwnd) or ""))
+        except Exception:
+            pass
+        return True
+
+    user32.EnumWindows(callback, 0)
+    return found
+
+
 def windows_of(exe):
     """Visible top-level windows of a program (by its file name), biggest first."""
     if not IS_WIN or not exe:

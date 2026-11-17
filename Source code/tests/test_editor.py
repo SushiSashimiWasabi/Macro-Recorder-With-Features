@@ -38,6 +38,7 @@ for name in ("showwarning", "showinfo", "showerror"):
 app.boxes.askyesno = lambda *a, **k: True
 app.boxes.askyesnocancel = lambda *a, **k: False
 app.rec_ready_var.set(0)  # (recording starts at once; the countdown is tested at the end)
+app.rec_ask_window_var.set(False)  # (2.11: no "Record in which window?" box in tests)
 app._save_settings()
 
 

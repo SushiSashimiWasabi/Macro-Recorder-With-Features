@@ -16,7 +16,7 @@ another, waits included), so older versions of the app can still play the record
 import copy
 import uuid
 
-GROUPS = ("if", "repeat", "retry")
+GROUPS = ("if", "repeat", "retry", "if_counter")
 
 # what "Add action" offers: kind, name, a few words
 ADDABLE = [
@@ -30,6 +30,9 @@ ADDABLE = [
     ("if", "If…", "steps that only run when a picture shows (or doesn't)"),
     ("repeat", "Repeat…", "steps that run a number of times"),
     ("retry", "Retry…", "steps that run again until a picture shows"),
+    ("counter_add", "Add to a counter", "count something: +1 (or any whole number)"),
+    ("counter_set", "Set a counter", "put a counter on a number (0 to start again)"),
+    ("if_counter", "If a counter reaches…", "steps that only run when a counter is at least a number"),
     ("restart", "Start over", "start the macro again from step 1"),
     ("stop", "Stop", "end the macro here"),
     ("play_macro", "Play another macro", "a saved macro plays here, as often as you say (chains)"),
@@ -61,6 +64,9 @@ def new_action(kind):
         "retry": {"condition": {"shows": True, "png": None, "screen_h": None, "match": 85}, "tries": 3,
                   "actions": []},
         "note": {"text": ""},
+        "counter_add": {"counter": "Counter", "amount": 1, "keep": False},
+        "counter_set": {"counter": "Counter", "value": 0, "keep": False},
+        "if_counter": {"counter": "Counter", "at_least": 1, "actions": []},
         "play_macro": {"file": "", "times": 1, "counts": True, "on_fail": ""},
         "recorded": {"events": []},
     }
@@ -213,6 +219,14 @@ def describe(a):
     if kind == "retry":
         return "Retry", (f"until {condition_text(a.get('condition', {}))}, at most {int(a.get('tries', 3))} "
                          f"tries  ({len(a.get('actions', []))} steps)")
+    if kind == "counter_add":
+        n = int(a.get("amount", 1))
+        return name, f"{a.get('counter', 'Counter')} {'+' if n >= 0 else '-'}{abs(n)}"
+    if kind == "counter_set":
+        return name, f"{a.get('counter', 'Counter')} = {int(a.get('value', 0))}"
+    if kind == "if_counter":
+        return "If", (f"{a.get('counter', 'Counter')} is {int(a.get('at_least', 1))} or more  "
+                      f"({len(a.get('actions', []))} steps)")
     if kind == "restart":
         return name, "from step 1"
     if kind == "stop":
@@ -244,3 +258,82 @@ def key_text(key):
     except Exception:
         pass
     return (key.get("char") or "?").upper()
+
+
+# ---------------------------------------------------------------- (2.11) counters
+
+COUNTER_KINDS = ("counter_add", "counter_set", "if_counter")
+COUNTER_NAME_LETTERS = 30
+COUNTER_LIMIT = 1000000
+
+
+def clean_counter_name(text):
+    """A counter's name: no control or invisible characters, at most COUNTER_NAME_LETTERS letters."""
+    import unicodedata
+
+    text = "".join(c for c in str(text or "") if unicodedata.category(c)[0] != "C")
+    return " ".join(text.split())[:COUNTER_NAME_LETTERS].strip() or "Counter"
+
+
+def clean_whole(value, default=0):
+    """A whole number within +-COUNTER_LIMIT (anything else: the default)."""
+    try:
+        if isinstance(value, bool):
+            raise ValueError
+        n = float(value)
+        if n != int(n):
+            raise ValueError
+        return max(-COUNTER_LIMIT, min(COUNTER_LIMIT, int(n)))
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
+def clean_counter_step(a):
+    """A counter step read from a file (maybe someone else's): only known fields, sensible values."""
+    kind = a.get("kind")
+    if kind not in COUNTER_KINDS:
+        return a
+    a["counter"] = clean_counter_name(a.get("counter"))
+    if kind == "counter_add":
+        a["amount"] = clean_whole(a.get("amount"), 1)
+        a["keep"] = a.get("keep") is True
+    elif kind == "counter_set":
+        a["value"] = clean_whole(a.get("value"), 0)
+        a["keep"] = a.get("keep") is True
+    else:
+        a["at_least"] = clean_whole(a.get("at_least"), 1)
+    return a
+
+
+def counters(actions):
+    """The names of the counters a macro uses, in the order they first show up."""
+    out = []
+    for a, _l, _i, _p in walk(actions):
+        if a.get("kind") in COUNTER_KINDS:
+            name = clean_counter_name(a.get("counter"))
+            if name not in out:
+                out.append(name)
+    return out
+
+
+def kept_counters(actions):
+    """Counters a step says to keep between plays."""
+    return {clean_counter_name(a.get("counter")) for a, _l, _i, _p in walk(actions)
+            if a.get("kind") in ("counter_add", "counter_set") and a.get("keep") is True and not a.get("off")}
+
+
+def steps_from(actions, action_id):
+    """(2.11) "Play from here": copies of the steps from this one to the end of the macro. Inside a
+    group, the rest of that group plays once, then what comes after the group (and so on outwards)."""
+    found = find(actions, action_id)
+    if not found:
+        return []
+    _a, lst, i, parent = found
+    out = list(lst[i:])
+    while parent is not None:
+        outer = find(actions, parent.get("id"))
+        if not outer:
+            break
+        _g, glist, gi, parent = outer
+        out += glist[gi + 1:]
+    return copy.deepcopy(out)

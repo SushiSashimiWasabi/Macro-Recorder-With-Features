@@ -117,7 +117,7 @@ class MacroEditor:
         left.pack_propagate(False)
         tk.Label(left, text="MACROS", bg=BG, fg=MUTED, font=F_SECTION, anchor="w").pack(fill="x", padx=14,
                                                                                       pady=(12, 6))
-        self.macros = ttk.Treeview(left, show="tree", selectmode="browse")
+        self.macros = ttk.Treeview(left, show="tree", selectmode="extended")
         self.macros.pack(fill="both", expand=True, padx=(14, 6))
         self.macros.bind("<<TreeviewSelect>>", lambda e: self._macro_clicked())
         self.macros.bind("<FocusIn>", lambda e: self._set_focus("macros"))
@@ -139,7 +139,7 @@ class MacroEditor:
         search.pack(fill="x", padx=12, ipady=4)
         self._hint(search, self.search_var, "Search actions")
         self.search_var.trace_add("write", lambda *a: self._fill_steps())
-        self.tree = ttk.Treeview(mid, show="tree", selectmode="browse")
+        self.tree = ttk.Treeview(mid, show="tree", selectmode="extended")
         self.tree.pack(fill="both", expand=True, padx=12, pady=(8, 0))
         self.tree.tag_configure("off", foreground=DIM)
         self.tree.tag_configure("group", foreground=AMBER)
@@ -166,6 +166,11 @@ class MacroEditor:
             win.bind(seq, lambda e, fn=fn: (fn(), "break")[1] if not self._typing(e) else None)
         self.tree.bind("<Delete>", lambda e: self.remove())
         self.macros.bind("<Delete>", lambda e: self.remove())
+        # (2.11) Ctrl+click / Shift+click / drag to choose many; drag chosen ones to move them
+        TreeDrag(self.tree, self._drop_steps, is_group=lambda iid: "group" in self.tree.item(iid, "tags"))
+        TreeDrag(self.macros, self._drop_macros)
+        win.bind("<Control-x>", lambda e: (self.cut(), "break")[1] if not self._typing(e) else None)
+        self.tree.bind("<Button-3>", self._right_click)
         dark_title_bar(win)
 
     def _typing(self, event):
@@ -311,6 +316,9 @@ class MacroEditor:
         sel = self.macros.selection()
         if not sel:
             return
+        if len(sel) > 1:  # (2.11: several chosen: Duplicate / Remove work on all of them)
+            self._set_focus("macros")
+            return
         i = int(sel[0])
         try:
             by_user = self.win.focus_get() is self.macros
@@ -357,7 +365,8 @@ class MacroEditor:
 
     def _fill_steps(self, select=None):
         tree = self.tree
-        keep = select or self._selected_id()
+        keep = list(self.tree.selection()) if select is None else ([select] if isinstance(select, str) else
+                                                                    list(select or []))
         tree.delete(*tree.get_children())
         query = self._search_text()
 
@@ -374,9 +383,10 @@ class MacroEditor:
                 if a.get("kind") in workflow.GROUPS:
                     add(a["id"], a.get("actions", []))
         add("", self.steps)
-        if keep and tree.exists(keep):
+        keep = [k for k in keep if tree.exists(k)]
+        if keep:
             tree.selection_set(keep)
-            tree.see(keep)
+            tree.see(keep[0])
 
     def _selected_id(self):
         sel = self.tree.selection() if hasattr(self, "tree") else ()
@@ -386,12 +396,41 @@ class MacroEditor:
         sid = self._selected_id()
         return workflow.find(self.steps, sid) if sid else None
 
+    def _chosen(self):
+        """(2.11) Every chosen step as (step, its list, index, group), in list order. A step inside a
+        chosen group isn't listed again (it goes along with its group)."""
+        ids = set(self.tree.selection()) if hasattr(self, "tree") else set()
+        out, covered = [], set()
+        for a, lst, i, parent in workflow.walk(self.steps):
+            if parent is not None and parent.get("id") in covered:
+                covered.add(a.get("id"))
+                continue
+            if a.get("id") in ids:
+                out.append((a, lst, i, parent))
+                covered.add(a.get("id"))
+        return out
+
     def _step_clicked(self):
         self.focus = "steps"
         self._show_buttons()
-        found = self._selected()
         self.typing_snapshot = False
+        if len(self.tree.selection()) > 1:
+            self._show_many(len(self._chosen()))
+            return
+        found = self._selected()
         self._show_detail(found[0] if found else None)
+
+    def _show_many(self, n):
+        for child in self.detail.winfo_children():
+            child.destroy()
+        box = tk.Frame(self.detail, bg=BG)
+        box.pack(fill="both", expand=True, padx=22, pady=16)
+        tk.Label(box, text=f"{n} actions chosen", bg=BG, fg=TEXT, font=(FAMILY, 14, "bold"), anchor="w").pack(fill="x")
+        tk.Label(box, text="Duplicate, Remove, Copy (Ctrl+C), Cut (Ctrl+X), Paste (Ctrl+V), Move up / down "
+                           "(Alt+arrows), Turn off / on (Ctrl+E) and Group into work on all of them at once; one "
+                           "Undo puts them back. Drag them to move them.\n\nCtrl+click adds or takes away one, "
+                           "Shift+click chooses everything in between.", bg=BG, fg=MUTED, font=F_BASE, anchor="w",
+                 justify="left", wraplength=440).pack(fill="x", pady=(4, 0))
 
     def _set_focus(self, which):
         self.focus = which
@@ -463,7 +502,7 @@ class MacroEditor:
         self.btn_reset.config(state="normal" if changed else "disabled")
         self.btn_apply.config(state="normal" if changed else "disabled",
                               style="Accent.TButton" if changed else "TButton")
-        chosen = (self.focus == "macros" and self.current is not None) or \
+        chosen = (self.focus == "macros" and (self.current is not None or self.macros.selection())) or \
                  (self.focus == "steps" and self._selected_id() is not None)
         for b in (self.btn_dup, self.btn_remove, self.btn_more):
             if chosen and not b.winfo_ismapped():
@@ -562,6 +601,7 @@ class MacroEditor:
         sections = [("KEYS AND MOUSE", ("key", "type", "click", "move", "scroll")),
                     ("WAITING", ("wait", "wait_picture")),
                     ("GROUPS", ("if", "repeat", "retry")),
+                    ("COUNTERS", ("counter_add", "counter_set", "if_counter")),
                     ("CHAIN (PLAY OTHER MACROS)", ("play_macro",)),
                     ("MACRO", ("restart", "stop", "note")),
                     ("RECORD OR COPY IN", ("record_here", "insert_macro"))]
@@ -635,13 +675,32 @@ class MacroEditor:
             lst.insert(i, a)
         self.change(do, select=a["id"])
 
-    def _ask_where(self, title, text):
-        """At the start / after the chosen action / at the end (None = cancelled)."""
+    def _where_choices(self):
+        """At the start / inside the chosen group (2.11) / after the chosen action / at the end."""
         choices = [("At the start", "start")]
-        if self._selected_id():
+        found = self._selected()
+        if found and found[0].get("kind") in workflow.GROUPS:
+            choices.append(("Inside the chosen group", "inside"))
+        if found:
             choices.append(("After the chosen action", "after"))
-        choices += [("At the end", "end"), ("Cancel", None)]
+        return choices + [("At the end", "end"), ("Cancel", None)]
+
+    def _ask_where(self, title, text):
+        """Where new actions go (None = cancelled)."""
+        choices = self._where_choices()
         return self.app.boxes.askchoice(title, text, choices, default=choices[0][1], parent=self.win)
+
+    def _put(self, new_steps, where, chosen_id):
+        """Put steps where _ask_where said (in the step tree as it is now)."""
+        found = workflow.find(self.steps, chosen_id) if chosen_id else None
+        if where == "start":
+            self.steps[0:0] = new_steps
+        elif where == "inside" and found and found[0].get("kind") in workflow.GROUPS:
+            found[0].setdefault("actions", []).extend(new_steps)
+        elif where == "after" and found:
+            found[1][found[2] + 1:found[2] + 1] = new_steps
+        else:
+            self.steps.extend(new_steps)
 
     def _insert_steps(self, new_steps, where, after_id=None):
         """Put steps in this macro (as one change, so Undo takes them out again)."""
@@ -649,15 +708,7 @@ class MacroEditor:
         if not new_steps:
             return
 
-        def do():
-            if where == "start":
-                self.steps[0:0] = new_steps
-            elif where == "after" and after_id and workflow.find(self.steps, after_id):
-                _a, lst, i, _p = workflow.find(self.steps, after_id)
-                lst[i + 1:i + 1] = new_steps
-            else:
-                self.steps.extend(new_steps)
-        self.change(do, select=new_steps[0]["id"])
+        self.change(lambda: self._put(new_steps, where, after_id), select=new_steps[0]["id"])
 
     def insert_macro(self):
         """Copy another macro's actions into this one (at the start, after the chosen action or at the
@@ -725,17 +776,14 @@ class MacroEditor:
         app = self.app
         if app.recording or app.playing or self.current is None:
             return
-        choices = [("At the start", "start")]
-        if self._selected_id():
-            choices.append(("After the chosen action", "after"))
-        choices += [("At the end", "end"), ("Cancel", None)]
+        choices = self._where_choices()
         where = app.boxes.askchoice(
             "Record keys and mouse", "Where should the new recording go in this macro?\n\nAfter you choose, "
             f"recording starts at once. Press the Record key ({core.hotkey_name(app.hotkeys['record'])}) "
             "again to stop it; this window then comes back.", choices, default=choices[0][1], parent=self.win)
         if where is None:
             return
-        found = self._selected() if where == "after" else None
+        chosen_id = self._selected_id() if where in ("after", "inside") else None
 
         def done(events):
             self.win.deiconify()
@@ -743,20 +791,9 @@ class MacroEditor:
             if not events:
                 return
             step = workflow.new_action("recorded")
-            step["events"] = events
+            step["events"] = self.to_macro_size(events)
 
-            def do():
-                if where == "start":
-                    self.steps.insert(0, step)
-                elif where == "after" and found:
-                    a = workflow.find(self.steps, found[0]["id"])
-                    if a:
-                        a[1].insert(a[2] + 1, step)
-                    else:
-                        self.steps.append(step)
-                else:
-                    self.steps.append(step)
-            self.change(do, select=step["id"])
+            self.change(lambda: self._put([step], where, chosen_id), select=step["id"])
         app.record_into = done
         self.win.withdraw()
         app.toggle_record()
@@ -764,12 +801,17 @@ class MacroEditor:
     def duplicate(self):
         if self.focus == "macros":
             return self._duplicate_macro()
-        found = self._selected()
-        if not found:
+        chosen = self._chosen()
+        if not chosen:
             return
-        a, lst, i, _p = found
-        twin = workflow.ensure_ids([self._fresh_ids(copy.deepcopy(a))])[0]
-        self.change(lambda: lst.insert(i + 1, twin), select=twin["id"])
+        twins = []
+
+        def do():
+            for a, lst, _i, _p in reversed(chosen):
+                twin = workflow.ensure_ids([self._fresh_ids(copy.deepcopy(a))])[0]
+                lst.insert(lst.index(a) + 1, twin)
+                twins.insert(0, twin["id"])
+        self.change(do, select=twins)
 
     @staticmethod
     def _fresh_ids(a):
@@ -778,41 +820,71 @@ class MacroEditor:
             MacroEditor._fresh_ids(sub)
         return a
 
-    def remove(self):
+    REMOVE_ASK_OVER = 5
+
+    def remove(self, ask=True):
         if self.focus == "macros":
             return self._remove_macro()
-        found = self._selected()
-        if not found:
+        chosen = self._chosen()
+        if not chosen:
             return
-        a, lst, i, _p = found
-        nxt = lst[i + 1]["id"] if i + 1 < len(lst) else (lst[i - 1]["id"] if i > 0 else None)
-        self.change(lambda: lst.pop(i), select=nxt)
+        if ask and len(chosen) > self.REMOVE_ASK_OVER and not self.app.boxes.askyesno(
+                "Edit", f"Remove these {len(chosen)} actions?\n\nUndo puts them back.", parent=self.win):
+            return
+        a, lst, i, _p = chosen[-1]
+        gone = {c[0]["id"] for c in chosen}
+        after = [b["id"] for b in lst[i + 1:] if b["id"] not in gone]
+        before = [b["id"] for b in lst[:chosen[0][2]] if b["id"] not in gone] if chosen[0][1] is lst else []
+        nxt = after[0] if after else (before[-1] if before else None)
+
+        def do():
+            for b, blst, _i, _p in reversed(chosen):
+                blst.remove(b)
+        self.change(do, select=nxt)
 
     def move(self, d):
-        found = self._selected()
-        if not found:
+        """Move the chosen actions one place up (d = -1) or down (1), each within its own list."""
+        chosen = self._chosen()
+        if not chosen:
             return
-        a, lst, i, _p = found
-        j = i + d
-        if 0 <= j < len(lst):
-            def do():
-                lst[i], lst[j] = lst[j], lst[i]
-            self.change(do, select=a["id"])
+        ids = [c[0]["id"] for c in chosen]
+
+        def do():
+            lists = []
+            for _a, lst, _i, _p in chosen:
+                if not any(lst is x for x in lists):
+                    lists.append(lst)
+            for lst in lists:
+                picked = [b for b in lst if b["id"] in ids]
+                order = range(len(lst)) if d < 0 else range(len(lst) - 1, -1, -1)
+                for k in order:
+                    j = k + d
+                    if lst[k] in picked and 0 <= j < len(lst) and lst[j] not in picked:
+                        lst[k], lst[j] = lst[j], lst[k]
+        self.change(do, select=ids)
 
     def copy(self):
-        found = self._selected()
-        if found:
-            self.clipboard = copy.deepcopy(found[0])
+        chosen = self._chosen()
+        if chosen:
+            self.clipboard = [copy.deepcopy(c[0]) for c in chosen]
+
+    def cut(self):
+        """(2.11) Copy the chosen actions, then take them out (Undo puts them back)."""
+        if self.focus != "steps" or not self._chosen():
+            return
+        self.copy()
+        self.remove(ask=False)
 
     def paste(self):
         if self.clipboard is None or self.current is None:
             return
-        a = self._fresh_ids(copy.deepcopy(self.clipboard))
+        items = self.clipboard if isinstance(self.clipboard, list) else [self.clipboard]
+        new = [self._fresh_ids(copy.deepcopy(b)) for b in items]
 
         def do():
             lst, i = self._place()
-            lst.insert(i, a)
-        self.change(do, select=a["id"])
+            lst[i:i] = new
+        self.change(do, select=[b["id"] for b in new])
 
     def out_of_group(self):
         found = self._selected()
@@ -844,15 +916,23 @@ class MacroEditor:
         self.change(do, select=a["id"])
 
     def group_into(self, kind):
-        found = self._selected()
-        if not found:
+        chosen = self._chosen()
+        if not chosen:
             return
-        a, lst, i, _p = found
+        lst = chosen[0][1]
+        if any(c[1] is not lst for c in chosen):
+            self.app.boxes.showinfo("Edit", "To group them, choose actions that are in the same list (not some "
+                                    "inside a group and some outside it).", parent=self.win)
+            return
         g = workflow.new_action(kind)
-        g["actions"] = [a]
+        items = [c[0] for c in chosen]
 
         def do():
-            lst[i] = g
+            i = lst.index(items[0])
+            for b in items:
+                lst.remove(b)
+            g["actions"] = items
+            lst.insert(i, g)
         self.change(do, select=g["id"])
 
     def ungroup(self):
@@ -867,17 +947,191 @@ class MacroEditor:
         self.change(do, select=inner[0]["id"] if inner else None)
 
     def toggle_off(self):
-        found = self._selected()
-        if not found:
+        """Turn the chosen actions off (or, when they're all off already, on again)."""
+        chosen = self._chosen()
+        if not chosen:
             return
-        a = found[0]
+        items = [c[0] for c in chosen]
+        turn_on = all(b.get("off") for b in items)
 
         def do():
-            if a.get("off"):
-                a.pop("off", None)
-            else:
-                a["off"] = True
-        self.change(do, select=a["id"])
+            for b in items:
+                if turn_on:
+                    b.pop("off", None)
+                else:
+                    b["off"] = True
+        self.change(do, select=[b["id"] for b in items])
+
+    # ------------------------------------------------------------ (2.11) tests and Show my clicks
+
+    def _right_click(self, e):
+        iid = self.tree.identify_row(e.y)
+        if not iid:
+            return
+        if iid not in self.tree.selection():
+            self.tree.selection_set(iid)
+            self.tree.focus(iid)
+            self._step_clicked()
+        m = self._menu()
+        self._test_items(m)
+        m.add_separator()
+        for label, fn in (("Duplicate", self.duplicate), ("Copy", self.copy), ("Cut", self.cut),
+                          ("Remove", self.remove)):
+            m.add_command(label=label, command=fn)
+        m.tk_popup(e.x_root, e.y_root)
+
+    def _test_items(self, m):
+        ok = "normal" if self._selected_id() and not self.app.playing and not self.app.recording else "disabled"
+        m.add_command(label="Play from here (test)", command=lambda: self.test_play("from"), state=ok)
+        m.add_command(label="Play only this action (test)", command=lambda: self.test_play("only"), state=ok)
+        m.add_command(label="Show without playing (nothing is pressed)", command=lambda: self.test_play("ghost"),
+                      state=ok)
+        if not hasattr(self, "ghost_not_found"):
+            self.ghost_not_found = tk.BooleanVar(value=False)
+        on = self.ghost_not_found.get()
+        m.add_command(label="  Pretend pictures are NOT found: " + ("on" if on else "off"),
+                      image=self._dot(GREEN if on else RED), compound="left",
+                      command=lambda: self.ghost_not_found.set(not self.ghost_not_found.get()))
+        m.add_command(label="  What does that mean?", command=self._ghost_help)
+        m.add_command(label="Show my clicks…", command=self.show_clicks,
+                      state="normal" if self.steps else "disabled")
+
+    def _dot(self, color):
+        """A small round dot picture (green = on, red = off, like Picture watch)."""
+        cache = self.__dict__.setdefault("dots", {})
+        if color not in cache:
+            img = tk.PhotoImage(master=self.win, width=12, height=12)
+            for y in range(12):
+                for x in range(12):
+                    if (x - 5.5) ** 2 + (y - 5.5) ** 2 <= 22:
+                        img.put(color, (x, y))
+            cache[color] = img
+        return cache[color]
+
+    GHOST_HELP = ("\"Show without playing\" doesn't look at the screen, so steps that need a picture (Wait for a "
+                  "picture, If, Retry) need an answer:\n\n"
+                  "OFF (red dot, the usual): every picture counts as FOUND. If-steps run what's inside them, "
+                  "Wait for a picture goes on.\n\n"
+                  "ON (green dot): no picture counts as found. If-steps are skipped, Retry tries again, and Wait "
+                  "for a picture does what you chose for when it doesn't show (go on or stop).\n\n"
+                  "So you can check both ways your macro can go. A real test (Play from here) always looks "
+                  "at the screen.")
+
+    def _ghost_help(self):
+        self.app.boxes.showinfo("Pretend pictures are NOT found", self.GHOST_HELP, parent=self.win)
+
+    def to_macro_size(self, events):
+        """(2.11) A recording made now, moved to the size this macro was made for (its game window, or
+        its screen), so the whole macro matches when it's fitted to the screen it plays on."""
+        app = self.app
+        screen, program = self._macro_fit()
+        here = (app.screen_w, app.screen_h)
+        client = (program or {}).get("client")
+        try:
+            if app.settings.get("fit_to", "window") == "window" and client and len(client) == 4 and client[3] > 0:
+                now = app._game_client_rect(program)
+                if now:
+                    if tuple(now) != tuple(client):
+                        core.diag.info(f"Recording for Edit fitted from the game window {tuple(now)} to the "
+                                       f"macro's {tuple(client)}")
+                        return core.scale_events_rect(events, now, client)
+                    return events
+            if screen and tuple(screen) != here:
+                core.diag.info(f"Recording for Edit fitted from {here[0]}x{here[1]} to the macro's "
+                               f"{screen[0]}x{screen[1]}")
+                return core.scale_events(events, here, screen)
+        except Exception as exc:
+            core.diag.error("Couldn't fit the recording to the macro's size", exc)
+        return events
+
+    def _macro_fit(self):
+        """The screen size and game the edited macro was recorded for (to fit its spots to this screen)."""
+        path = self.entries[self.current][1] if self.current is not None else None
+        if path is None or path == self.app.current_file:
+            return self.app.macro_screen, self.app.macro_program
+        d = self.file_data or {}
+        try:
+            screen = (int(d["screen"]["width"]), int(d["screen"]["height"]))
+        except (KeyError, TypeError, ValueError):
+            screen = None
+        return screen, d.get("program") if isinstance(d.get("program"), dict) else None
+
+    def test_play(self, how):
+        """how: "from" (this action to the end), "only" (just the chosen ones), "ghost" (from here, but
+        nothing is pressed). Plays what Edit shows now, also changes not applied yet. Never counted."""
+        chosen = self._chosen()
+        if not chosen:
+            return False
+        if how == "only":
+            steps = [copy.deepcopy(c[0]) for c in chosen]
+            for b in steps:
+                b.pop("off", None)  # ("only this action": also when it's turned off)
+        else:
+            steps = workflow.steps_from(self.steps, chosen[0][0]["id"])
+        screen, program = self._macro_fit()
+        found = not (hasattr(self, "ghost_not_found") and self.ghost_not_found.get())
+        return self.app.play_test(steps, "ghost" if how == "ghost" else "test", screen, program, found=found)
+
+    def show_clicks(self):
+        import clicks_view
+
+        return clicks_view.open_clicks(self)
+
+    def _drop_steps(self, ids, target, where):
+        """(2.11) Chosen actions dragged onto another one: they go before or after it (in its list)."""
+        moving = [c[0] for c in self._chosen()]  # (ids: the list's choice; inside chosen groups go along)
+        moving_ids = {b["id"] for b in moving}
+        found = workflow.find(self.steps, target)
+        if not moving or not found or target in moving_ids:
+            return
+        # (a group can't go inside itself)
+        parent = found[3]
+        while parent is not None:
+            if parent.get("id") in moving_ids:
+                return
+            up = workflow.find(self.steps, parent.get("id"))
+            parent = up[3] if up else None
+
+        if where == "into" and found[0].get("kind") not in workflow.GROUPS:
+            where = "after"
+
+        def do():
+            for b in moving:
+                for _a, lst, _i, _p in workflow.walk(self.steps):
+                    k = next((n for n, x in enumerate(lst) if x is b), None)
+                    if k is not None:
+                        del lst[k]
+                        break
+            t, tlst, ti, _p = workflow.find(self.steps, target)
+            if where == "into":  # (2.11: dropped on the middle of a group's row: inside it, at its end)
+                t.setdefault("actions", []).extend(moving)
+                return
+            at = ti + (1 if where == "after" else 0)
+            tlst[at:at] = moving
+        self.change(do, select=[b["id"] for b in moving])
+
+    def _drop_macros(self, ids, target, where):
+        """(2.11) Chosen macros dragged in the list: the saved macros list gets that order."""
+        paths = [self.entries[int(i)][1] for i in ids if self.entries[int(i)][1]]
+        tpath = self.entries[int(target)][1]
+        if not paths or not tpath or tpath in paths:
+            return
+        lib = self.app.macro_list()
+        keys = {os.path.normcase(os.path.abspath(p)) for p in paths}
+        moving = [p for p in lib if os.path.normcase(os.path.abspath(p)) in keys]
+        rest = [p for p in lib if os.path.normcase(os.path.abspath(p)) not in keys]
+        tkey = os.path.normcase(os.path.abspath(tpath))
+        at = next((k for k, p in enumerate(rest) if os.path.normcase(os.path.abspath(p)) == tkey), None)
+        if at is None or not moving:
+            return
+        at += 1 if where == "after" else 0
+        lib[:] = rest[:at] + moving + rest[at:]
+        core.save_settings(self.app.settings)
+        current = self.entries[self.current][1] if self.current is not None else None
+        self._fill_macros()
+        if current:
+            self.current = next((k for k, (_l, p) in enumerate(self.entries) if p == current), self.current)
+        self.macros.selection_set([str(k) for k, (_l, p) in enumerate(self.entries) if p in paths])
 
     def _more_menu(self):
         m = self._menu()
@@ -917,18 +1171,37 @@ class MacroEditor:
                     continue
                 label, accel, fn, ok = item
                 m.add_command(label=label, accelerator=accel, command=fn, state="normal" if ok else "disabled")
+            m.add_separator()
+            self._test_items(m)
         b = self.btn_more
         m.tk_popup(b.winfo_rootx(), b.winfo_rooty() - 10 - 22 * m.index("end"))
 
     # ------------------------------------------------------------ the macros: duplicate, remove
 
+    def _chosen_macros(self):
+        """(2.11) The chosen macros: [(label, path)] (the open one when none is chosen)."""
+        sel = [int(i) for i in self.macros.selection() if i.isdigit() and int(i) < len(self.entries)]
+        if not sel and self.current is not None:
+            sel = [self.current]
+        return [self.entries[i] for i in sel]
+
     def _duplicate_macro(self):
-        if self.current is None:
+        chosen = self._chosen_macros()
+        if not chosen:
             return
-        label, path = self.entries[self.current]
+        if len(chosen) > 1:
+            for label, path in chosen:
+                if path:
+                    self._duplicate_one(label, path, open_it=False)
+            self._fill_macros()
+            return
+        label, path = chosen[0]
         if path is None:
             self.app.boxes.showinfo("Edit", "Save this macro first (Save… in the main window).", parent=self.win)
             return
+        self._duplicate_one(label, path)
+
+    def _duplicate_one(self, label, path, open_it=True):
         base = os.path.join(os.path.dirname(path), label + " copy")
         new = base + core.FILE_EXT
         n = 2
@@ -948,25 +1221,28 @@ class MacroEditor:
             self.app.boxes.showerror("Edit", f"Couldn't copy the macro:\n{exc}", parent=self.win)
             return
         self.app._remember_macro(new)
+        if not open_it:
+            return
         self._fill_macros()
         i = next(k for k, (_l, p) in enumerate(self.entries) if p and os.path.normcase(p) == os.path.normcase(
             os.path.abspath(new)))
         self._open_entry(i)
 
     def _remove_macro(self):
-        if self.current is None:
+        chosen = [(label, path) for label, path in self._chosen_macros() if path]
+        if not chosen:
             return
-        label, path = self.entries[self.current]
-        if path is None:
-            return
-        if not self.app.boxes.askyesno("Edit", f"Take {label} off the saved macros list?\n\nThe file itself is "
-                                       "kept.", parent=self.win):
+        what = chosen[0][0] if len(chosen) == 1 else f"these {len(chosen)} macros"
+        if not self.app.boxes.askyesno("Edit", f"Take {what} off the saved macros list?\n\nThe "
+                                       f"file{'s themselves are' if len(chosen) > 1 else ' itself is'} kept.",
+                                       parent=self.win):
             return
         lib = self.app.macro_list()
-        i = self.app._list_index(path)
-        if i is not None:
-            del lib[i]
-            core.save_settings(self.app.settings)
+        for _label, path in chosen:
+            i = self.app._list_index(path)
+            if i is not None:
+                del lib[i]
+        core.save_settings(self.app.settings)
         self.current = None
         self._fill_macros()
         self.steps, self.base_steps = [], []
@@ -1377,6 +1653,61 @@ class MacroEditor:
         tk.Label(box, text="The actions inside this group only run when the condition is true. Add actions "
                            "into it with Add action while it's chosen, or Alt+Right on the action below it.",
                  bg=BG, fg=DIM, font=F_SMALL, anchor="w", justify="left", wraplength=460).pack(fill="x", pady=(8, 0))
+
+    # ------------------------------------------------------------ (2.11) counters
+
+    def _counter_name(self, box, a):
+        """The counter's name: pick one the macro already uses, or type a new one."""
+        row = self._row(box, "Counter", "pick one or type a new name")
+        var = tk.StringVar(value=a.get("counter", "Counter"))
+        names = workflow.counters(self.steps)
+        combo = ttk.Combobox(row, textvariable=var, values=names, width=22)
+        combo.pack(side="right")
+
+        def changed(*_a):
+            name = workflow.clean_counter_name(var.get())
+            if not var.get().strip() or a.get("counter") == name:
+                return
+            self._snapshot_for_typing()
+            a["counter"] = name
+            self._refresh_row(a)
+        var.trace_add("write", changed)
+        combo.bind("<<ComboboxSelected>>", lambda e: combo.selection_clear())
+
+    def _counter_keep(self, box, a):
+        keep = tk.BooleanVar(value=a.get("keep") is True)
+        row = self._row(box, "Keep between plays", "else it starts at 0 each time you press Play")
+
+        def flip():
+            self.change(lambda: a.__setitem__("keep", bool(keep.get())), select=a["id"], keep_detail=True)
+        Switch(row, keep, command=flip).pack(side="right")
+
+    def _detail_counter_add(self, box, a):
+        self._counter_name(box, a)
+        self._field(box, "Add", a, "amount", int, -workflow.COUNTER_LIMIT, workflow.COUNTER_LIMIT,
+                    tip="1 counts one up; -1 counts one down")
+        self._counter_keep(box, a)
+        self._counter_help(box)
+
+    def _detail_counter_set(self, box, a):
+        self._counter_name(box, a)
+        self._field(box, "Set it to", a, "value", int, -workflow.COUNTER_LIMIT, workflow.COUNTER_LIMIT)
+        self._counter_keep(box, a)
+        self._counter_help(box)
+
+    def _detail_if_counter(self, box, a):
+        self._counter_name(box, a)
+        self._field(box, "When it's at least", a, "at_least", int, -workflow.COUNTER_LIMIT, workflow.COUNTER_LIMIT)
+        tk.Label(box, text="The actions inside only run when the counter has reached this number. Put a "
+                           "\"Set a counter\" to 0 inside if it should count again from the start.", bg=BG,
+                 fg=DIM, font=F_SMALL, anchor="w", justify="left", wraplength=460).pack(fill="x", pady=(8, 0))
+        self._counter_help(box)
+
+    @staticmethod
+    def _counter_help(box):
+        tk.Label(box, text="Counters are whole numbers. While the macro plays they show in the timer at the top "
+                           "of the screen.", bg=BG, fg=DIM, font=F_SMALL, anchor="w", justify="left",
+                 wraplength=460).pack(fill="x", pady=(8, 0))
 
     def _detail_repeat(self, box, a):
         self._field(box, "Repeat how many times", a, "times", int, 0, 100000)

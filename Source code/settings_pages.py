@@ -726,6 +726,8 @@ class SettingsPagesMixin:
         row = self._row(f, "Countdown", "seconds to switch to the game (0 = start at once)")
         ttk.Spinbox(row, from_=0, to=600, width=5, textvariable=self.rec_ready_var,
                     command=self._save_settings).pack(side="right")
+        self._switch_row(f, "Ask which window to record in", self.rec_ask_window_var,
+                         "when you press Record in this app (Windows)")
         self._section(f, "MOUSE")
         self._switch_row(f, "Record mouse movement", self.rec_moves_var,
                          "off = only clicks, scrolls and keys")
