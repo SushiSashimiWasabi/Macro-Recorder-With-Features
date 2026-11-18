@@ -517,7 +517,7 @@ class SettingsWindowMixin:
                      "discord_runs", "discord_ping_fragments", "discord_screenshot", "discord_shot_size", "discord_stops", "discord_name",
                      "discord_ping", "discord_ping_when", "discord_capture", "discord_title", "discord_content",
                      "discord_message", "results_enabled", "drops_enabled", "simplify_moves",
-                     "game_closed", "auto_stop", "vary", "discord_summary", "discord_live")
+                     "game_closed", "stuck_guard", "auto_stop", "vary", "discord_summary", "discord_live")
 
     def _is_page_setting(self, key):
         if key in self.PAGE_SETTINGS:

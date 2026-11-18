@@ -157,8 +157,12 @@ check("random timing: a release lands where its press did",
 check("random timing: still in order, and all 20 played",
       len(sent) == 20 and times == sorted(times) and [e["pressed"] for _t, e in sent] == [True, False] * 10)
 gaps = [round((times[i + 1] - times[i]) * 1000) for i in range(len(times) - 1)]
-check("random timing: the waits differ a little (100 ms each when exact)", len(set(gaps)) > 3
-      and all(30 <= g <= 175 for g in gaps), gaps)
+# each click against its planned time (0.1 s apart): random timing moves it at most 30 ms either way; a busy
+# computer can add some lateness on top, never earliness (a gap after a late click can look short: that's fine)
+off = [round(((times[i] - times[0]) - 0.1 * i) * 1000) for i in range(len(times))]
+slack = 120 if os.environ.get("CI") else 60
+check("random timing: the waits differ a little (each within 30 ms of its time, plus lateness)",
+      len(set(gaps)) > 3 and all(-60 <= o <= 60 + slack for o in off), off)
 app.macro_vary = {"mode": "off"}
 check("random timing: a macro can turn it off for itself", app._vary_now() is None)
 app.macro_vary = {"mode": "own", "ms": 5, "px": 0}
@@ -197,7 +201,21 @@ pump(0.3)
 win = app.open_auto_stop()
 win.variables["on"].set(True)
 win.variables["runs"].set("25")
-win.variables["at"].set("soon")
+import ui_common  # noqa: E402
+
+
+def _time_box(w):
+    for c in w.winfo_children():
+        if isinstance(c, ui_common.TimeBox):
+            return c
+        found = _time_box(c)
+        if found:
+            return found
+
+
+tbox = _time_box(win)
+tbox.hh.set("21")  # (2.12: an HH : MM box: letters can't be typed; only hours, no minutes, is a wrong time)
+tbox.mm.set("")
 win.save()
 pump(0.1)
 check("windows: a wrong time is refused, the window stays", win.winfo_exists() and "auto_stop" not in app.settings

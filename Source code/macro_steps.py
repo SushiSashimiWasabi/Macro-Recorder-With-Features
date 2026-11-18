@@ -16,27 +16,38 @@ another, waits included), so older versions of the app can still play the record
 import copy
 import uuid
 
-GROUPS = ("if", "repeat", "retry", "if_counter")
+GROUPS = ("if", "repeat", "retry", "if_counter", "else")
 
 # what "Add action" offers: kind, name, a few words
 ADDABLE = [
     ("wait", "Wait", "pause for some seconds"),
+    ("wait_random", "Wait a random time", "between two numbers of seconds"),
     ("key", "Press a key", "a key press, or holding / letting go of a key"),
     ("type", "Type text", "types the text, letter by letter"),
     ("click", "Click", "a mouse click somewhere on the screen"),
     ("move", "Move the mouse", "to a spot on the screen"),
     ("scroll", "Scroll", "the mouse wheel up or down"),
     ("wait_picture", "Wait for a picture", "until something shows on screen (and click it)"),
-    ("if", "If…", "steps that only run when a picture shows (or doesn't)"),
+    ("if", "If…", "steps that only run when something is true (a picture, a counter, the time…)"),
+    ("else", "Else…", "after an If: steps that run when its condition isn't true"),
     ("repeat", "Repeat…", "steps that run a number of times"),
     ("retry", "Retry…", "steps that run again until a picture shows"),
     ("counter_add", "Add to a counter", "count something: +1 (or any whole number)"),
     ("counter_set", "Set a counter", "put a counter on a number (0 to start again)"),
-    ("if_counter", "If a counter reaches…", "steps that only run when a counter is at least a number"),
+    ("if_counter", "If a counter reaches…", "steps that only run when a counter is at a number"),
+    ("maths", "Do maths", "a counter = a number or counter + − × ÷ another"),
+    ("read_clipboard", "Read the copied number", "the number you copied goes into a counter"),
     ("restart", "Start over", "start the macro again from step 1"),
     ("stop", "Stop", "end the macro here"),
     ("play_macro", "Play another macro", "a saved macro plays here, as often as you say (chains)"),
-    ("note", "Note", "a comment for yourself; does nothing"),
+    ("label", "Label", "a named spot that Go to can jump to"),
+    ("goto", "Go to a label", "jump to a Label (with a limit)"),
+    ("discord", "Send a Discord message", "with counters in it, and a screenshot if you like"),
+    ("screenshot", "Take a screenshot", "to the reports folder or Discord"),
+    ("sound", "Play a sound", "one of the app's sounds"),
+    ("set_speed", "Set speed", "how fast the rest of this run plays"),
+    ("game", "Bring the game to the front", "or wait until the game is open"),
+    ("note", "Note", "a comment for yourself (it can show on the timer)"),
     ("record_here", "Record keys and mouse…", "record now; it goes where you choose"),
     ("insert_macro", "Insert another macro…", "copy a saved macro's actions in here, to change"),
 ]
@@ -71,6 +82,9 @@ def new_action(kind):
         "recorded": {"events": []},
     }
     a.update(copy.deepcopy(defaults.get(kind, {})))
+    import step_more
+
+    a.update(step_more.new_step(kind))  # (2.12: the new actions)
     return a
 
 
@@ -174,6 +188,19 @@ def map_points(actions, fn):
                 if kind in ("click", "move") and "x" in a:
                     moved = fn([{"type": "move", "x": a["x"], "y": a["y"], "t": 0.0}])[0]
                     b["x"], b["y"] = moved["x"], moved["y"]
+                if kind in ("click", "wait_picture") and not b.get("color_on") and "x0" in b and "y1" in b:
+                    a0, a1 = fn([{"type": "move", "x": b["x0"], "y": b["y0"], "t": 0.0},
+                                 {"type": "move", "x": b["x1"], "y": b["y1"], "t": 0.0}])
+                    b["x0"], b["y0"], b["x1"], b["y1"] = a0["x"], a0["y"], a1["x"], a1["y"]
+                # (2.12) a colour check's spot is fitted like a click
+                holder = b.get("condition") if kind in ("if", "retry") else b if kind == "wait_picture" else None
+                if isinstance(holder, dict) and holder.get("color_on") and "x" in holder and "y" in holder:
+                    moved = fn([{"type": "move", "x": holder["x"], "y": holder["y"], "t": 0.0}])[0]
+                    holder["x"], holder["y"] = moved["x"], moved["y"]
+                if isinstance(holder, dict) and holder.get("color_on") and "x0" in holder and "y1" in holder:
+                    a0, a1 = fn([{"type": "move", "x": holder["x0"], "y": holder["y0"], "t": 0.0},
+                                 {"type": "move", "x": holder["x1"], "y": holder["y1"], "t": 0.0}])
+                    holder["x0"], holder["y0"], holder["x1"], holder["y1"] = a0["x"], a0["y"], a1["x"], a1["y"]
             out.append(b)
         return out
     return go(actions)
@@ -182,40 +209,68 @@ def map_points(actions, fn):
 def describe(a):
     """(name, a few words) for the list in the Edit window."""
     kind = a.get("kind")
+    import step_more
+
+    more = step_more.describe(a)
+    if more is not None:
+        return more
     name = NAMES.get(kind, kind or "?")
     if kind == "recorded":
         evs = a.get("events", [])
         secs = evs[-1].get("t", 0) if evs else 0
         return name, f"{len(evs):,} recorded events, {secs:.1f} s"
     if kind == "wait":
+        if a.get("random"):
+            return name, f"{float(a.get('seconds', 0)):g} to {float(a.get('max', 0)):g} s (random)"
         return name, f"{float(a.get('seconds', 0)):g} s"
     if kind == "key":
         mode = {"press": "press", "down": "hold down", "up": "let go"}.get(a.get("mode"), "press")
         times = int(a.get("times", 1))
         hold = float(a.get("hold", 0) or 0)
-        return name, (f"{mode} {key_text(a.get('key', {}))}" + (f" × {times}" if times > 1 and mode == "press" else "")
+        mods = "".join(m.title() + "+" for m in a.get("mods") or [])  # (2.12: Ctrl+E)
+        return name, (f"{mode} {mods}{key_text(a.get('key', {}))}" + (f" × {times}" if times > 1 and mode == "press" else "")
                       + (f", held {hold:g} s" if hold > 0 and mode == "press" else ""))
     if kind == "type":
         text = a.get("text", "")
-        return name, (text[:40] + "…") if len(text) > 40 else (text or "(no text yet)")
+        where = (a.get("window") or {}).get("exe")
+        return name, ((text[:40] + "…") if len(text) > 40 else (text or "(no text yet)")) + (
+            f"  → {where}" if where else "") + ("  + Enter" if a.get("enter") else "")
     if kind == "click":
         mode = {"click": "", "double": "double ", "down": "hold ", "up": "let go of "}.get(a.get("mode"), "")
         hold = float(a.get("hold", 0) or 0)
+        target = a.get("target", "spot")
+        if target != "spot":
+            where = "where it was found" if target == "found" else "in the area"
+            return name, f"{mode}{a.get('button', 'left')} {where}" + (" (a random spot)" if a.get("random") else "")
         return name, (f"{mode}{a.get('button', 'left')} at {a.get('x')}, {a.get('y')}"
                       + (f", held {hold:g} s" if hold > 0 and a.get("mode", "click") == "click" else ""))
     if kind == "move":
-        return name, f"to {a.get('x')}, {a.get('y')}"
+        if a.get("relative"):
+            return name, f"turn by {a.get('dx', 0)}, {a.get('dy', 0)} (camera)"
+        return name, f"to {a.get('x')}, {a.get('y')}" + (f" over {float(a['glide']):g} s" if a.get("glide") else "")
     if kind == "scroll":
         n = int(a.get("amount", 0))
         return name, f"{'up' if n > 0 else 'down'} {abs(n)}"
     if kind == "wait_picture":
         limit = a.get("timeout", 30)
         what = a.get("name") or ("picture" if a.get("png") else "no picture yet")
+        if a.get("color_on"):
+            import color_check
+
+            what = color_check.describe(a)
         return name, f"{what}, up to {limit:g} s" if limit else f"{what}, no time limit"
     if kind == "if":
         return "If", condition_text(a.get("condition", {})) + f"  ({len(a.get('actions', []))} steps)"
     if kind == "repeat":
-        return "Repeat", f"{int(a.get('times', 1))} times  ({len(a.get('actions', []))} steps)"
+        steps = f"  ({len(a.get('actions', []))} steps)"
+        mode = a.get("mode", "times")
+        if mode == "until":
+            return "Repeat", "until " + condition_text(a.get("condition") or {}) + steps
+        if mode == "minutes":
+            return "Repeat", f"for {float(a.get('minutes', 5)):g} min" + steps
+        if mode == "forever":
+            return "Repeat", "until stopped" + steps
+        return "Repeat", f"{int(a.get('times', 1))} times" + steps
     if kind == "retry":
         return "Retry", (f"until {condition_text(a.get('condition', {}))}, at most {int(a.get('tries', 3))} "
                          f"tries  ({len(a.get('actions', []))} steps)")
@@ -224,13 +279,18 @@ def describe(a):
         return name, f"{a.get('counter', 'Counter')} {'+' if n >= 0 else '-'}{abs(n)}"
     if kind == "counter_set":
         return name, f"{a.get('counter', 'Counter')} = {int(a.get('value', 0))}"
+    if kind == "if_counter" and (a.get("op", ">=") != ">=" or a.get("other")):
+        sign = step_more.COMPARE.get(a.get("op"), "≥")
+        return "If", (f"{a.get('counter', 'Counter')} {sign} {a.get('other') or int(a.get('at_least', 1))}  "
+                      f"({len(a.get('actions', []))} steps)")
     if kind == "if_counter":
         return "If", (f"{a.get('counter', 'Counter')} is {int(a.get('at_least', 1))} or more  "
                       f"({len(a.get('actions', []))} steps)")
     if kind == "restart":
         return name, "from step 1"
     if kind == "stop":
-        return name, "the macro ends here"
+        return name, ("the macro ends here" + (f": {a['reason']}" if a.get("reason") else "")
+                      + (" (ping)" if a.get("ping") else ""))
     if kind == "note":
         return name, a.get("text", "")[:50]
     if kind == "play_macro":
@@ -243,6 +303,22 @@ def describe(a):
 
 
 def condition_text(c):
+    import step_more
+
+    words = step_more.condition_words(c)
+    if words is None:
+        words = _picture_condition_text(c)
+    more = [step_more.condition_words(m) or _picture_condition_text(m) for m in c.get("more") or []]
+    if more:
+        words = f" {'or' if c.get('join') == 'or' else 'and'} ".join([words] + more)
+    return words
+
+
+def _picture_condition_text(c):
+    if c.get("color_on"):
+        import color_check
+
+        return color_check.describe(c) + (" shows" if c.get("shows", True) else " doesn't show")
     what = c.get("name") or ("the picture" if c.get("png") else "a picture (none chosen yet)")
     return f"{what} shows" if c.get("shows", True) else f"{what} doesn't show"
 
@@ -308,9 +384,14 @@ def clean_counter_step(a):
 def counters(actions):
     """The names of the counters a macro uses, in the order they first show up."""
     out = []
+    import step_more
+
     for a, _l, _i, _p in walk(actions):
-        if a.get("kind") in COUNTER_KINDS:
-            name = clean_counter_name(a.get("counter"))
+        names = [a.get("counter")] if a.get("kind") in COUNTER_KINDS else step_more.counter_names(a)
+        if a.get("kind") == "if_counter" and a.get("other"):
+            names.append(a["other"])
+        for n in names:
+            name = clean_counter_name(n)
             if name not in out:
                 out.append(name)
     return out
@@ -319,7 +400,8 @@ def counters(actions):
 def kept_counters(actions):
     """Counters a step says to keep between plays."""
     return {clean_counter_name(a.get("counter")) for a, _l, _i, _p in walk(actions)
-            if a.get("kind") in ("counter_add", "counter_set") and a.get("keep") is True and not a.get("off")}
+            if a.get("kind") in ("counter_add", "counter_set", "maths", "read_clipboard") and a.get("keep") is True
+            and not a.get("off")}
 
 
 def steps_from(actions, action_id):
@@ -337,3 +419,15 @@ def steps_from(actions, action_id):
         _g, glist, gi, parent = outer
         out += glist[gi + 1:]
     return copy.deepcopy(out)
+
+
+def clean_color_step(a):
+    """(2.12) The colour-check fields of a step from a file (maybe someone else's), checked."""
+    import color_check
+
+    kind = a.get("kind")
+    if kind in ("if", "retry") and isinstance(a.get("condition"), dict):
+        color_check.clean(a["condition"])
+    elif kind == "wait_picture":
+        color_check.clean(a)
+    return a

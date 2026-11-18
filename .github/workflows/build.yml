@@ -16,30 +16,18 @@ on:
 
 jobs:
   tests:
-    # the checks in "Source code/tests" (playback, results, Discord card, a real results screen);
-    # if any fails, nothing is built or published
-    runs-on: windows-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-          cache: pip  # (downloads kept between runs: quicker)
-          cache-dependency-path: "Source code/requirements.txt"
-      - name: Run the tests
-        shell: cmd
-        run: |
-          py -m pip install -r "Source code\requirements.txt" || exit /b 1
-          py "Source code\tests\run_tests.py"
+    # every test group (see tests.yml); if any fails, nothing is built or published
+    uses: ./.github/workflows/tests.yml
 
   windows:
     needs: [tests]
+    # builds only in the public repo (the private one is for testing previews: tests only)
+    if: github.repository == 'SushiSashimiWasabi/Macro-Recorder-With-Features'
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
           cache: pip  # (downloads kept between runs: quicker)
@@ -54,7 +42,7 @@ jobs:
           rem (no --clean: reuses the folder build's work, only the exe is packed differently)
           py -m PyInstaller --noconfirm "Source code\MacroRecorder_win.spec" || exit /b 1
           copy /y dist\MacroRecorder.exe MacroRecorder.exe || exit /b 1
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: MacroRecorder-Windows
           path: |
@@ -64,7 +52,8 @@ jobs:
   release:
     # only from main; publishes the Windows files as soon as they're built (the zip for copies from
     # 2.8 on, the one-file exe for older copies, which can only update to one file)
-    if: github.ref == 'refs/heads/main'
+    # (never from the private repo: the app's updater reads the public repo's Releases)
+    if: github.ref == 'refs/heads/main' && github.repository == 'SushiSashimiWasabi/Macro-Recorder-With-Features'
     needs: [windows]
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -74,7 +63,7 @@ jobs:
       version: ${{ steps.ver.outputs.version }}
       created: ${{ steps.ver.outputs.exists == 'no' && 'yes' || 'no' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Read the version
         id: ver
         run: |
@@ -83,7 +72,7 @@ jobs:
           if gh release view "v$v" >/dev/null 2>&1; then echo "exists=yes" >> "$GITHUB_OUTPUT"; else echo "exists=no" >> "$GITHUB_OUTPUT"; fi
         env:
           GH_TOKEN: ${{ github.token }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         if: steps.ver.outputs.exists == 'no'
         with:
           name: MacroRecorder-Windows
@@ -101,7 +90,8 @@ jobs:
 
   mac:
     needs: [release]
-    if: ${{ !cancelled() }}   # also runs when there's no release step (not on main)
+    # also runs when there's no release step (not on main); only in the public repo
+    if: ${{ !cancelled() && github.repository == 'SushiSashimiWasabi/Macro-Recorder-With-Features' }}
     strategy:
       fail-fast: false
       matrix:
@@ -115,8 +105,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
           cache: pip  # (downloads kept between runs: quicker)
@@ -125,7 +115,7 @@ jobs:
         run: bash build_mac.sh
       - name: Zip it (keeps the app bundle intact)
         run: ditto -c -k --keepParent "Mac build version/MacroRecorder.app" MacroRecorder-Mac-${{ matrix.label }}.zip
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: MacroRecorder-Mac-${{ matrix.label }}
           path: MacroRecorder-Mac-${{ matrix.label }}.zip

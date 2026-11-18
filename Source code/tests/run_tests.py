@@ -1,10 +1,19 @@
-"""Runs every test_*.py here, each in its own Python, and says whether all of them passed.
+"""Runs the test_*.py files here, each in its own Python, and says whether all of them passed.
 
-    py "Source code/tests/run_tests.py"            (add --one-by-one to run them one after another)
+    py "Source code/tests/run_tests.py"                     every test (add --one-by-one: one after another)
+    py "Source code/tests/run_tests.py" --group security    one group (or several: --group timing,discord)
+    py "Source code/tests/run_tests.py" --test remote       one test file (test_remote.py), or several
+    py "Source code/tests/run_tests.py" --list              the groups and their files
 
-GitHub runs this before it builds and publishes a new version (see .github/workflows/build.yml), so
-a version that breaks recording, playback, results or the Discord card never reaches anyone. The
-tests send no real mouse or keyboard input and use throwaway settings folders.
+GitHub runs these on every push (see .github/workflows/tests.yml), each group as its own job, and
+before it builds and publishes a new version, so a version that breaks something never reaches anyone.
+The tests send no real mouse or keyboard input and use throwaway settings folders.
+
+On GitHub's computers (the CI variable is set) checks that need Kong's real PC (a second screen and
+such) print "SKIP (PC only)" instead of running; they're counted in the summary.
+
+    --coverage        measure how much of the app's code the tests ran (needs: pip install coverage)
+    --summary FILE    also write the results as a Markdown table (GitHub shows it on the run's page)
 
 Tests that don't open windows run a few at a time (quicker); the ones that open windows run one by
 one afterwards, so they don't take the focus from each other."""
@@ -19,15 +28,50 @@ from concurrent.futures import ThreadPoolExecutor
 here = os.path.dirname(os.path.abspath(__file__))
 src = os.path.dirname(here)
 # these open windows (Edit, Settings, Picture watch, dashboards...): one at a time
-WINDOW_TESTS = {"test_automation.py", "test_chains.py", "test_editor.py", "test_pictures.py", "test_preview1.py", "test_preview2.py", "test_remote.py",
-                "test_settings_undo.py", "test_stage3.py", "test_stage4.py", "test_windows.py"}
+WINDOW_TESTS = {"test_automation.py", "test_chains.py", "test_editor.py", "test_pictures.py", "test_preview1.py",
+                "test_preview2.py", "test_preview3.py", "test_preview3_edges.py", "test_preview3_actions.py",
+                "test_security.py", "test_remote.py", "test_settings_undo.py", "test_stage3.py", "test_stage4.py",
+                "test_windows.py"}
 AT_ONCE = 4  # how many of the other tests run side by side
 
+# (2.12) the groups GitHub runs as separate jobs (each file in one group)
+GROUPS = {
+    "basic": ["test_steps.py", "test_playback.py", "test_editor.py", "test_windows.py", "test_settings_undo.py",
+              "test_stage3.py", "test_stage4.py", "test_automation.py", "test_chains.py", "test_pictures.py",
+              "test_results.py", "test_real_screen.py", "test_preview1.py", "test_preview2.py",
+              "test_updater_folder.py"],
+    "security": ["test_files.py", "test_security.py"],
+    "timing": ["test_preview3.py"],
+    "discord": ["test_remote.py"],
+    "edges": ["test_preview3_edges.py"],
+    "edit-actions": ["test_preview3_actions.py"],
+}
+GROUP_NAMES = {"basic": "Basic (recording, playback, Edit, results, Settings)",
+               "security": "Shared files and security",
+               "timing": "Timing (alarm / timer, stuck guard, late result, colour)",
+               "discord": "Discord and the phone remote",
+               "edges": "Break-it edge tests",
+               "edit-actions": "Edit actions (Do maths, Go to, Type into a window…)"}
 
-def run(path):
+
+def group_of(name):
+    return next((g for g, files in GROUPS.items() if name in files), "other")
+
+
+COVDATA = os.path.join(os.path.dirname(src), "covdata")  # (coverage files, one per test file)
+
+
+def run(path, coverage=False):
     started = time.time()
-    proc = subprocess.run([sys.executable, "-X", "utf8", path, src], capture_output=True, text=True,
-                          encoding="utf-8", errors="replace", timeout=600)
+    cmd = [sys.executable, "-X", "utf8"]
+    env = None
+    if coverage:
+        # an absolute place: a test that changes folders can't put its coverage file somewhere else
+        os.makedirs(COVDATA, exist_ok=True)
+        env = dict(os.environ, COVERAGE_FILE=os.path.join(COVDATA, ".coverage"))
+        cmd += ["-m", "coverage", "run", "-p", f"--source={src}", "--omit=*/tests/*"]
+    proc = subprocess.run(cmd + [path, src], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                          timeout=900, env=env)
     return path, proc, time.time() - started
 
 
@@ -37,34 +81,115 @@ def report(path, proc, took):
     m = re.search(r"(\d+) of (\d+) passed", out)
     passed, count = (int(m.group(1)), int(m.group(2))) if m else (0, 0)
     ok = proc.returncode == 0 and m is not None and passed == count
-    print(f"{'OK  ' if ok else 'FAIL'} {name}: {passed} of {count} passed ({took:.0f} s)", flush=True)
+    # (2.12) skipped checks: "SKIP (PC only)" (needs Kong's real PC) and "SKIP (Windows only)" (on a Mac)
+    skipped = sum(1 for line in out.splitlines() if line.startswith("SKIP ("))
+    print(f"{'OK  ' if ok else 'FAIL'} {name}: {passed} of {count} passed ({took:.0f} s)"
+          + (f", {skipped} skipped (PC / Windows only)" if skipped else ""), flush=True)
+    why = []
     if not ok:
+        in_trace = False
         for line in out.splitlines():
-            if line.startswith("FAIL") or "Error" in line or "Traceback" in line:
+            # every FAIL line, and every traceback in full (where it happened, not only its last line)
+            if line.startswith("Traceback"):
+                in_trace = True
+            if in_trace or line.startswith("FAIL") or "Error" in line:
                 print("     " + line)
-    return ok, passed, count
+                why.append(line.rstrip())
+            if in_trace and line and not line.startswith((" ", "Traceback", "During handling", "The above")):
+                in_trace = False  # (the "SomeError: ..." line ends it)
+        if not why:
+            why.append(f"exit code {proc.returncode}, no result line")
+    return ok, passed, count, skipped, why
+
+
+def _pick(paths, argv):
+    def arg(flag):
+        if flag in argv and argv.index(flag) + 1 < len(argv):
+            return [x.strip() for x in argv[argv.index(flag) + 1].split(",") if x.strip()]
+        return []
+    groups, tests = arg("--group"), arg("--test")
+    if not groups and not tests or "all" in groups:
+        return paths
+    want = set()
+    for g in groups:
+        if g not in GROUPS:
+            sys.exit(f"No group \"{g}\". Groups: {', '.join(GROUPS)}")
+        want |= set(GROUPS[g])
+    for t in tests:
+        name = t if t.endswith(".py") else t + ".py"
+        name = name if name.startswith("test_") else "test_" + name
+        if not os.path.isfile(os.path.join(here, name)):
+            sys.exit(f"No test file {name}")
+        want.add(name)
+    return [p for p in paths if os.path.basename(p) in want]
+
+
+def write_summary(file, rows, began, coverage):
+    lines = ["## Test results", "", "| Group | File | Result | Checks | Skipped (PC / Windows only) | Time |",
+             "|---|---|---|---|---|---|"]
+    for name, ok, passed, count, skipped, took, _why in rows:
+        lines.append(f"| {GROUP_NAMES.get(group_of(name), 'Other')} | {name} | {'✅' if ok else '❌'} | "
+                     f"{passed} of {count} | {skipped} | {took:.0f} s |")
+    total_p, total = sum(r[2] for r in rows), sum(r[3] for r in rows)
+    lines += ["", f"**{total_p} of {total} checks passed** in {time.time() - began:.0f} s, "
+                  f"{sum(r[4] for r in rows)} checks skipped (PC only, or Windows only on a Mac)."]
+    if coverage is not None:
+        lines.append(f"Code covered by these tests: **{coverage}**")
+    bad = [r for r in rows if not r[1]]
+    if bad:
+        lines += ["", "### Why they failed"]
+        for name, *_rest, why in bad:
+            lines.append(f"- **{name}**")
+            lines += [f"  - `{w[:200]}`" for w in why[:60]]
+    with open(file, "a", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+def coverage_total():
+    try:
+        # (combined into a file of its own: the group's files in covdata stay for the summary job)
+        env = dict(os.environ, COVERAGE_FILE=os.path.join(COVDATA, "group.coverage"))
+        subprocess.run([sys.executable, "-m", "coverage", "combine", "--keep", COVDATA], capture_output=True,
+                       timeout=300, env=env)
+        out = subprocess.run([sys.executable, "-m", "coverage", "report"], capture_output=True, text=True,
+                             timeout=300, env=env).stdout
+        m = re.search(r"TOTAL.*?(\d+%)", out)
+        return m.group(1) if m else None
+    except Exception:
+        return None
 
 
 def main():
+    argv = sys.argv[1:]
+    if "--list" in argv:
+        for g, files in GROUPS.items():
+            print(f"{g}: {GROUP_NAMES[g]}\n    " + ", ".join(files))
+        return
     began = time.time()
-    paths = sorted(glob.glob(os.path.join(here, "test_*.py")))
-    one_by_one = "--one-by-one" in sys.argv
+    coverage = "--coverage" in argv
+    paths = _pick(sorted(glob.glob(os.path.join(here, "test_*.py"))), argv)
+    one_by_one = "--one-by-one" in argv
     side_by_side = [] if one_by_one else [p for p in paths if os.path.basename(p) not in WINDOW_TESTS]
     alone = [p for p in paths if p not in side_by_side]
     finished = []
     if side_by_side:
         with ThreadPoolExecutor(AT_ONCE) as pool:
-            finished += list(pool.map(run, side_by_side))
-    finished += [run(p) for p in alone]
-    failed, total_pass, total = [], 0, 0
+            finished += list(pool.map(lambda p: run(p, coverage), side_by_side))
+    finished += [run(p, coverage) for p in alone]
+    failed, rows = [], []
     for path, proc, took in sorted(finished, key=lambda r: r[0]):
-        ok, passed, count = report(path, proc, took)
-        total_pass += passed
-        total += count
+        ok, passed, count, skipped, why = report(path, proc, took)
+        rows.append((os.path.basename(path), ok, passed, count, skipped, took, why))
         if not ok:
             failed.append(os.path.basename(path))
+    total_pass, total = sum(r[2] for r in rows), sum(r[3] for r in rows)
     print(f"\n{total_pass} of {total} checks passed in {time.time() - began:.0f} s"
           + (f"; failed: {', '.join(failed)}" if failed else ""))
+    cov = coverage_total() if coverage else None
+    if cov:
+        print(f"Code covered: {cov}")
+    if "--summary" in argv and argv.index("--summary") + 1 < len(argv):
+        write_summary(argv[argv.index("--summary") + 1], rows, began, cov)
     sys.exit(1 if failed or total == 0 else 0)
 
 

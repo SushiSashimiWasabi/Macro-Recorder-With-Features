@@ -124,6 +124,11 @@ def apply_theme(root):
                     indicatorforeground="white", indicatorcolor=FIELD)
     style.map("TCheckbutton", background=[("active", BG)],
               indicatorcolor=[("selected", ACCENT), ("disabled", BG)])
+    # (2.12) round option buttons like the checkboxes: dark, also under the mouse (they turned white)
+    style.configure("TRadiobutton", background=BG, foreground=TEXT, indicatorbackground=FIELD,
+                    indicatorforeground="white", indicatorcolor=FIELD)
+    style.map("TRadiobutton", background=[("active", BG)], foreground=[("active", TEXT)],
+              indicatorcolor=[("selected", ACCENT), ("disabled", BG)])
     for name in ("TSpinbox", "TCombobox", "TEntry"):
         style.configure(name, fieldbackground=FIELD, background=CARD, foreground=TEXT, padding=3,
                         arrowsize=12)
@@ -972,8 +977,9 @@ class TreeDrag:
     and drag chosen ones to another place: a blue line shows where they'll go. on_drop(ids, target id,
     "before" / "after") does the moving."""
 
-    def __init__(self, tree, on_drop, is_group=None):
-        self.tree, self.on_drop, self.is_group = tree, on_drop, is_group
+    def __init__(self, tree, on_drop, is_group=None, others=()):
+        """others: [(another list, fn(ids, its row))]: a drop on that list calls fn (2.12)."""
+        self.tree, self.on_drop, self.is_group, self.others = tree, on_drop, is_group, list(others)
         self.mode = None
         self.line = tk.Frame(tree, bg=ACCENT, height=2)
         self.lit = None  # a group row lit up: the drop goes inside it
@@ -1055,6 +1061,13 @@ class TreeDrag:
             return
         if mode != "move":
             return
+        under = self.tree.winfo_containing(e.x_root, e.y_root)
+        for other, fn in self.others:
+            if under is other:
+                row = other.identify_row(e.y_root - other.winfo_rooty())
+                if row:
+                    fn(list(self.tree.selection()), row)
+                return
         iid = self.tree.identify_row(e.y)
         box = self.tree.bbox(iid) if iid else None
         if not iid or not box or iid in self.tree.selection():
@@ -1097,6 +1110,150 @@ def hover_text(widget, full):
     widget.bind("<Leave>", hide, add="+")
     widget.bind("<Destroy>", hide, add="+")
     return widget
+
+
+def parse_time_text(text):
+    """(2.12) "21:30", "21.30", "2130", "9:05", " 7 : 5 " -> ("21", "30") (two digits each, clamped to
+    00-23 and 00-59), or None when it isn't a time."""
+    import re
+
+    t = str(text or "").strip()
+    m = re.fullmatch(r"(\d{1,2})\s*[:.hH ]\s*(\d{1,2})", t) or re.fullmatch(r"(\d{1,2})(\d{2})", t)
+    if not m:
+        return None
+    h, mi = int(m.group(1)), int(m.group(2))
+    return f"{min(h, 23):02d}", f"{min(mi, 59):02d}"
+
+
+class TimeBox(tk.Frame):
+    """(2.12) A time typed as HH : MM: two small boxes with the ":" always there. Only digits; after two
+    hour digits the cursor jumps to the minutes, Backspace in empty minutes jumps back to the hours, ← / →
+    move between them, and pasting "21:30" or "2130" fills both. Hours stay 00-23, minutes 00-59.
+
+    .var holds the whole time: "HH:MM", "" when both are empty, or something half like "21:" while it's
+    being typed (so a form can tell). on_change(text) is called with the same after each change."""
+
+    def __init__(self, parent, value="", on_change=None, hh_var=None, mm_var=None, bg=BG):
+        super().__init__(parent, bg=bg)
+        parts = parse_time_text(value) or ("", "")
+        self.hh = hh_var or tk.StringVar()
+        self.mm = mm_var or tk.StringVar()
+        if not hh_var:
+            self.hh.set(parts[0])
+        if not mm_var:
+            self.mm.set(parts[1])
+        self.var = tk.StringVar()
+        self.on_change = on_change
+        self._busy = False
+        check = (self.register(lambda p: p == "" or (p.isdigit() and len(p) <= 2)), "%P")
+
+        def box(var):
+            return tk.Entry(self, textvariable=var, width=3, justify="center", bg=FIELD, fg=TEXT, font=F_BASE,
+                            relief="flat", insertbackground=TEXT, highlightthickness=1,
+                            highlightbackground=BORDER, highlightcolor=ACCENT, validate="key",
+                            validatecommand=check)
+        self.hh_box = box(self.hh)
+        self.hh_box.pack(side="left", ipady=3)
+        tk.Label(self, text=":", bg=bg, fg=TEXT, font=F_BOLD).pack(side="left", padx=2)
+        self.mm_box = box(self.mm)
+        self.mm_box.pack(side="left", ipady=3)
+        self.hh.trace_add("write", lambda *a: self._typed("hh"))
+        self.mm.trace_add("write", lambda *a: self._typed("mm"))
+        self.var.trace_add("write", lambda *a: self._var_set())
+        self.mm_box.bind("<BackSpace>", self._back)
+        self.hh_box.bind("<Right>", lambda e: self._jump(self.mm_box, 0) if self.hh_box.index("insert")
+                         >= len(self.hh.get()) else None)
+        self.mm_box.bind("<Left>", lambda e: self._jump(self.hh_box, "end") if self.mm_box.index("insert") == 0
+                         else None)
+        for b in (self.hh_box, self.mm_box):
+            b.bind("<<Paste>>", self._paste)
+            b.bind("<FocusOut>", lambda e: self._pad(), add="+")
+        self._update_var()
+
+    def _jump(self, box, where):
+        box.focus_set()
+        box.icursor(where)
+        return "break"
+
+    def _typed(self, which):
+        if self._busy:
+            return
+        if which == "hh":
+            h = self.hh.get()
+            if len(h) == 2:
+                if int(h) > 23:
+                    self._set(self.hh, "23")
+                if self.focus_get() is self.hh_box:
+                    self._jump(self.mm_box, "end")
+        else:
+            m = self.mm.get()
+            if len(m) == 2 and int(m) > 59:
+                self._set(self.mm, "59")
+        self._update_var()
+
+    def _back(self, _e):
+        if self.mm.get() == "" or (self.mm_box.index("insert") == 0 and not self.mm_box.selection_present()):
+            if self.mm.get() == "":
+                return self._jump(self.hh_box, "end")
+            return None
+        self.after_idle(lambda: self.mm.get() == "" and self._jump(self.hh_box, "end"))
+        return None
+
+    def _paste(self, _e):
+        try:
+            parts = parse_time_text(self.clipboard_get())
+        except tk.TclError:
+            parts = None
+        if parts:
+            self.set("%s:%s" % parts)
+        return "break"
+
+    def _pad(self):
+        for var in (self.hh, self.mm):
+            if len(var.get()) == 1:
+                self._set(var, "0" + var.get())
+        self._update_var()
+
+    def _set(self, var, value):
+        self._busy = True
+        try:
+            var.set(value)
+        finally:
+            self._busy = False
+
+    def _update_var(self):
+        h, m = self.hh.get(), self.mm.get()
+        text = "" if not h and not m else f"{h}:{m}"
+        if self.var.get() != text:
+            self._busy = True
+            try:
+                self.var.set(text)
+            finally:
+                self._busy = False
+        if self.on_change is not None:
+            self.on_change(self.value())
+
+    def _var_set(self):
+        """Something set .var from outside (like a test): fill the boxes from it."""
+        if self._busy:
+            return
+        text = self.var.get()
+        parts = parse_time_text(text)
+        self._set(self.hh, parts[0] if parts else "")
+        self._set(self.mm, parts[1] if parts else "")
+        self._update_var()
+
+    def set(self, text):
+        self.var.set(text)
+
+    def value(self):
+        """"HH:MM" (padded) when both are filled, "" when both are empty, else None (half typed)."""
+        h, m = self.hh.get(), self.mm.get()
+        if not h and not m:
+            return ""
+        if not h or not m:
+            return None
+        return f"{int(h):02d}:{int(m):02d}"
 
 
 def entry_hint(entry, var, text, size=12):

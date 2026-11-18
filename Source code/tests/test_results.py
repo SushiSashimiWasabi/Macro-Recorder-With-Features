@@ -30,6 +30,15 @@ def check(name, cond, info=""):
     print(("PASS " if cond else "FAIL ") + name + (f"  [{info}]" if info else ""))
 
 
+def windows_only(name):
+    """(2.12) A check for a feature that only exists on Windows: on other systems it's skipped (printed as
+    "SKIP (Windows only)" and counted in the summary), never run."""
+    if sys.platform == "win32":
+        return False
+    print("SKIP (Windows only) " + name)
+    return True
+
+
 root = tk.Tk()
 root.withdraw()
 app = modern_ui.ModernMacroRecorder(root)
@@ -202,7 +211,7 @@ app.video.is_open = lambda: True
 from pynput import keyboard  # noqa: E402
 
 k = keyboard.KeyCode.from_vk(102)
-check("video key: Num 6 is Forward", app._video_key_action(k) == "forward")
+windows_only("video key: Num 6 is Forward") or check("video key: Num 6 is Forward", app._video_key_action(k) == "forward")
 app.video_key("forward")
 app.video_key("vol_down")
 check("video key: commands sent", cmds[:2] == [("seek", 10), ("volume", -10)], cmds)
@@ -214,7 +223,7 @@ check("video key: next video loads the next link", cmds[-1][0] == "load" and cmd
 n = len(app.events)
 app.recording, app.paused = True, False
 app._on_key_press(k)
-check("video key: not recorded", len(app.events) == n)
+windows_only("video key: not recorded") or check("video key: not recorded", len(app.events) == n)
 app.recording = False
 app.video_live = False
 check("video key: off when the window is closed", app._video_key_action(k) is None)

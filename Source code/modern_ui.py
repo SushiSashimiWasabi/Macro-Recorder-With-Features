@@ -19,6 +19,10 @@ from ui_common import *  # noqa: F401,F403
 from automation_ui import AutomationMixin
 from check_ui import CheckMixin
 from record_window_ui import RecordWindowMixin
+from stuck_ui import StuckMixin
+from timed_start_ui import TimedStartMixin
+import timed_start_ui
+import step_more
 import macro_versions
 from discord_ui import DiscordMixin
 from extras_ui import ExtrasMixin
@@ -34,7 +38,7 @@ from settings_window import SettingsWindowMixin
 from video_ui import VideoMixin
 
 
-class ModernMacroRecorder(CheckMixin, RecordWindowMixin, ExtrasMixin, ProfilesMixin, PictureWatchMixin, SettingsPagesMixin, PictureActionsMixin, AutomationMixin, DiscordMixin, RemoteMixin, ResultsMixin, SettingsWindowMixin, MacroEditorMixin, EditWindowMixin, VideoMixin, core.MacroRecorder):
+class ModernMacroRecorder(TimedStartMixin, CheckMixin, RecordWindowMixin, StuckMixin, ExtrasMixin, ProfilesMixin, PictureWatchMixin, SettingsPagesMixin, PictureActionsMixin, AutomationMixin, DiscordMixin, RemoteMixin, ResultsMixin, SettingsWindowMixin, MacroEditorMixin, EditWindowMixin, VideoMixin, core.MacroRecorder):
     def __init__(self, root, preview=False):
         self.preview = preview
         self.sub_note = "Record something, or open a macro"
@@ -617,6 +621,8 @@ class ModernMacroRecorder(CheckMixin, RecordWindowMixin, ExtrasMixin, ProfilesMi
         self.game_asked = False
         if not self._check_program():
             return
+        if not (getattr(self, "test_play", None) or {}).get("mode") == "ghost":
+            self.check_sensitive()  # (2.12: a macro from someone else that types elsewhere or reads the clipboard)
         self.play_name = self.name_var.get().strip()
         # (reset before the playback thread starts: it reads the clock straight away)
         self.play_paused_at = None
@@ -650,6 +656,8 @@ class ModernMacroRecorder(CheckMixin, RecordWindowMixin, ExtrasMixin, ProfilesMi
     def stop_playback(self):
         if self.playing:
             self.stopped_by_user = True
+            if getattr(self, "restart_after_run", None):  # (2.12: Stop also cancels a timed start that waits)
+                self.cancel_timed_start("cancelled: playback was stopped")
         super().stop_playback()
 
     def _play_clock(self):
@@ -717,6 +725,9 @@ class ModernMacroRecorder(CheckMixin, RecordWindowMixin, ExtrasMixin, ProfilesMi
 
     def _run_finished(self, count, how):
         super()._run_finished(count, how)
+        if getattr(self, "restart_after_run", None):  # (2.12: a timed start waits for this run's end)
+            core.diag.info("Timed start: the run ended, the macro stops and starts again")
+            self.stop_play.set()
         sound = self._run_sound()
         if sound:
             self._call_ui(lambda: self._sound(sound))
@@ -774,8 +785,12 @@ class ModernMacroRecorder(CheckMixin, RecordWindowMixin, ExtrasMixin, ProfilesMi
                 if self.result_matchers and self.session.runs:
                     extra.append(self.session.summary())
                 counters = getattr(self, "counters", None)
+                shown = getattr(self, "timer_text", None)  # (2.12) Do maths "Total: 1+4=5", or a Note
+                if shown:
+                    extra.append(short(shown, 40))
                 if counters:  # (2.11) "Wins 3 · Tries 1"
-                    extra += [f"{short(n, 14)} {v}" for n, v in list(counters.items())[:4]]
+                    extra += [f"{short(n, 14)} {step_more.fmt(v)}" for n, v in list(counters.items())[:4]
+                              if not (shown and shown.startswith(n + ":"))]
                 if extra:
                     note = "  ·  ".join([short(note, 34)] + extra)
                 clock = format_clock(self._play_clock() - self.play_began)
@@ -849,6 +864,12 @@ class ModernMacroRecorder(CheckMixin, RecordWindowMixin, ExtrasMixin, ProfilesMi
         if getattr(self, "test_play", None):
             self._test_done(reason)
             return
+        plan, self.restart_after_run = getattr(self, "restart_after_run", None), None
+        if plan is not None:  # (2.12: the timed start that waited: now, with its warning and countdown)
+            plan.pop("phase", None)
+            self.root.after(800, lambda: self.plan_timed_start(time.time(), plan.get("why", "timed"),
+                                                               **{k: v for k, v in plan.items()
+                                                                  if k not in ("at", "why")}))
         self._add_to_all_time()
         self._remember_found_sizes()
         self._show_session()
@@ -1395,6 +1416,9 @@ def main(preview=False):
     threading.Thread(target=updater.cleanup_old, daemon=True).start()  # leftover from an update
     if IS_WIN:  # unpacked copies left in Temp by copies that were force-closed
         threading.Thread(target=updater.cleanup_leftover_unpacks, daemon=True).start()
+    startup = timed_start_ui.STARTUP_FLAG in sys.argv  # (2.12: opened by Windows at start-up)
+    if not timed_start_ui.single_copy(preview) and startup:
+        return  # (already open: start-up never opens a second copy)
     root = tk.Tk()
     app = ModernMacroRecorder(root, preview=preview)
     diag.info(f"Started version {APP_VERSION}" + (" (preview)" if preview else ""))
@@ -1410,6 +1434,9 @@ def main(preview=False):
         root.after(4000, app.check_for_update)
     if len(sys.argv) > 1 and os.path.isfile(sys.argv[1]):
         root.after(100, lambda: app.open_path(sys.argv[1]))
+    if startup:
+        root.after(4000, app.startup_action)
+    root.after(3000, app.schedule_start)  # (2.12: the remembered alarm and timer)
     if IS_MAC:
         def open_documents(*paths):
             if paths:

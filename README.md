@@ -1,5 +1,7 @@
 # Macro Recorder
 
+[![Tests](https://github.com/SushiSashimiWasabi/Macro-Recorder-With-Features/actions/workflows/tests.yml/badge.svg)](https://github.com/SushiSashimiWasabi/Macro-Recorder-With-Features/actions/workflows/tests.yml)
+
 Records what you do with the mouse and keyboard, then plays it back. You can save a recording to a
 file and send it to friends.
 

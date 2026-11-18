@@ -31,6 +31,15 @@ def check(name, cond, info=""):
     print(("PASS " if cond else "FAIL ") + name + (f"  [{info}]" if info else ""))
 
 
+def windows_only(name):
+    """(2.12) A check for a feature that only exists on Windows: on other systems it's skipped (printed as
+    "SKIP (Windows only)" and counted in the summary), never run."""
+    if sys.platform == "win32":
+        return False
+    print("SKIP (Windows only) " + name)
+    return True
+
+
 root = tk.Tk()
 root.withdraw()
 app = modern_ui.ModernMacroRecorder(root)
@@ -709,31 +718,31 @@ def box_then_cancel(action):
 
 root.deiconify()
 pump(0.2)
-check("box: Record in the main window shows it on screen", box_then_cancel(app.toggle_record)
+windows_only("box: Record in the main window shows it on screen") or check("box: Record in the main window shows it on screen", box_then_cancel(app.toggle_record)
       and not app.recording and app.record_countdown_left == 0)
 app.load(path_t, quiet=True)
 app.open_editor()
 ed = app.macro_editor
 pump(0.3)
 app.boxes.askchoice = lambda *a, **k: "end"
-check("box: Record keys and mouse… in Edit shows it on screen (the freeze)", box_then_cancel(ed.record_here))
-check("box: cancelling it brings the Edit window back, nothing records",
+windows_only("box: Record keys and mouse… in Edit shows it on screen (the freeze)") or check("box: Record keys and mouse… in Edit shows it on screen (the freeze)", box_then_cancel(ed.record_here))
+windows_only("box: cancelling it brings the Edit window back, nothing records") or check("box: cancelling it brings the Edit window back, nothing records",
       ed.win.state() != "withdrawn" and app.record_into is None and not app.recording)
 empty2 = workflow.new_action("repeat")
 ed.change(lambda: ed.steps.append(empty2), select=empty2["id"])
 ed.tree.selection_set(empty2["id"])
 app.boxes.askchoice = lambda *a, **k: "inside"
-check("box: also for recording inside the chosen group", box_then_cancel(ed.record_here)
+windows_only("box: also for recording inside the chosen group") or check("box: also for recording inside the chosen group", box_then_cancel(ed.record_here)
       and ed.win.state() != "withdrawn")
 root.withdraw()
 pump(0.1)
 app.boxes.askchoice = lambda *a, **k: "end"
-check("box: on screen even when no window of the app is showing", box_then_cancel(ed.record_here))
+windows_only("box: on screen even when no window of the app is showing") or check("box: on screen even when no window of the app is showing", box_then_cancel(ed.record_here))
 root.deiconify()
 ew2 = app._events_window(ed.win, [key(65, 0.0), key(65, 0.1, False)], lambda e: None)
 pump(0.2)
-check("box: Record here… in the recorded events shows it on screen", box_then_cancel(ew2.record_here))
-check("box: and both windows come back", ew2.winfo_exists() and ew2.state() != "withdrawn"
+windows_only("box: Record here… in the recorded events shows it on screen") or check("box: Record here… in the recorded events shows it on screen", box_then_cancel(ew2.record_here))
+windows_only("box: and both windows come back") or check("box: and both windows come back", ew2.winfo_exists() and ew2.state() != "withdrawn"
       and ed.win.state() != "withdrawn")
 ew2.destroy()
 ed.win.destroy()

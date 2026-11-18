@@ -20,6 +20,8 @@ import time
 import macro_versions
 
 from ui_common import *  # noqa: F401,F403
+from edit_more import EditMoreMixin
+import step_more
 
 OWN_EXTS = (".macro", ".json")
 
@@ -56,7 +58,7 @@ def read_macro(path):
     return workflow.from_events(events), data
 
 
-class MacroEditor:
+class MacroEditor(EditMoreMixin):
     def __init__(self, app):
         self.app = app
         self.entries = []      # [(label, path or None)]
@@ -518,6 +520,9 @@ class MacroEditor:
         app = self.app
         label, path = self.entries[self.current]
         steps = workflow.ensure_ids(copy.deepcopy(self.steps))
+        # (2.12) what you add here yourself (typing into a program, reading the copied number) is OK'd;
+        # what the macro already did when it came to you still asks once at Play
+        added = step_more.sensitive_parts(steps) - step_more.sensitive_parts(self.base_steps or [])
         if not steps:
             app.boxes.showinfo("Edit", "A macro needs at least one step.", parent=self.win)
             return False
@@ -561,11 +566,18 @@ class MacroEditor:
             if own and os.path.normcase(new_path) != os.path.normcase(path) and \
                     hasattr(app, "_pictures_macro_renamed"):
                 app._pictures_macro_renamed(path, new_path)  # (pictures used only for it follow it)
+            if added and hasattr(app, "trust_steps"):
+                app.trust_steps(app._macro_key(new_path), added)
+            old_key = app._macro_key(path)
+            if hasattr(app, "_trusted") and old_key in app._trusted() and app._macro_key(new_path) != old_key:
+                app.trust_steps(app._macro_key(new_path), app._trusted()[old_key])
             core.save_settings(app.settings)
             if is_open:
                 app.current_file = new_path
             self.entries[self.current] = (name, new_path)
             self.file_data = data
+        if path is None and added and hasattr(app, "trust_steps"):
+            app.trust_steps("", added)
         if is_open:
             app.set_steps(copy.deepcopy(steps))
             app.name_var.set(name)
@@ -599,17 +611,22 @@ class MacroEditor:
         words = {k: w for k, _n, w in workflow.ADDABLE}
         names = {k: n for k, n, _w in workflow.ADDABLE}
         sections = [("KEYS AND MOUSE", ("key", "type", "click", "move", "scroll")),
-                    ("WAITING", ("wait", "wait_picture")),
-                    ("GROUPS", ("if", "repeat", "retry")),
-                    ("COUNTERS", ("counter_add", "counter_set", "if_counter")),
+                    ("WAITING", ("wait", "wait_random", "wait_picture", "game")),
+                    ("GROUPS", ("if", "else", "repeat", "retry")),
+                    ("COUNTERS AND MATHS", ("counter_add", "counter_set", "if_counter", "maths", "read_clipboard")),
+                    None,  # (the second column)
+                    ("JUMPS", ("label", "goto")),
                     ("CHAIN (PLAY OTHER MACROS)", ("play_macro",)),
-                    ("MACRO", ("restart", "stop", "note")),
+                    ("TELL ME", ("discord", "screenshot", "sound")),
+                    ("MACRO", ("set_speed", "restart", "stop", "note")),
                     ("RECORD OR COPY IN", ("record_here", "insert_macro"))]
         pop = self.add_popup = tk.Toplevel(self.win, bg=BORDER)
         pop.overrideredirect(True)
         pop.attributes("-topmost", True)
-        inner = tk.Frame(pop, bg=CARD)
-        inner.pack(fill="both", expand=True, padx=1, pady=1)
+        outer = tk.Frame(pop, bg=CARD)
+        outer.pack(fill="both", expand=True, padx=1, pady=1)
+        inner = tk.Frame(outer, bg=CARD)
+        inner.pack(side="left", fill="both", expand=True, anchor="n")
 
         def close(_e=None):
             if pop.winfo_exists():
@@ -620,7 +637,14 @@ class MacroEditor:
             self.add(kind)
         name_font = (FAMILY, 10, "bold")
         name_width = max(len(n) for n in names.values()) + 2
-        for title, kinds in sections:
+        for section in sections:
+            if section is None:  # (2.12: the list got long: a second column)
+                tk.Frame(inner, bg=CARD, height=6).pack(fill="x")
+                tk.Frame(outer, bg=BORDER, width=1).pack(side="left", fill="y", pady=8)
+                inner = tk.Frame(outer, bg=CARD)
+                inner.pack(side="left", fill="both", expand=True, anchor="n")
+                continue
+            title, kinds = section
             tk.Label(inner, text=title, bg=CARD, fg=MUTED, font=F_SECTION, anchor="w").pack(
                 fill="x", padx=12, pady=(8, 2))
             for kind in kinds:
@@ -672,6 +696,16 @@ class MacroEditor:
 
         def do():
             lst, i = self._place()
+            found = self._selected()
+            if kind == "else" and found:
+                # (2.12) an Else goes right after its If: the chosen If, or the If the chosen action is in
+                # (a key just added inside the If is still chosen: the Else must not land inside the If)
+                if found[0].get("kind") in ("if", "if_counter"):
+                    lst, i = found[1], found[2] + 1
+                elif found[3] is not None and found[3].get("kind") in ("if", "if_counter"):
+                    outer = workflow.find(self.steps, found[3].get("id"))
+                    if outer:
+                        lst, i = outer[1], outer[2] + 1
             lst.insert(i, a)
         self.change(do, select=a["id"])
 
@@ -1068,6 +1102,11 @@ class MacroEditor:
                 b.pop("off", None)  # ("only this action": also when it's turned off)
         else:
             steps = workflow.steps_from(self.steps, chosen[0][0]["id"])
+        # (2.12) an Else on its own never runs: its If plays first, so the test shows what really happens
+        a, lst, i, _parent = chosen[0]
+        if a.get("kind") == "else" and step_more.else_has_if(lst, i) and \
+                not any(c[0] is lst[i - 1] for c in chosen):
+            steps.insert(0, copy.deepcopy(lst[i - 1]))
         screen, program = self._macro_fit()
         found = not (hasattr(self, "ghost_not_found") and self.ghost_not_found.get())
         return self.app.play_test(steps, "ghost" if how == "ghost" else "test", screen, program, found=found)
@@ -1398,12 +1437,23 @@ class MacroEditor:
             box.selection_clear()
             value = next(k for k, v in options.items() if v == var.get())
             if a.get(key) != value:
-                self.change(lambda: a.__setitem__(key, value), select=a["id"], keep_detail=True)
+                self.change(lambda: a.__setitem__(key, value), select=self._owner(a)["id"], keep_detail=True)
                 self._refresh_row(a)
         box.bind("<<ComboboxSelected>>", picked)
 
+    def _owner(self, a):
+        """The step a value belongs to: the step itself, or (for an If / Retry condition, which has no
+        id of its own) the chosen step. (2.12 fix: changing a condition's drop-down failed with an error.)"""
+        if "id" in a:
+            return a
+        found = self._selected()
+        return found[0] if found else a
+
     def _refresh_row(self, a):
         """The step's line in the list and the summary after a value changed (no new Undo point)."""
+        a = self._owner(a)
+        if "id" not in a:
+            return
         name, words = workflow.describe(a)
         if self.tree.exists(a["id"]):
             text = f"{name}   ·   {words}" if words else name
@@ -1517,9 +1567,11 @@ class MacroEditor:
 
     def _detail_wait(self, box, a):
         self._field(box, "Wait (seconds)", a, "seconds", float, 0, 36000)
+        self._more_wait_rows(box, a)
 
     def _detail_note(self, box, a):
         self._field(box, "Note", a, "text", str, width=34)
+        self._more_note_rows(box, a)
 
     def _detail_key(self, box, a):
         row = self._row(box, "Key")
@@ -1545,6 +1597,7 @@ class MacroEditor:
                                                     "up": "Let go of it"})
         self._field(box, "How many times", a, "times", int, 1, 1000, tip="when pressing")
         self._field(box, "Hold it down for (seconds)", a, "hold", float, 0, 3600, tip="0 = a quick press")
+        self._more_key_rows(box, a)
 
     def _detail_type(self, box, a):
         tk.Label(box, text="Text to type", bg=BG, fg=TEXT, font=F_BASE, anchor="w").pack(fill="x")
@@ -1561,6 +1614,7 @@ class MacroEditor:
                 self._refresh_row(a)
         text.bind("<KeyRelease>", typed)
         self._field(box, "Time between letters (seconds)", a, "delay", float, 0, 5)
+        self._more_type_rows(box, a)
 
     def _point_rows(self, box, a):
         self._field(box, "X (from the left of the screen)", a, "x", int)
@@ -1570,6 +1624,8 @@ class MacroEditor:
 
         def pick():
             def picked(x, y):
+                x, y = self._spot_to_macro(x, y)  # (2.12: kept in the macro's size, like colour spots)
+
                 def do():
                     a["x"], a["y"] = x, y
                 self.change(do, select=a["id"])
@@ -1582,12 +1638,16 @@ class MacroEditor:
         self._choice(box, "Click", a, "mode", {"click": "Click", "double": "Double-click", "down": "Hold down",
                                                "up": "Let go"})
         self._field(box, "Hold the button for (seconds)", a, "hold", float, 0, 3600, tip="0 = a quick click")
+        self._more_click_rows(box, a)
 
     def _detail_move(self, box, a):
-        self._point_rows(box, a)
+        if not a.get("relative"):
+            self._point_rows(box, a)
+        self._more_move_rows(box, a)
 
     def _detail_scroll(self, box, a):
         self._field(box, "Notches (+ up, - down)", a, "amount", int, -100, 100)
+        self._more_scroll_rows(box, a)
 
     def _picture_thumb(self, box, holder, on_change):
         """The picture of a step or condition, with buttons to take a new one."""
@@ -1629,24 +1689,149 @@ class MacroEditor:
         ttk.Button(row, text="Picture file…", command=from_file).pack(side="left", padx=6)
 
     def _detail_wait_picture(self, box, a):
-        self._picture_thumb(box, a, lambda fn: self.change(fn, select=a["id"]))
-        self._field(box, "Name", a, "name", str, width=24)
+        color = self._color_switch(box, a, a)
+        if color:
+            self._color_rows(box, a, a)
+        else:
+            self._picture_thumb(box, a, lambda fn: self.change(fn, select=a["id"]))
+            self._field(box, "Name", a, "name", str, width=24)
         self._field(box, "Wait up to (seconds, 0 = no limit)", a, "timeout", float, 0, 36000)
-        self._field(box, "Match (%)", a, "match", int, 50, 99)
+        if not color:
+            self._how_close(box, a)
         click = tk.BooleanVar(value=bool(a.get("click")))
-        row = self._row(box, "Click on it when it shows")
+        row = self._row(box, "Click on the spot when it shows" if color else "Click on it when it shows")
         Switch(row, click, command=lambda: self.change(lambda: a.__setitem__("click", bool(click.get())),
                                                        select=a["id"])).pack(side="right")
-        self._choice(box, "If it doesn't show in time", a, "otherwise", {"go on": "Go on with the macro",
-                                                                        "stop": "Stop the macro"})
+        self._rebuild_choice(box, "If it doesn't happen in time", a, "otherwise", self.OTHERWISE)
+        self._more_wait_picture_rows(box, a)
 
     def _condition(self, box, a):
         c = a.setdefault("condition", {"shows": True, "png": None, "screen_h": None, "match": 85})
         tk.Label(box, text="CONDITION", bg=BG, fg=MUTED, font=F_SECTION, anchor="w").pack(fill="x")
-        self._choice(box, "When this picture", c, "shows", {True: "shows on screen", False: "doesn't show"})
-        self._picture_thumb(box, c, lambda fn: self.change(fn, select=a["id"]))
-        self._field(box, "Name", c, "name", str, width=24)
-        self._field(box, "Match (%)", c, "match", int, 50, 99)
+        if self._condition_kind_row(box, a, c) != "picture":  # (2.12: a counter, a program or the time)
+            self._condition_other_rows(box, a, c)
+            self._condition_more_rows(box, a, c)
+            return
+        color = self._color_switch(box, a, c)
+        self._choice(box, "When this colour" if color else "When this picture", c, "shows",
+                     {True: "shows on screen", False: "doesn't show"})
+        if color:
+            self._color_rows(box, a, c)
+        else:
+            self._picture_thumb(box, c, lambda fn: self.change(fn, select=a["id"]))
+            self._field(box, "Name", c, "name", str, width=24)
+            self._how_close(box, c)
+        self._condition_more_rows(box, a, c)
+
+    # ------------------------------------------------------------ (2.12) colour checks
+
+    def _color_switch(self, box, a, h):
+        """The "Check a colour instead of a picture" switch (off at first). True when it's on."""
+        on = tk.BooleanVar(value=h.get("color_on") is True)
+        row = self._row(box, "Check a colour instead of a picture", "no picture needed")
+
+        def flip():
+            def do():
+                h["color_on"] = bool(on.get())
+                if h["color_on"]:
+                    for k, v in (("tolerance", 10), ("area", 1), ("hold", 0.0), ("where", "spot")):
+                        h.setdefault(k, v)
+            self.change(do, select=a["id"])
+        Switch(row, on, command=flip).pack(side="right")
+        return on.get()
+
+    COLOR_HELP = ("A colour check looks at one spot of the game (or the whole screen) and asks: is this colour "
+                  "there? It's quicker than a picture and works for things like a health bar turning red or a "
+                  "button lighting up.\n\n"
+                  "Pick spot and colour: click the spot on a frozen screenshot; its colour is taken too. "
+                  "Pick colour only: take a colour from anywhere.\n"
+                  "How close: 100 = exactly this colour; 80-90 is usual (light changes a little).\n"
+                  "Area: one pixel, or a small square around the spot (more steady).\n"
+                  "Must stay for: it only counts when the colour has stayed that long (no flickers).\n"
+                  "Where to look: only the spot you picked (best), or the whole screen (any patch of the colour "
+                  "counts; slower, and other things with that colour can count too).\n\n"
+                  "The spot follows \"Fit clicks to: The game window\", like clicks do.\n\n"
+                  "More than one screen? The picker shows your main screen only: put the game there to pick. "
+                  "\"The whole screen\" also means the main screen only.")
+
+    def _color_rows(self, box, a, h):
+        import color_check
+
+        app = self.app
+        row = self._row(box, "Spot", f"{h['x']}, {h['y']}" if "x" in h else "not picked yet")
+        link(row, "ⓘ", lambda: app.boxes.showinfo("Colour check", self.COLOR_HELP, parent=self.win),
+             bg=BG).pack(side="left", padx=(6, 0))
+
+        def picked(x, y, rgb):
+            x, y = self._spot_to_macro(x, y)  # (2.12: picked on this screen, kept in the macro's size)
+            self.change(lambda: h.update(x=x, y=y, rgb=list(rgb)), select=a["id"])
+
+        def picked_color(_x, _y, rgb):
+            self.change(lambda: h.update(rgb=list(rgb)), select=a["id"])
+        ttk.Button(row, text="Pick spot and colour…",
+                   command=lambda: app._pick_point(self.win, picked, with_color=True)).pack(side="right")
+        row = self._row(box, "Colour", color_check.hex_of(h["rgb"]) if h.get("rgb") else "not picked yet")
+        ttk.Button(row, text="Pick colour only…",
+                   command=lambda: app._pick_point(self.win, picked_color, with_color=True)).pack(side="right")
+        if h.get("rgb"):
+            tk.Label(row, text="      ", bg=color_check.hex_of(h["rgb"]), relief="flat").pack(side="right", padx=8)
+        self._how_close(box, h)
+        self._choice(box, "Area", h, "area", {1: "1 pixel", 5: "A small square (5 × 5)"})
+        self._field(box, "Must stay for (seconds)", h, "hold", float, 0, 60)
+        self._choice(box, "Where to look", h, "where", {"spot": "Only the spot I picked",
+                                                      "area": "An area I draw",
+                                                      "screen": "The whole screen"})
+        if h.get("where") == "area":
+            row = self._row(box, "Area", f"{h['x0']}, {h['y0']} to {h['x1']}, {h['y1']}" if "x0" in h
+                            else "not drawn yet")
+
+            def drew(x0, y0, x1, y1):
+                x0, y0 = self._spot_to_macro(x0, y0)
+                x1, y1 = self._spot_to_macro(x1, y1)
+                self.change(lambda: h.update(x0=x0, y0=y0, x1=x1, y1=y1), select=self._owner(h)["id"])
+            ttk.Button(row, text="Draw the area…", command=lambda: self._draw_area(drew)).pack(side="right")
+        self._look_now_row(box, h)
+        if h.get("where") == "screen":
+            tk.Label(box, text="The whole screen: any patch of this colour counts, so other things with the same "
+                               "colour can count too (false matches), and it's looked at less often and costs more "
+                               "of the PC. Use \"Only the area I picked\" when you can.", bg=BG, fg=AMBER,
+                     font=F_SMALL, anchor="w", justify="left", wraplength=460).pack(fill="x", pady=(6, 0))
+
+    def _spot_to_macro(self, x, y):
+        """A spot picked on this screen, in the size the macro was made for (like its recordings)."""
+        ev = self.to_macro_size([{"type": "move", "x": int(x), "y": int(y), "t": 0.0}])[0]
+        return int(ev["x"]), int(ev["y"])
+
+    def _draw_area(self, on_area):
+        """Freeze the screen and drag a box (like taking a picture of an area)."""
+        app = self.app
+        self.win.withdraw()
+        app.root.withdraw()
+        app.root.after(300, lambda: app._show_picker(
+            on_area=on_area, hidden=(self.win,),
+            tip="Drag a box around where the colour can show. Esc cancels."))
+
+    def _look_now_row(self, box, h):
+        """(2.12) Look now: is the colour there, how close the best match is, and where."""
+        import color_check
+
+        row = self._row(box, "Look now", "is it on the screen right now?")
+        result = tk.Label(row, text="", bg=BG, fg=MUTED, font=F_SMALL)
+
+        def look():
+            try:
+                seen, best, where = color_check.look(h)
+            except Exception as exc:
+                result.config(text=f"couldn't look: {exc}", fg=RED)
+                return
+            if not color_check.ready(h):
+                result.config(text="pick a colour (and a spot or an area) first", fg=AMBER)
+                return
+            spot = f" at {where[0]}, {where[1]}" if where else ""
+            result.config(text=(f"Seen ✓ (best {best}%{spot})" if seen else f"Not seen ✗ (best {best}%{spot})"),
+                          fg=GREEN if seen else RED)
+        ttk.Button(row, text="Look now", command=look).pack(side="right")
+        result.pack(side="right", padx=(0, 8))
 
     def _detail_if(self, box, a):
         self._condition(box, a)
@@ -1697,7 +1882,9 @@ class MacroEditor:
 
     def _detail_if_counter(self, box, a):
         self._counter_name(box, a)
-        self._field(box, "When it's at least", a, "at_least", int, -workflow.COUNTER_LIMIT, workflow.COUNTER_LIMIT)
+        self._more_if_counter_rows(box, a)
+        self._field(box, "The number", a, "at_least", int, -workflow.COUNTER_LIMIT, workflow.COUNTER_LIMIT,
+                    tip="when no counter is chosen above")
         tk.Label(box, text="The actions inside only run when the counter has reached this number. Put a "
                            "\"Set a counter\" to 0 inside if it should count again from the start.", bg=BG,
                  fg=DIM, font=F_SMALL, anchor="w", justify="left", wraplength=460).pack(fill="x", pady=(8, 0))
@@ -1710,12 +1897,15 @@ class MacroEditor:
                  wraplength=460).pack(fill="x", pady=(8, 0))
 
     def _detail_repeat(self, box, a):
-        self._field(box, "Repeat how many times", a, "times", int, 0, 100000)
+        self._more_repeat_rows(box, a)
+        if a.get("mode", "times") == "times":
+            self._field(box, "Repeat how many times", a, "times", int, 0, 100000)
 
     def _detail_retry(self, box, a):
         self._condition(box, a)
         self._field(box, "At most how many tries", a, "tries", int, 1, 1000)
-        tk.Label(box, text="The actions inside run, then the condition is checked (for up to 2 seconds); if "
+        self._more_retry_rows(box, a)
+        tk.Label(box, text="The actions inside run, then the condition is checked (for the seconds above); if "
                            "it isn't true yet, they run again.", bg=BG, fg=DIM, font=F_SMALL, anchor="w",
                  justify="left", wraplength=460).pack(fill="x", pady=(8, 0))
 
@@ -1757,6 +1947,7 @@ class MacroEditor:
             fails[a["on_fail"]] = os.path.splitext(os.path.basename(a["on_fail"]))[0]
         a.setdefault("on_fail", "")
         self._choice(box, "If a run of it fails, play", a, "on_fail", fails)
+        self._more_play_macro_rows(box, a)
         counts = tk.BooleanVar(value=bool(a.get("counts", True)))
         row = self._row(box, "Each time counts as a run", "in the results and on Discord")
         Switch(row, counts, command=lambda: self.change(lambda: a.__setitem__("counts", bool(counts.get())),
@@ -1776,6 +1967,7 @@ class MacroEditor:
     def _detail_stop(self, box, a):
         tk.Label(box, text="Ends the macro here. Usually inside an If.", bg=BG, fg=MUTED, font=F_BASE, anchor="w",
                  justify="left", wraplength=460).pack(fill="x")
+        self._more_stop_rows(box, a)
 
 
 class MacroEditorMixin:
@@ -1791,9 +1983,10 @@ class MacroEditorMixin:
         self.edit_win = self.macro_editor.win
         self.edit_win.after(200, self.macro_editor.offer_autosave)
 
-    def _pick_point(self, parent, on_pick, hidden=()):
+    def _pick_point(self, parent, on_pick, hidden=(), with_color=False):
         """Freeze the screen and let the user click a spot: on_pick(x, y) in screen pixels.
-        `hidden`: more windows to hide meanwhile (and show again after)."""
+        `hidden`: more windows to hide meanwhile (and show again after). with_color (2.12): a swatch
+        follows the mouse with the colour under it, and on_pick(x, y, (r, g, b)) gets it too."""
         windows = [w for w in hidden if w is not None] + [parent]
 
         def show_again():
@@ -1827,8 +2020,25 @@ class MacroEditorMixin:
             canvas.create_image(0, 0, image=photo, anchor="nw")
             canvas.photo = photo
             canvas.create_rectangle(0, 0, w, 36, fill="black", outline="")
-            canvas.create_text(w // 2, 18, text="Click the spot. Esc cancels.", fill="white",
-                               font=(FAMILY, 12, "bold"))
+            canvas.create_text(w // 2, 18, text=("Click the spot: its colour is taken too (the square shows it). "
+                                                 "Esc cancels." if with_color else "Click the spot. Esc cancels."),
+                               fill="white", font=(FAMILY, 12, "bold"))
+
+            def color_at(x, y):
+                b_, g_, r_ = (int(v) for v in shot[max(0, min(h - 1, y)), max(0, min(w - 1, x))][:3])
+                return r_, g_, b_
+            if with_color:
+                swatch = canvas.create_rectangle(0, 0, 0, 0, outline="white", width=2)
+                swatch_text = canvas.create_text(0, 0, text="", fill="white", anchor="w", font=(FAMILY, 10, "bold"))
+
+                def moved(e):
+                    rgb = color_at(e.x, e.y)
+                    hx = "#%02x%02x%02x" % rgb
+                    canvas.coords(swatch, e.x + 18, e.y + 18, e.x + 58, e.y + 58)
+                    canvas.itemconfig(swatch, fill=hx)
+                    canvas.coords(swatch_text, e.x + 64, e.y + 38)
+                    canvas.itemconfig(swatch_text, text=hx)
+                canvas.bind("<Motion>", moved)
 
             def close():
                 win.destroy()
@@ -1836,7 +2046,10 @@ class MacroEditorMixin:
 
             def clicked(e):
                 close()
-                on_pick(int(mon["left"] + e.x), int(mon["top"] + e.y))
+                if with_color:
+                    on_pick(int(mon["left"] + e.x), int(mon["top"] + e.y), color_at(e.x, e.y))
+                else:
+                    on_pick(int(mon["left"] + e.x), int(mon["top"] + e.y))
             canvas.bind("<Button-1>", clicked)
             win.bind("<Escape>", lambda e: close())
             win.focus_force()

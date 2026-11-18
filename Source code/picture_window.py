@@ -159,6 +159,8 @@ class PictureWatchMixin:
     def _show_picture_summary(self):
         if getattr(self, "picture_summary_var", None) is not None:
             self.picture_summary_var.set(self.picture_summary())
+        if hasattr(self, "_show_stuck_choice"):
+            self._show_stuck_choice()  # (2.12: the stuck run guard's "Looks for" line follows)
 
     # ------------------------------------------------------------ groups: the first start of 2.9
 
@@ -562,7 +564,7 @@ class PictureWatchWindow:
         self.btn_remove_group = ttk.Button(grow2, text="Remove", command=self.remove_group)
         for b in (self.btn_dup_group, self.btn_remove_group):
             b.pack(side="left", padx=(0, 6))
-        self.groups_tree = ttk.Treeview(left, show="tree", selectmode="browse")
+        self.groups_tree = ttk.Treeview(left, show="tree", selectmode="extended")
         self.groups_tree.pack(fill="both", expand=True, padx=(14, 6))
         self.groups_tree.tag_configure("off", foreground=DIM)
         self.groups_tree.bind("<<TreeviewSelect>>", lambda e: self._group_clicked())
@@ -586,13 +588,14 @@ class PictureWatchWindow:
         self.btn_from_screen = ttk.Button(row1, text="Add from screen…", command=self.add_from_screen)
         self.btn_from_file = ttk.Button(row1, text="Picture file…", command=self.add_from_file)
         self.btn_builtin = ttk.Button(row1, text="Add built-in ▾", command=self._builtin_menu)
-        for b in (self.btn_from_screen, self.btn_from_file, self.btn_builtin):
+        self.btn_colour = ttk.Button(row1, text="Colour…", command=self.add_colour)
+        for b in (self.btn_from_screen, self.btn_from_file, self.btn_builtin, self.btn_colour):
             b.pack(side="left", padx=(0, 6))
         self.btn_move_pic = ttk.Button(row2, text="Move to group ▾", command=self._move_menu)
         self.btn_remove_pic = ttk.Button(row2, text="Remove", command=self.remove_picture)
         for b in (self.btn_move_pic, self.btn_remove_pic):
             b.pack(side="left", padx=(0, 6))
-        self.pics_tree = ttk.Treeview(mid, show="tree", selectmode="browse", style="Pictures.Treeview",
+        self.pics_tree = ttk.Treeview(mid, show="tree", selectmode="extended", style="Pictures.Treeview",
                                       columns=("what",))
         self.pics_tree.pack(fill="both", expand=True, padx=12)
         self.pics_tree.bind("<Configure>", lambda e: self._split_columns(e.width), add="+")
@@ -602,6 +605,13 @@ class PictureWatchWindow:
         self.pics_tree.bind("<<TreeviewSelect>>", lambda e: self._picture_clicked())
         self.pics_tree.bind("<Delete>", lambda e: self.remove_picture())
         self._tree_tips(self.pics_tree)
+        # (2.12) choose many (Ctrl / Shift / drag), drag to move (onto a group: into it), copy and paste
+        TreeDrag(self.pics_tree, self._drop_pictures, others=[(self.groups_tree, self._drop_on_group)])
+        TreeDrag(self.groups_tree, lambda ids, target, where: None)
+        self.pics_tree.bind("<Button-3>", self._pictures_menu)
+        for seq, fn in (("<Control-c>", self.copy_pictures), ("<Control-v>", self.paste_pictures),
+                        ("<Control-d>", self.duplicate_pictures), ("<Control-e>", self.toggle_pictures)):
+            self.pics_tree.bind(seq, lambda e, fn=fn: (fn(), "break")[1])
         self.empty_note = tk.Label(mid, text="", bg=FIELD, fg=DIM, font=F_SMALL, justify="center", wraplength=320)
         tk.Frame(body, bg=BORDER, width=1).pack(side="left", fill="y")
 
@@ -826,6 +836,9 @@ class PictureWatchWindow:
         # (selecting in code sends this event later too: only a different group counts. Clicking the
         # group again while a picture is chosen doesn't change the selection, so it sends nothing)
         sel = self.groups_tree.selection()
+        if len(sel) > 1:  # (2.12: several groups chosen: Duplicate / Remove work on all of them)
+            self._show_buttons()
+            return
         if sel and sel[0] != self.sel_group:
             self.select_group(sel[0])
 
@@ -833,6 +846,11 @@ class PictureWatchWindow:
         if getattr(self, "filling_tree", False):
             return
         sel = self.pics_tree.selection()
+        if len(sel) > 1:  # (2.12) several chosen
+            self.sel_pic = None
+            self._show_many(len(sel))
+            self._show_buttons()
+            return
         if not sel or not sel[0].isdigit() or int(sel[0]) == self.sel_pic:
             return
         self.sel_pic = int(sel[0])
@@ -1021,7 +1039,7 @@ class PictureWatchWindow:
             self.change(lambda: core.set_picture_on(e, on))
         self._switch(row, core.picture_on(e), set_on)
 
-        if not key:
+        if not key and not e.get("color_on"):
             row = self._row("This picture is")
             kind_var = tk.StringVar(value=KIND_CHOICES[e.get("kind")])
             box = ttk.Combobox(row, textvariable=kind_var, state="readonly", width=40, values=list(KIND_CHOICES.values()))
@@ -1034,6 +1052,8 @@ class PictureWatchWindow:
                     self.change(lambda: e.update(kind=kind))
             box.bind("<<ComboboxSelected>>", kind_chosen)
 
+        if e.get("color_on"):
+            self._colour_options(e)
         if e.get("kind"):
             self._heading("MISSION RESULT")
             self._para(("When it shows, the run counts as won." if e["kind"] == stats.WIN
@@ -1046,8 +1066,11 @@ class PictureWatchWindow:
             others = [x for x in self.pics if not x.get("kind")]
             self.form = app._picture_action_form(holder, e, others, self.win, on_change=lambda: self._form_changed(e),
                                                  show_name=False, wrap=440)
-            self._own_matching(e)
+            if not e.get("color_on"):
+                self._own_matching(e)
         self._use_for(e)
+        if e.get("color_on"):
+            return  # (a colour has Look now above instead of Test now)
         self._heading("TEST")
         row = tk.Frame(self.detail, bg=BG)
         row.pack(fill="x", padx=18, pady=(0, 18))
@@ -1207,25 +1230,47 @@ class PictureWatchWindow:
         self.name_entry.focus_set()
         self.name_entry.select_range(0, "end")
 
+    def _chosen_groups(self):
+        sel = [gid for gid in self.groups_tree.selection() if self._group(gid)]
+        return [self._group(gid) for gid in sel] if len(sel) > 1 else []
+
     def duplicate_group(self):
+        many = self._chosen_groups()
+        if many:
+            self.change(lambda: [self._duplicate_group_now(g) for g in many])
+            return
         g = self._group(self.sel_group)
         if g is None:
             return
-        copy_g = {"id": f"g{int(time.time() * 1000)}", "name": self._unique_group_name(g.get("name", "Group") + " copy")}
+        self.change(lambda: self._duplicate_group_now(g))
+
+    def _duplicate_group_now(self, g):
+        copy_g = {"id": f"g{int(time.time() * 1000)}{len(self.groups)}",
+                  "name": self._unique_group_name(g.get("name", "Group") + " copy")}
         if g.get("on") is False:
             copy_g["on"] = False
-
-        def do():
-            self.groups.insert(self.groups.index(g) + 1, copy_g)
-            for e in [x for x in self.pics if x["group"] == g["id"]]:
-                new = dict(copy.deepcopy(e), group=copy_g["id"])
-                if e.get("builtin") and g["id"] == AOTR_ID:
-                    new.pop("on", None)  # (a copy of a built-in picture outside AOT:R starts off)
-                self.pics.append(self._with_uid(new))
-            self.sel_group, self.sel_pic = copy_g["id"], None
-        self.change(do)
+        self.groups.insert(self.groups.index(g) + 1, copy_g)
+        for e in [x for x in self.pics if x["group"] == g["id"]]:
+            new = self._copy_entry(e, copy_g["id"])
+            self.pics.append(new)
+        self.sel_group, self.sel_pic = copy_g["id"], None
 
     def remove_group(self):
+        many = [g for g in self._chosen_groups() if not fixed_group(g["id"])]
+        if many:
+            n = sum(1 for e in self.pics if e["group"] in {g["id"] for g in many})
+            if not self.app.boxes.askyesno("Picture watch", f"Remove these {len(many)} groups and their {n} "
+                                           f"picture{'s' if n != 1 else ''}?\n\n(Undo brings them back until you "
+                                           "close the window.)", parent=self.win):
+                return
+            gone = {g["id"] for g in many}
+
+            def do_many():
+                self.groups[:] = [g for g in self.groups if g["id"] not in gone]
+                self.pics[:] = [e for e in self.pics if e["group"] not in gone]
+                self.sel_group, self.sel_pic = MINE_ID, None
+            self.change(do_many)
+            return
         g = self._group(self.sel_group)
         if g is None or fixed_group(g["id"]):
             return
@@ -1296,6 +1341,113 @@ class PictureWatchWindow:
         app.root.withdraw()
         app.root.after(300, lambda: app._show_picker(on_pick=self._picked, hidden=tuple(hidden)))
 
+    # ------------------------------------------------------------ (2.12) a colour that counts
+
+    def add_colour(self):
+        """A colour instead of a picture (for "Add to a counter"): pick the spot and its colour."""
+        app = self.app
+        if app.recording or app.playing:
+            return
+
+        def picked(x, y, rgb):
+            import numpy as np
+
+            import color_check
+
+            file = f"colour_{int(time.time() * 1000)}.png"
+            swatch = np.zeros((24, 48, 3), np.uint8)
+            swatch[:, :] = (rgb[2], rgb[1], rgb[0])
+            try:
+                image_watch.save_image(os.path.join(core.watch_dir(), file), swatch)
+            except Exception as exc:
+                app.boxes.showerror("Picture watch", f"Couldn't keep the colour:\n{exc}", parent=self.win)
+                return
+            self._add_entry({"file": file, "screen_h": app.screen_h, "color_on": True, "rgb": list(rgb),
+                             "x": x, "y": y, "tolerance": 10, "area": 5, "hold": 0.0, "where": "spot",
+                             "action": "count", "counter": "Counter", "amount": 1, "cooldown": 5,
+                             "name": "Colour " + color_check.hex_of(rgb)})
+        app._pick_point(self.win, picked, with_color=True)
+
+    def _colour_options(self, e):
+        import color_check
+
+        app = self.app
+        self._heading("COLOUR")
+        self._para("This counts a colour, not a picture: it looks at the spot (or the area, or the whole screen) "
+                   "and counts when the colour shows. It can only \"Add to a counter\".")
+        row = self._row("Spot and colour", f"{color_check.hex_of(e.get('rgb'))} at {e.get('x')}, {e.get('y')}")
+
+        def picked(x, y, rgb):
+            self.change(lambda: e.update(x=x, y=y, rgb=list(rgb)))
+        ttk.Button(row, text="Pick again…", command=lambda: app._pick_point(self.win, picked, with_color=True)).pack(
+            side="right")
+
+        def choice(text, key, options):
+            r = self._row(text)
+            var = tk.StringVar(value=options.get(e.get(key), next(iter(options.values()))))
+            box = ttk.Combobox(r, textvariable=var, state="readonly", width=24, values=list(options.values()))
+            box.pack(side="right")
+
+            def chosen(_e=None):
+                box.selection_clear()
+                value = next(k for k, v in options.items() if v == var.get())
+                if e.get(key) != value:
+                    self.change(lambda: e.__setitem__(key, value))
+            box.bind("<<ComboboxSelected>>", chosen)
+
+        def number(text, key, low, high, kind=int, tip=None):
+            r = self._row(text, tip)
+            var = tk.StringVar(value=f"{e.get(key, low):g}" if kind is float else str(e.get(key, low)))
+            ent = tk.Entry(r, textvariable=var, width=6, bg=FIELD, fg=TEXT, font=F_BASE, relief="flat",
+                           insertbackground=TEXT, highlightthickness=1, highlightbackground=BORDER,
+                           highlightcolor=ACCENT)
+            ent.pack(side="right", ipady=3)
+
+            def typed(*_a):
+                try:
+                    value = max(low, min(high, kind(float(var.get().strip().replace(",", ".")))))
+                except ValueError:
+                    return
+                if e.get(key) != value:
+                    self._typing()
+                    e[key] = value
+                    self._show_buttons()
+            var.trace_add("write", typed)
+        number("How different it may be (%)", "tolerance", 0, 100, tip="0 = exactly; 10-20 usual")
+        choice("Area", "area", {1: "1 pixel", 5: "A small square (5 × 5)"})
+        number("Must stay for (seconds)", "hold", 0, 60, float)
+        choice("Where to look", "where", {"spot": "Only the spot I picked", "area": "An area I draw",
+                                          "screen": "The whole screen"})
+        if e.get("where") == "area":
+            r = self._row("Area", f"{e['x0']}, {e['y0']} to {e['x1']}, {e['y1']}" if "x0" in e else "not drawn yet")
+
+            def drew(x0, y0, x1, y1):
+                self.change(lambda: e.update(x0=x0, y0=y0, x1=x1, y1=y1))
+
+            def draw():
+                self.win.withdraw()
+                app.root.withdraw()
+                app.root.after(300, lambda: app._show_picker(
+                    on_area=drew, hidden=(self.win,), tip="Drag a box around where the colour can show. Esc cancels."))
+            ttk.Button(r, text="Draw the area…", command=draw).pack(side="right")
+        if e.get("where") == "screen":
+            self._para("The whole screen: other things with the same colour can count too, and it's looked at "
+                       "less often. Use the spot or an area when you can.", color=AMBER)
+        r = self._row("Look now", "is it on the screen right now?")
+        result = tk.Label(r, text="", bg=BG, fg=MUTED, font=F_SMALL)
+
+        def look():
+            try:
+                seen, best, where = color_check.look(e)
+            except Exception as exc:
+                result.config(text=f"couldn't look: {exc}", fg=RED)
+                return
+            spot = f" at {where[0]}, {where[1]}" if where else ""
+            result.config(text=(f"Seen ✓ (best {best}%{spot})" if seen else f"Not seen ✗ (best {best}%{spot})"),
+                          fg=GREEN if seen else RED)
+        ttk.Button(r, text="Look now", command=look).pack(side="right")
+        result.pack(side="right", padx=(0, 8))
+
     def add_from_file(self):
         path = filedialog.askopenfilename(parent=self.win, filetypes=[("Pictures", "*.png *.jpg *.jpeg *.bmp"),
                                                                      ("All files", "*.*")])
@@ -1364,8 +1516,200 @@ class PictureWatchWindow:
             self.sel_group = gid
         self.change(do)
 
+    # ------------------------------------------------------------ (2.12) several pictures at once
+
+    def _chosen_pics(self):
+        """The chosen pictures, in list order (one, or several)."""
+        uids = {int(i) for i in self.pics_tree.selection() if i.isdigit()}
+        if not uids and self.sel_pic is not None:
+            uids = {self.sel_pic}
+        return [e for e in self.pics if e["_uid"] in uids]
+
+    @staticmethod
+    def _locked(e):
+        """A built-in picture in the built-in AOT:R group: it can be copied, not moved or removed."""
+        return bool(e.get("builtin")) and e["group"] == AOTR_ID
+
+    def _show_many(self, n):
+        self._clear_detail()
+        self._heading(f"{n} pictures chosen")
+        self._para("Copy (Ctrl+C), Paste (Ctrl+V), Duplicate (Ctrl+D), Turn on / off (Ctrl+E) and Remove work "
+                   "on all of them; one Undo puts them back. Drag them to move them, or onto a group on the left "
+                   "to put them in it. Right-click for the same choices.\n\nThe built-in AOT:R group can only be "
+                   "copied from: its pictures can't be moved, removed or pasted into.")
+
+    def _new_file_for(self, name):
+        """A copy of a picture file in the pictures folder, under a new name (each copy its own file)."""
+        src = os.path.join(core.watch_dir(), name) if name and os.path.basename(name) == name else ""
+        if not src or not os.path.isfile(src):
+            return name
+        base, ext = os.path.splitext(name)
+        n = 2
+        while os.path.exists(os.path.join(core.watch_dir(), f"{base}_copy{n}{ext}")):
+            n += 1
+        new = f"{base}_copy{n}{ext}"
+        try:
+            shutil.copyfile(src, os.path.join(core.watch_dir(), new))
+        except OSError:
+            return name
+        self.new_files.add(new)
+        return new
+
+    def _copy_entry(self, e, gid):
+        new = copy.deepcopy({k: v for k, v in e.items() if k != "_uid"})
+        new["group"] = gid
+        if e.get("builtin"):
+            if gid != AOTR_ID:
+                new.pop("on", None)  # (a copy of a built-in picture outside AOT:R starts off)
+        else:
+            new["file"] = self._new_file_for(e["file"])
+        return self._with_uid(new)
+
+    def copy_pictures(self):
+        chosen = self._chosen_pics()
+        if chosen:
+            self.clipboard = [copy.deepcopy({k: v for k, v in e.items() if k != "_uid"}) for e in chosen]
+
+    def paste_pictures(self, gid=None):
+        items = getattr(self, "clipboard", None)
+        gid = gid or self._target_group()
+        if not items:
+            return
+        if gid == AOTR_ID:
+            self.app.boxes.showinfo("Picture watch", "The built-in AOT:R group can't be changed: paste into "
+                                    "another group.", parent=self.win)
+            return
+        news = []
+
+        def do():
+            for e in items:
+                new = self._copy_entry(dict(e, _uid=0), gid)
+                self.pics.append(new)
+                news.append(new)
+            self.sel_group, self.sel_pic = gid, None
+        self.change(do)
+        self._select_uids([e["_uid"] for e in news])
+
+    def duplicate_pictures(self):
+        chosen = self._chosen_pics()
+        if not chosen:
+            return
+        gid = chosen[0]["group"] if chosen[0]["group"] != AOTR_ID else MINE_ID
+        news = []
+
+        def do():
+            for e in chosen:
+                new = self._copy_entry(e, gid if e["group"] == AOTR_ID else e["group"])
+                self.pics.insert(self.pics.index(e) + 1 if e["group"] == new["group"] else len(self.pics), new)
+                news.append(new)
+            self.sel_group, self.sel_pic = news[0]["group"], None
+        self.change(do)
+        self._select_uids([e["_uid"] for e in news])
+
+    def toggle_pictures(self):
+        chosen = self._chosen_pics()
+        if not chosen:
+            return
+        turn_on = not all(core.picture_on(e) for e in chosen)
+        self.change(lambda: [core.set_picture_on(e, turn_on) for e in chosen])
+        self._select_uids([e["_uid"] for e in chosen])
+
+    def _select_uids(self, uids):
+        rows = [str(u) for u in uids if self.pics_tree.exists(str(u))]
+        if rows:
+            self.filling_tree = True
+            self.pics_tree.selection_set(rows)
+            self.pics_tree.see(rows[0])
+            self.filling_tree = False
+            if len(rows) > 1:
+                self.sel_pic = None
+                self._show_many(len(rows))
+            self._show_buttons()
+
+    def _drop_pictures(self, ids, target, where):
+        """Chosen pictures dragged onto another picture: they go before / after it (in its group)."""
+        moving = [e for e in self._chosen_pics() if not self._locked(e)]
+        t = self._pic(int(target)) if str(target).isdigit() else None
+        if not moving or t is None or t in moving:
+            return
+        if t["group"] == AOTR_ID and any(e["group"] != AOTR_ID for e in moving):
+            self.app.boxes.showinfo("Picture watch", "The built-in AOT:R group can't be changed.", parent=self.win)
+            return
+
+        def do():
+            for e in moving:
+                self.pics.remove(e)
+                if e["group"] != t["group"]:
+                    self._regroup(e, t["group"])
+            at = self.pics.index(t) + (1 if where == "after" else 0)
+            self.pics[at:at] = moving
+        self.change(do)
+        self._select_uids([e["_uid"] for e in moving])
+
+    def _drop_on_group(self, ids, gid):
+        """Chosen pictures dragged onto a group on the left: they go into it."""
+        if gid == AOTR_ID or self._group(gid) is None:
+            if gid == AOTR_ID:
+                self.app.boxes.showinfo("Picture watch", "The built-in AOT:R group can't be changed: use Add "
+                                        "built-in in another group, or copy from it.", parent=self.win)
+            return
+        moving = [e for e in self._chosen_pics() if not self._locked(e) and e["group"] != gid]
+        if not moving:
+            return
+
+        def do():
+            for e in moving:
+                self._regroup(e, gid)
+            self.sel_group, self.sel_pic = gid, None
+        self.change(do)
+        self._select_uids([e["_uid"] for e in moving])
+
+    @staticmethod
+    def _regroup(e, gid):
+        on = core.picture_on(e)
+        e["group"] = gid
+        core.set_picture_on(e, gid == AOTR_ID if e.get("builtin") else on)
+
+    def _pictures_menu(self, ev):
+        row = self.pics_tree.identify_row(ev.y)
+        if row and row not in self.pics_tree.selection():
+            self.pics_tree.selection_set(row)
+            self._picture_clicked()
+        m = self._menu()
+        has = bool(self._chosen_pics())
+        st = "normal" if has else "disabled"
+        m.add_command(label="Copy", accelerator="Ctrl+C", command=self.copy_pictures, state=st)
+        m.add_command(label="Paste", accelerator="Ctrl+V", command=self.paste_pictures,
+                      state="normal" if getattr(self, "clipboard", None) else "disabled")
+        m.add_command(label="Duplicate", accelerator="Ctrl+D", command=self.duplicate_pictures, state=st)
+        m.add_command(label="Turn on / off", accelerator="Ctrl+E", command=self.toggle_pictures, state=st)
+        m.add_separator()
+        m.add_command(label="Remove", accelerator="Delete", command=self.remove_picture, state=st)
+        try:
+            m.tk_popup(ev.x_root, ev.y_root)
+        finally:
+            m.grab_release()
+
     def remove_picture(self):
+        many = self._chosen_pics()
+        if len(many) > 1:
+            removable = [e for e in many if not self._locked(e)]
+            if not removable:
+                return
+            if len(removable) > 5 and not self.app.boxes.askyesno(
+                    "Picture watch", f"Remove these {len(removable)} pictures?\n\nUndo brings them back until you "
+                    "close the window.", parent=self.win):
+                return
+
+            def do_many():
+                for e in removable:
+                    self.pics.remove(e)
+                self.sel_pic = None
+            self.change(do_many)
+            return
         e = self._pic(self.sel_pic)
+        if e is None and many:
+            e = many[0]
         if e is None:
             return
         if e.get("builtin") and e["group"] == AOTR_ID:
@@ -1438,8 +1782,9 @@ class PictureWatchWindow:
         self.btn_dup_group.config(state="normal" if g is not None else "disabled")
         self.btn_remove_group.config(state="normal" if g is not None and not fixed_group(g["id"]) else "disabled")
         e = self._pic(self.sel_pic)
-        self.btn_remove_pic.config(state="normal" if e is not None and not (e.get("builtin") and e["group"] == AOTR_ID)
-                                   else "disabled")
+        many = self._chosen_pics() if hasattr(self, "pics_tree") else []
+        self.btn_remove_pic.config(state="normal" if (e is not None and not (e.get("builtin") and e["group"] == AOTR_ID))
+                                   or any(not self._locked(x) for x in many) else "disabled")
         self.btn_move_pic.config(state="normal" if e is not None else "disabled")
 
     def _problem(self):

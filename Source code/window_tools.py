@@ -83,6 +83,86 @@ def exe_of(hwnd):
     return None
 
 
+def exe_path_of(hwnd):
+    """The whole path of a window's program file (None if unknown)."""
+    pid = pid_of(hwnd)
+    if not pid:
+        return None
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return None
+    try:
+        buf = ctypes.create_unicode_buffer(1024)
+        size = wintypes.DWORD(1024)
+        if kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+            return buf.value
+    finally:
+        kernel32.CloseHandle(handle)
+    return None
+
+
+def original_name(path):
+    """(2.12) The name a program file was built with (its "OriginalFilename"), like 'PowerShell.EXE' for a
+    copy of PowerShell renamed to notepad2.exe. "" when it has none."""
+    if not IS_WIN or not path:
+        return ""
+    try:
+        version = ctypes.WinDLL("version")
+        size = version.GetFileVersionInfoSizeW(path, None)
+        if not size:
+            return ""
+        data = ctypes.create_string_buffer(size)
+        if not version.GetFileVersionInfoW(path, 0, size, data):
+            return ""
+        ptr, length = ctypes.c_void_p(), wintypes.UINT()
+        if not version.VerQueryValueW(data, "\\VarFileInfo\\Translation", ctypes.byref(ptr), ctypes.byref(length)) \
+                or length.value < 4:
+            langs = [(0x0409, 0x04B0)]
+        else:
+            raw = ctypes.cast(ptr, ctypes.POINTER(wintypes.WORD * 2)).contents
+            langs = [(raw[0], raw[1]), (0x0409, 0x04B0), (0x0409, 0x04E4)]
+        for lang, cp in langs:
+            key = f"\\StringFileInfo\\{lang:04x}{cp:04x}\\OriginalFilename"
+            if version.VerQueryValueW(data, key, ctypes.byref(ptr), ctypes.byref(length)) and length.value:
+                name = ctypes.wstring_at(ptr.value, length.value).rstrip("\0").strip()
+                return name[:-4] if name.lower().endswith(".mui") else name  # ("Cmd.Exe.MUI")
+    except Exception:
+        return ""
+    return ""
+
+
+def class_of(hwnd):
+    if not IS_WIN or not hwnd:
+        return ""
+    buf = ctypes.create_unicode_buffer(256)
+    user32.GetClassNameW(wintypes.HWND(hwnd), buf, 256)
+    return buf.value
+
+
+# (2.12) programs a macro may never type into: command windows, the registry, the Run box (explorer), ...
+NEVER_TYPE_INTO = {"cmd.exe", "powershell.exe", "pwsh.exe", "powershell_ise.exe", "windowsterminal.exe", "wt.exe",
+                   "openconsole.exe", "conhost.exe", "regedit.exe", "regedt32.exe", "mmc.exe", "explorer.exe",
+                   "wscript.exe", "cscript.exe", "bash.exe", "wsl.exe", "wslhost.exe", "mshta.exe", "rundll32.exe",
+                   "taskmgr.exe", "msiexec.exe", "control.exe", "ssh.exe"}
+CONSOLE_CLASSES = {"ConsoleWindowClass", "CASCADIA_HOSTING_WINDOW_CLASS", "PseudoConsoleWindow"}
+
+
+def never_type_into(hwnd=None, exe=None):
+    """(2.12) Is this a window (or program name) a macro must never type into? Checked by the program's
+    file name, the name it was built with (a renamed copy) and the kind of window (any console), never
+    by its title."""
+    if exe and os.path.basename(str(exe)).lower() in NEVER_TYPE_INTO:
+        return True
+    if not hwnd or not IS_WIN:
+        return False
+    if class_of(hwnd) in CONSOLE_CLASSES:
+        return True
+    path = exe_path_of(hwnd)
+    if path and os.path.basename(path).lower() in NEVER_TYPE_INTO:
+        return True
+    return bool(path) and original_name(path).lower() in NEVER_TYPE_INTO
+
+
 def title_of(hwnd):
     if not IS_WIN or not hwnd:
         return ""

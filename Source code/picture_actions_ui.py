@@ -37,6 +37,7 @@ def action_summary(pic):
         "wait": f"Wait {float(pic.get('seconds') or 0):g} s, go on",
         "stop": "Stop the macro",
         "nothing": "Nothing by itself",
+        "count": f"Add {pic.get('amount', 1)} to \"{pic.get('counter') or 'Counter'}\"",
     }.get(action, action)
     extra = []
     if pic.get("also"):
@@ -133,7 +134,10 @@ class PictureActionsMixin:
         action_var = tk.StringVar(value=core.WATCH_ACTION_NAMES.get(pic.get("action", "restart")))
         r = row("action", "When it shows")
         action_box = ttk.Combobox(r, textvariable=action_var, state="readonly", width=36,
-                                  values=[n for _k, n, _w in core.WATCH_ACTIONS])
+                                  values=[n for k, n, _w in core.WATCH_ACTIONS
+                                          if not pic.get("color_on") or k == "count"])
+        if pic.get("color_on") and pic.get("action") != "count":
+            action_var.set(core.WATCH_ACTION_NAMES["count"])  # (a colour can only count)
         action_box.pack(side="right")
         words = tk.Label(body, text="", bg=BG, fg=MUTED, font=F_SMALL, anchor="w", justify="left", wraplength=wrap)
         rows["words"] = words
@@ -181,6 +185,14 @@ class PictureActionsMixin:
 
         seconds_var = tk.StringVar(value=f"{float(pic.get('seconds') or 5):g}")
         entry(row("seconds", "Wait (seconds)"), seconds_var)
+
+        # (2.12) "Add to a counter"
+        counter_var = tk.StringVar(value=pic.get("counter") or "Counter")
+        entry(row("counter", "Counter", "its name, like Drops"), counter_var, 18)
+        amount_var = tk.StringVar(value=str(pic.get("amount", 1)))
+        entry(row("amount", "Add", "1 counts one up"), amount_var, 6)
+        keep_var = tk.BooleanVar(value=pic.get("keep") is True)
+        Switch(row("keep", "Keep between plays", "else it starts at 0 at each Play"), keep_var).pack(side="right")
 
         # disconnect recovery
         tries_var = tk.StringVar(value=str(int(pic.get("tries") or 3)))
@@ -248,11 +260,12 @@ class PictureActionsMixin:
         ttk.Combobox(r, textvariable=also_var, state="readonly", width=24, values=list(others)).pack(side="right")
 
         order = (["name"] if show_name else []) + [
-            "action", "words", "macro", "key", "seconds", "tries", "confirm", "confirm_seconds",
-            "click", "counts", "cooldown", "also"]
+            "action", "words", "macro", "key", "seconds", "counter", "amount", "keep", "tries", "confirm",
+            "confirm_seconds", "click", "counts", "cooldown", "also"]
         only_for = {"macro": core.WATCH_NEED_MACRO, "key": ("key",), "seconds": ("wait",),
                     "tries": ("recover",), "confirm": ("recover",), "confirm_seconds": ("recover",),
-                    "counts": ("restart", "play", "switch", "stop")}
+                    "counts": ("restart", "play", "switch", "stop"), "counter": ("count",), "amount": ("count",),
+                    "keep": ("count",), "click": tuple(k for k, _n, _w in core.WATCH_ACTIONS if k != "count")}
         helps = {k: w for k, _n, w in core.WATCH_ACTIONS}
         helps["recover"] = ("For a \"Disconnected\" box: your rejoin macro plays (record the steps that get you back "
                             "into a mission), then it checks that this picture is gone and, if you chose one, that "
@@ -305,13 +318,24 @@ class PictureActionsMixin:
                 "confirm_file": state["confirm_file"] if action == "recover" else None,
                 "confirm_screen_h": state["confirm_screen_h"] if action == "recover" else None,
                 "confirm_seconds": number(confirm_s_var, 60, 1, 3600) if action == "recover" else None,
+                "counter": workflow.clean_counter_name(counter_var.get()) if action == "count" else None,
+                "amount": workflow.clean_whole(counter_amount(), 1) if action == "count" else None,
+                "keep": (True if keep_var.get() else None) if action == "count" else None,
             }
+            if action == "count" and not new["cooldown"]:
+                new["cooldown"] = 5
             if show_name:
                 new["name"] = name_var.get().strip()
             return new, problem
 
+        def counter_amount():
+            try:
+                return int(float(amount_var.get().strip()))
+            except ValueError:
+                return 1
+
         for var in (name_var, macro_var, seconds_var, tries_var, confirm_s_var, click_var, counts_var,
-                    cooldown_var, also_var):
+                    cooldown_var, also_var, counter_var, amount_var, keep_var):
             var.trace_add("write", notify)
 
         class Form:

@@ -70,6 +70,82 @@ class DiscordMixin:
                  wraplength=460, justify="left").pack(fill="x")
         tk.Label(f, text="Don't share the link: anyone who has it can post in that channel.",
                  bg=BG, fg=DIM, font=F_SMALL, anchor="w").pack(fill="x", pady=(4, 0))
+        self._build_macro_messages(f)
+
+    MACRO_TO = {"cards": "Where the run cards go (the webhook above)",
+                "channel": "A channel the phone remote bot is in",
+                "webhook": "Another webhook (below)"}
+    MACRO_MESSAGES_HELP = (
+        "Where \"Send a Discord message\", \"Take a screenshot\" (to Discord), Do maths (Send it to Discord) and "
+        "Stop (ping me) send their messages. A step can also choose its own place.\n\n"
+        "Where the run cards go: the webhook link above.\n"
+        "A channel the phone remote bot is in: the bot must be on (Phone remote…) and allowed to write in that "
+        "channel. The channel ID: Discord > Settings > Advanced > Developer Mode on, then right-click the channel "
+        "> Copy Channel ID.\n"
+        "Another webhook: a second webhook link, for example for a channel only for counters. It stays in this "
+        "PC's settings (never in a macro file, a profile you share or a report) and isn't written to the log.")
+
+    def _build_macro_messages(self, f):
+        """(2.12) Settings > Discord > MESSAGES FROM MACROS."""
+        import step_more
+
+        s = self.settings
+        self._section(f, "MESSAGES FROM MACROS")
+        row = self._row(f, "Send them to", info=self.MACRO_MESSAGES_HELP)
+        to_var = tk.StringVar(value=self.MACRO_TO.get(s.get("discord_macro_to"), self.MACRO_TO["cards"]))
+        box = ttk.Combobox(row, width=36, state="readonly", textvariable=to_var, values=list(self.MACRO_TO.values()))
+        box.pack(side="right")
+        row = self._row(f, "Bot channel ID", "for \"A channel the phone remote bot is in\"")
+        channel_var = tk.StringVar(value=str(s.get("discord_macro_channel", "")))
+        self._entry(row, channel_var, 22).pack(side="right", ipady=2)
+        row = self._row(f, "Another webhook link")
+        hook_var = tk.StringVar(value=str(s.get("discord_macro_webhook", "")))
+        tk.Entry(row, textvariable=hook_var, bg=FIELD, fg=TEXT, font=F_SMALL, relief="flat", insertbackground=TEXT,
+                 highlightthickness=1, show="•", highlightbackground=BORDER, highlightcolor=ACCENT, width=34).pack(
+            side="right", ipady=3)
+        status = tk.Label(f, text="", bg=BG, fg=MUTED, font=F_SMALL, anchor="w", wraplength=460, justify="left")
+        pings_var = tk.BooleanVar(value=s.get("discord_macro_pings") is True)
+
+        def pings_flip():
+            s["discord_macro_pings"] = bool(pings_var.get())
+            core.save_settings(s)
+        row = self._row(f, "Allow pings in macro messages", "off: @everyone, @here and <@…> don't ping")
+        Switch(row, pings_var, command=pings_flip).pack(side="right")
+
+        def save(*_a):
+            to = next((k for k, v in self.MACRO_TO.items() if v == to_var.get()), "cards")
+            channel = channel_var.get().strip()
+            hook = hook_var.get().strip()
+            problems = []
+            if channel and not step_more.clean_channel(channel):
+                problems.append("The channel ID is a number of 17 to 20 digits.")
+            if hook and not discord_notify.is_webhook(hook):
+                problems.append("That isn't a Discord webhook link (it starts with https://discord.com/api/webhooks/).")
+            if to == "channel" and not s.get("remote_enabled"):
+                problems.append("The phone remote bot is off: turn it on in Phone remote…")
+            status.config(text=" ".join(problems), fg=AMBER if problems else MUTED)
+            s["discord_macro_to"] = to
+            s["discord_macro_channel"] = step_more.clean_channel(channel)
+            s["discord_macro_webhook"] = hook if discord_notify.is_webhook(hook) else ""
+            core.save_settings(s)
+        box.bind("<<ComboboxSelected>>", lambda e: (box.selection_clear(), save()))
+        channel_var.trace_add("write", save)
+        hook_var.trace_add("write", save)
+        row = tk.Frame(f, bg=BG)
+        row.pack(fill="x", pady=(8, 2))
+
+        def test():
+            save()
+            ok = self._macro_discord("Test message from a macro step · " + time.strftime("%H:%M:%S"))
+            if ok:
+                status.config(text="Sent. Look in Discord (if it doesn't show, check the place above).", fg=GREEN)
+            elif not status.cget("text"):
+                status.config(text="Not sent: see the log (Settings > About > Reports and logs).", fg=AMBER)
+        ttk.Button(row, text="Send a test from a macro", command=test).pack(side="left")
+        status.pack(fill="x")
+        self.macro_messages_test = test
+        self.macro_messages_vars = {"to": to_var, "channel": channel_var, "webhook": hook_var, "status": status,
+                                    "pings": pings_var}
 
     PING_HELP = (
         "Who gets pinged, put where {ping} is in the message (at its top, at first).\n\n"
@@ -205,13 +281,14 @@ class DiscordMixin:
         """A disconnect screen showed ("lost") or the rejoin macro got the game back ("back").
         (When it couldn't, playback stops and the usual "Problem" message says why.)"""
         s = self.settings
-        if not s.get("discord_enabled") or kind not in ("lost", "back"):
+        if not s.get("discord_enabled") or kind not in ("lost", "back", "stuck"):
             return
-        values = self.session.values(self._ping_for(kind == "lost"))
-        card = {"title": f"{values['macro']} · {'Disconnected' if kind == 'lost' else 'Back in the game'}",
+        values = self.session.values(self._ping_for(kind in ("lost", "stuck")))
+        title = {"lost": "Disconnected", "back": "Back in the game", "stuck": "A run seems stuck"}[kind]
+        card = {"title": f"{values['macro']} · {title}",
                 "description": text + "\nReconnects this session: " + str(self.session.reconnects),
-                "color": 0xFFB238 if kind == "lost" else 0x2ECC71}
-        png = self._screenshot() if kind == "lost" and s.get("discord_screenshot", True) else None
+                "color": 0x2ECC71 if kind == "back" else 0xFFB238}
+        png = self._screenshot() if kind in ("lost", "stuck") and s.get("discord_screenshot", True) else None
         self._send_card(values["ping"], card, png)
 
     def _discord_test(self):

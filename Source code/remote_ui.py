@@ -29,6 +29,10 @@ def _command(name, description, options=None):
     return cmd
 
 
+REMOTE_SPEED = (0.1, 10.0)  # (2.12) /speed's limits
+REMOTE_REPEAT = 9999
+LOG_LINES = 12
+
 COMMANDS = [
     _command("start", "Start playing the open macro"),
     _command("stop", "Stop the macro"),
@@ -50,6 +54,21 @@ COMMANDS = [
             {"name": "it disconnects or the game closes", "value": "lost"},
             {"name": "forget all my pings", "value": "none"}]},
         {"type": 4, "name": "runs", "description": "Or: after this many more runs", "required": False}]),
+    _command("speed", "Change the playing speed (0.1 to 10)", [
+        {"type": 10, "name": "speed", "description": "For example 1 (normal), 1.5 or 0.5", "required": True,
+         "min_value": REMOTE_SPEED[0], "max_value": REMOTE_SPEED[1]}]),
+    _command("repeat", "How often to play: a number of times, or loop", [
+        {"type": 3, "name": "times", "description": "1 to 9999, or loop", "required": True}]),
+    _command("log", "The last lines of the app's log (no paths or names)"),
+    _command("schedule", "Start playing later: the alarm and the timer (empty: what's planned)", [
+        {"type": 3, "name": "alarm", "description": "Alarm time like 21:30, or off", "required": False},
+        {"type": 5, "name": "every_day", "description": "The alarm every day (else once)", "required": False},
+        {"type": 4, "name": "timer", "description": "Timer in minutes (0 = off)", "required": False,
+         "min_value": 0, "max_value": 1440},
+        {"type": 5, "name": "repeat", "description": "The timer again and again (at least 5 min)", "required": False},
+        {"type": 5, "name": "open_game", "description": "Open the game first (set what to open on the PC)",
+         "required": False},
+        {"type": 5, "name": "cancel", "description": "Turn the alarm and the timer off", "required": False}]),
     _command("pair", "Allow your Discord account to control the app", [
         {"type": 3, "name": "code", "description": "The pairing code shown in the app on the PC",
          "required": True}]),
@@ -67,7 +86,25 @@ SETUP_STEPS = (
     "3.  Press \"Add the bot to my server…\" and pick your own server.\n"
     "4.  In Discord (also on your phone), type  /pair  and the pairing code shown here.\n\n"
     "After that: /status shows what the app is doing with Start, Pause, Stop and Screenshot buttons. "
-    "There are also /start, /stop, /pause, /resume, /screenshot and /macro.")
+    "There are also /start, /stop, /pause, /resume, /screenshot, /macro, /speed, /repeat, /schedule and /log.")
+
+
+def remote_log_text(text):
+    """Log lines for Discord: no paths of this PC and no Windows user name in them (2.12)."""
+    import re
+
+    text = diag._private(text)
+    # a whole path, spaces too: folders up to their \ (or /), then the last part up to a space
+    text = re.sub(r"(?:(?<![A-Za-z])[A-Za-z]:|\\\\[^\\/\s\"']+)[\\/](?:[^\\/\n\"'<>|]*[\\/])*[^\s\"'<>|]*", "[a file]", text)
+    # Mac / Linux: the home folder (shown as ~) and everything in it, whole, spaces too: folders up to their /,
+    # then the last part up to a space ("/Users/kong/My Macros/x.macro")
+    # (also ~\... : a Windows home folder was already shortened to ~ above)
+    text = re.sub(r"(?:(?<![\w~])~|/Users/[^/\s\"']+|/home/[^/\s\"']+)"
+                  r"(?:[/\\][^/\\\n\"'<>|]*(?=[/\\]))*(?:[/\\][^\s\"'<>|]*)?", "[a file]", text)
+    for name in {os.environ.get("USERNAME"), os.environ.get("USER")}:
+        if name and len(name) > 2:
+            text = re.sub(re.escape(name), "[you]", text, flags=re.IGNORECASE)
+    return text.replace("`", "'")[-1800:]  # (no code-block breaking)
 
 
 class RemoteMixin:
@@ -246,6 +283,7 @@ class RemoteMixin:
                          else "No macro is open, and none are saved yet.")
         elif state == "Ready" and not lines:
             lines.append("Ready to start.")
+        lines += self._remote_settings_lines()  # (2.12: what's set now)
         embed = {"title": f"{name or 'Macro Recorder'} · {state}", "description": "\n".join(lines)[:3900],
                  "color": COLORS.get(state, 0x9B9BA6),
                  "footer": {"text": "Updated " + time.strftime("%H:%M:%S")}}
@@ -268,6 +306,31 @@ class RemoteMixin:
                 "type": 3, "custom_id": "mr:macro", "placeholder": "Switch to another macro…", "disabled": busy,
                 "options": [{"label": n, "value": n, "default": n.lower() == current} for n, _ in macros]}]})
         return {"content": str(note or "")[:1900], "embeds": [embed], "components": rows}
+
+    def _remote_settings_lines(self):
+        """(2.12) What's set now: speed, repeat, profile, the alarm / timer, the guards. No paths."""
+        out = []
+        try:
+            speed = self._check_speed(quiet=True) or 1
+        except Exception:
+            speed = 1
+        repeat = "loop" if self.loop_var.get() else f"{int(self.repeat_var.get() or 1)} time(s)"
+        out.append(f"**Speed** {speed:g}x · **Repeat** {repeat}")
+        profile = self.profile_active() if hasattr(self, "profile_active") else None
+        if profile:
+            out.append(f"**Profile** {short(profile, 40)}")
+        plan = self.timed_summary() if hasattr(self, "timed_summary") else "Not planned"
+        out.append(f"**Start later** {plan}")
+        stuck = self._stuck_settings()
+        closed = self._closed_settings()
+        disconnect = any(p.get("action") == "recover" for p in self._active_watch_pictures())
+        out.append("**Stuck run guard** " + ("on" if stuck["on"] else "off") + " · **Game closes** "
+                   + ("reopen + rejoin" if closed["action"] == "reopen" else "stop" if closed["action"] == "stop"
+                      else "wait") + " · **Disconnect** " + ("rejoin" if disconnect else "off"))
+        counters = getattr(self, "counters", None)
+        if counters:
+            out.append("**Counters** " + " · ".join(f"{short(n, 14)} {v}" for n, v in list(counters.items())[:6]))
+        return out
 
     # ------------------------------------------------------------ the actions (on the window's thread)
 
@@ -303,7 +366,113 @@ class RemoteMixin:
             return self.remote_profile(arg)
         if name == "pingme":
             return self.remote_pingme(arg, who)
+        if name == "speed":
+            return self.remote_speed(arg, who)
+        if name == "repeat":
+            return self.remote_repeat(arg, who)
+        if name == "log":
+            return self.remote_log()
+        if name == "schedule":
+            return self.remote_schedule(arg, who)
         return ""
+
+    # ------------------------------------------------------------ (2.12) /speed /repeat /log /schedule
+
+    def remote_speed(self, value, who):
+        try:
+            speed = round(float(value), 2)
+        except (TypeError, ValueError):
+            return "Give a speed like 1, 1.5 or 0.5."
+        if not (REMOTE_SPEED[0] <= speed <= REMOTE_SPEED[1]):
+            return f"The speed must be between {REMOTE_SPEED[0]:g} and {REMOTE_SPEED[1]:g}."
+        self.speed_var.set(f"{speed:g}x")
+        self._check_speed(quiet=True)
+        self._save_settings()
+        diag.info(f"Phone remote: speed set to {speed:g} by {short(str(who), 30)}")
+        return f"Speed: **{speed:g}x**" + (" (from the next Play: the macro playing now keeps its speed)."
+                                          if self.playing else ".")
+
+    def remote_repeat(self, value, who):
+        text = str(value or "").strip().lower()
+        if text in ("loop", "forever", "always", "0"):
+            self.loop_var.set(True)
+            self._loop_changed()
+            done = "loop (until stopped)"
+        else:
+            try:
+                times = int(float(text))
+            except ValueError:
+                return "Give a number of times (1 to 9999), or loop."
+            if not 1 <= times <= REMOTE_REPEAT:
+                return f"The number of times must be between 1 and {REMOTE_REPEAT}."
+            self.loop_var.set(False)
+            self._loop_changed()
+            self.repeat_var.set(times)
+            done = f"{times} time{'s' if times != 1 else ''}"
+        self._save_settings()
+        diag.info(f"Phone remote: repeat set to {done} by {short(str(who), 30)}")
+        return f"Plays: **{done}**" + (" (from the next Play)." if self.playing else ".")
+
+    def remote_log(self):
+        return "```\n" + remote_log_text(diag._log_tail(LOG_LINES)) + "\n```"
+
+    def remote_schedule(self, value, who):
+        """/schedule: the alarm and the timer, as in Settings > Playback > Start playing later."""
+        import timed_start_ui
+
+        who = short(str(who), 30)
+        opts = value if isinstance(value, dict) else ({"alarm": value} if value else {})
+        if isinstance(value, str) and value.strip().lower() in ("cancel", "off", "stop", "no"):
+            opts = {"cancel": True}
+        if not opts:
+            return self._schedule_text()
+        changes = {}
+        if opts.get("cancel"):
+            changes.update(alarm_on=False, timer_on=False)
+            self.cancel_timed_start(f"cancelled from Discord by {who}")
+        alarm = opts.get("alarm")
+        if alarm is not None and not isinstance(alarm, str):
+            return "Give the alarm as a time like 21:30 (00:00 to 23:59), or off."
+        if isinstance(alarm, str) and alarm.strip():
+            if alarm.strip().lower() in ("off", "no", "cancel"):
+                changes["alarm_on"] = False
+            else:
+                hhmm = timed_start_ui.clean_hhmm(alarm)
+                if hhmm is None:
+                    return "Give the alarm as a time like 21:30 (00:00 to 23:59), or off."
+                changes.update(alarm_on=True, alarm=hhmm, alarm_last="")
+        if isinstance(opts.get("every_day"), bool):
+            changes["daily"] = opts["every_day"]
+        timer = opts.get("timer")
+        if timer is not None:
+            try:
+                minutes = int(timer)
+            except (TypeError, ValueError):
+                return "Give the timer in minutes (0 = off)."
+            if minutes <= 0:
+                changes["timer_on"] = False
+            else:
+                changes.update(timer_on=True, timer_min=min(1440, minutes), timer_from=time.time())
+        if isinstance(opts.get("repeat"), bool):
+            changes["timer_repeat"] = opts["repeat"]
+        if isinstance(opts.get("open_game"), bool):
+            changes["when"] = "game" if opts["open_game"] else "play"
+            if opts["open_game"] and not (self._schedule()["open"] or self._closed_settings()["open"]):
+                return ("Set what to open first, on the PC: Settings > Playback > Start playing later > Open this "
+                        "(or \"If the game closes\").")
+        if (changes.get("alarm_on") or changes.get("timer_on")) and not (self.events or self.actions):
+            return "No macro is open. Pick one first (`/macro`)."
+        sc = self._set_schedule(**changes)
+        if sc["timer_repeat"] and sc["timer_min"] < self.TIMER_REPEAT_MIN:
+            self._set_schedule(timer_min=self.TIMER_REPEAT_MIN)
+        core.diag.info(f"Phone remote: start playing later changed by {who}: {self.timed_summary()}")
+        return self._schedule_text()
+
+    def _schedule_text(self):
+        sc = self._schedule()
+        if not (sc["alarm_on"] or sc["timer_on"] or getattr(self, "timed_plan", None)):
+            return "Nothing is planned. Example: `/schedule alarm:21:30` or `/schedule timer:30 repeat:True`."
+        return "**Start playing later:** " + self.timed_summary() + "."
 
     def _remote_start(self, who):
         if self.playing:
@@ -427,6 +596,8 @@ class RemoteMixin:
             arg = options[0].get("value") if options else None
             if name == "pingme":  # (what to wait for, how many runs, who asked)
                 arg = (arg, next((o.get("value") for o in options if o.get("name") == "runs"), None), uid)
+            if name == "schedule":  # (2.12: every option it was given)
+                arg = {str(o.get("name")): o.get("value") for o in options}
         elif kind == 3:
             name = str(data.get("custom_id") or "").partition(":")[2]
             arg = (data.get("values") or [None])[0]

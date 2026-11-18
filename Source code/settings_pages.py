@@ -218,6 +218,13 @@ class SettingsPagesMixin:
         ttk.Button(row, text="Export…", command=self.export_pack).pack(side="right", padx=(0, 6))
         row = self._row(f, "First-start questions", "windowed or fullscreen, AOT:R, Discord")
         ttk.Button(row, text="Ask again…", command=self.open_first_start).pack(side="right")
+        if IS_WIN:  # (2.12; Mac: not made, untested there)
+            self._section(f, "WHEN WINDOWS STARTS")
+            self.startup_var = tk.BooleanVar(value=self.startup_enabled())
+            self._switch_row(f, "Open Macro Recorder when Windows starts", self.startup_var,
+                             "off at first", command=self.startup_switched, info=self.STARTUP_HELP)
+            self._choice_row(f, "When it opens", self.startup_summary, self.open_startup_when,
+                             info=self.STARTUP_HELP)
         self._section(f, "SHORTCUTS")
         self._row(f, "Emergency stop", "Ctrl + Alt + End: stops playing and recording, always, whatever the "
                   "keys below are")
@@ -779,6 +786,22 @@ class SettingsPagesMixin:
         row = self._row(f, "Countdown before rejoining", "seconds, with a sound each second (0 = none)")
         ttk.Spinbox(row, from_=0, to=60, width=5, textvariable=self.recover_count_var,
                     command=self._save_settings).pack(side="right")
+        # (2.12) the stuck run guard: a switch (off at first) and Change…
+        row = self._row(f, "If a run gets stuck", info=self.STUCK_HELP)
+        self.stuck_on_var = tk.BooleanVar(value=self._stuck_settings()["on"])
+        Switch(row, self.stuck_on_var, command=self.stuck_switched).pack(side="right", padx=(10, 0))
+        ttk.Button(row, text="Change…", command=self.open_stuck).pack(side="right")
+        self.stuck_var = tk.StringVar(value=self.stuck_summary())
+        tk.Label(row, textvariable=self.stuck_var, bg=BG, fg=MUTED, font=F_SMALL).pack(side="right", padx=(0, 10))
+        looks = tk.Frame(f, bg=BG)
+        looks.pack(fill="x", pady=(0, 4))
+        link(looks, "Open Picture watch", lambda: self.open_picture_watch(core.GROUP_AOTR), bg=BG).pack(side="right")
+        text, ok = self.stuck_looks_for()
+        self.stuck_looks_label = tk.Label(looks, text=text, bg=BG, fg=DIM if ok else AMBER, font=F_SMALL, anchor="w",
+                                          justify="left", wraplength=520)
+        self.stuck_looks_label.pack(side="left", fill="x", expand=True)
+        self._choice_row(f, "Start playing later", self.timed_summary, self.open_timed_start,
+                         info=self.TIMED_HELP, tip="at a time, or in some minutes")
         self._choice_row(f, "Stop by itself", self.auto_stop_summary, self.open_auto_stop,
                          info=self.AUTO_STOP_HELP)
         self._build_resolution_ui(f)

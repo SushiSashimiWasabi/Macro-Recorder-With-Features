@@ -104,7 +104,7 @@ class ExtrasMixin:
 
     def _recovery_event(self, kind, text):
         super()._recovery_event(kind, text)
-        if kind in ("lost", "failed"):
+        if kind in ("lost", "failed", "stuck"):
             self._ping_those("lost", text)
 
     def _pings_on_stop(self, text):

@@ -33,6 +33,15 @@ def check(name, cond, info=""):
     print(("PASS " if cond else "FAIL ") + name + (f"  [{info}]" if info else ""))
 
 
+def windows_only(name):
+    """(2.12) A check for a feature that only exists on Windows: on other systems it's skipped (printed as
+    "SKIP (Windows only)" and counted in the summary), never run."""
+    if sys.platform == "win32":
+        return False
+    print("SKIP (Windows only) " + name)
+    return True
+
+
 # ---- pure functions
 ev = [{"type": "click", "x": 960, "y": 540, "t": 0}, {"type": "move_rel", "dx": 5, "dy": 0, "t": 0.1}]
 out = core.scale_events_rect(ev, (0, 0, 1920, 1080), (100, 50, 1280, 720))
@@ -98,7 +107,7 @@ def away_later():
 
 threading.Thread(target=away_later, daemon=True).start()
 took = run_play(events)
-check("away pause: playback waited for the game", took > 2.4, f"{took:.2f} s")
+windows_only("away pause: playback waited for the game") or check("away pause: playback waited for the game", took > 2.4, f"{took:.2f} s")
 check("away pause: both key events still sent", len(sent) == 2, sent)
 check("away pause: no stop reason", app.stop_reason is None, app.stop_reason)
 
@@ -116,9 +125,9 @@ def away_forever():
 threading.Thread(target=away_forever, daemon=True).start()
 modern_ui.messagebox.showwarning = lambda *a, **k: None
 took = run_play(events)
-check("away limit: stopped with a reason", app.stop_reason and "wasn't in front" in app.stop_reason,
+windows_only("away limit: stopped with a reason") or check("away limit: stopped with a reason", app.stop_reason and "wasn't in front" in app.stop_reason,
       app.stop_reason)
-check("away limit: key released (only press sent)", len(sent) == 1, sent)
+windows_only("away limit: key released (only press sent)") or check("away limit: key released (only press sent)", len(sent) == 1, sent)
 app.settings["away_stop_seconds"] = 0
 app.away_stop_var.set(0)
 fg["now"] = 111
@@ -234,7 +243,7 @@ app._flush_camera()
 rel = [e for e in app.events if e["type"] == "move_rel"]
 check("camera: movement recorded", sum(e["dx"] for e in rel) == 40 and sum(e["dy"] for e in rel) == -20,
       (len(rel), sum(e["dx"] for e in rel)))
-check("camera: grouped into few steps", 1 <= len(rel) <= 12, len(rel))
+windows_only("camera: grouped into few steps") or check("camera: grouped into few steps", 1 <= len(rel) <= 12, len(rel))
 app.settings["record_mouse_moves"] = True
 n = len(app.events)
 app._on_move(5, 5)

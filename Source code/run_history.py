@@ -76,6 +76,25 @@ def add(macro, status, seconds, fragments=0, t=None):
         return run
 
 
+def correct(run, status, fragments=0):
+    """(2.12) An Unknown run's result showed a little late: it becomes won/lost (and gets the
+    fragments of its results screen). run is what add() returned."""
+    global _dirty
+    with _lock:
+        d = _day(load(), run["t"])
+        if run["status"] == "unknown" and status in ("win", "loss"):
+            d["unknown"] = max(0, d["unknown"] - 1)
+            d[{"win": "wins", "loss": "losses"}[status]] += 1
+            run["status"] = status
+            if status == "win":
+                d["best"] = run["s"] if d["best"] is None else min(d["best"], run["s"])
+                d["worst"] = run["s"] if d["worst"] is None else max(d["worst"], run["s"])
+        if fragments:
+            run["f"] += int(fragments)
+            d["fragments"] += int(fragments)
+        _dirty = True
+
+
 def note(what, n=1, t=None):
     """Count something else for today ("reconnects")."""
     global _dirty

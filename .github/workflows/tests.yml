@@ -1,0 +1,148 @@
+# The tests, in groups that run side by side (each with its own result on the run's page), on every push
+# to any branch (on main also through Build, which waits for them before it builds and publishes; this
+# run is the one the README's "Tests" badge shows). When only docs changed they're skipped. By hand: Actions > Tests > Run workflow, then pick a group or name one test file.
+#
+# Mac: the tests also run on a Mac (Apple Silicon and Intel) for a version tag (v2.12...) or when
+# "Also run on a Mac" is ticked by hand. (Mac minutes cost 10x on a private repo, so not every push.)
+#
+# Checks that need Kong's real PC (a second screen...) print "SKIP (PC only)" here; the summary counts them.
+name: Tests
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+    paths-ignore: ["**.md", "docs/**", "Documents/**", "**.txt", "LICENSE"]
+  workflow_dispatch:
+    inputs:
+      group:
+        description: "Which group"
+        type: choice
+        default: all
+        options: [all, basic, security, timing, discord, edges, edit-actions]
+      test:
+        description: "Or one test file (like remote or test_remote.py); empty = the group above"
+        type: string
+        default: ""
+      mac:
+        description: "Also run on a Mac (Apple Silicon and Intel)"
+        type: boolean
+        default: false
+  workflow_call:  # (Build runs these before it builds and publishes)
+
+concurrency:
+  group: ${{ github.workflow }}-tests-${{ github.ref }}  # (Build's run of these never cancels this one)
+  cancel-in-progress: true
+
+jobs:
+  groups:
+    name: ${{ matrix.group }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [basic, security, timing, discord, edges, edit-actions]
+    env:
+      CI: "true"
+      PICKED_GROUP: ${{ inputs.group || 'all' }}
+      PICKED_TEST: ${{ inputs.test || '' }}
+    steps:
+      - name: Only the group or test that was picked
+        id: pick
+        shell: bash
+        run: |
+          if [ -n "$PICKED_TEST" ]; then
+            if [ "${{ matrix.group }}" = "basic" ]; then echo "run=test" >> "$GITHUB_OUTPUT"; else echo "run=no" >> "$GITHUB_OUTPUT"; fi
+          elif [ "$PICKED_GROUP" = "all" ] || [ "$PICKED_GROUP" = "${{ matrix.group }}" ]; then
+            echo "run=group" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=no" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v6
+        if: steps.pick.outputs.run != 'no'
+      - uses: actions/setup-python@v6
+        if: steps.pick.outputs.run != 'no'
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: "Source code/requirements.txt"
+      - name: Install
+        if: steps.pick.outputs.run != 'no'
+        shell: cmd
+        run: python -m pip install coverage -r "Source code\requirements.txt" || exit /b 1
+      - name: Run the tests
+        if: steps.pick.outputs.run != 'no'
+        shell: bash
+        run: |
+          if [ "${{ steps.pick.outputs.run }}" = "test" ]; then which="--test $PICKED_TEST"; else which="--group ${{ matrix.group }}"; fi
+          python "Source code/tests/run_tests.py" $which --coverage --summary "$GITHUB_STEP_SUMMARY"
+      - name: Keep the coverage data
+        if: always() && steps.pick.outputs.run != 'no'
+        uses: actions/upload-artifact@v6
+        with:
+          name: coverage-${{ matrix.group }}
+          path: covdata/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 3
+
+  summary:
+    name: summary and coverage
+    if: always()
+    needs: [groups]
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - run: python -m pip install coverage
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: coverage-*
+          merge-multiple: true
+          path: covdata
+      - name: All groups together
+        shell: bash
+        run: |
+          {
+            echo "## Tests: ${{ needs.groups.result == 'success' && '✅ every group passed' || '❌ a group failed (see its job)' }}"
+            echo ""
+            if ls covdata/.coverage.* >/dev/null 2>&1; then
+              python -m coverage combine covdata >/dev/null || true
+              echo "Code covered by all the tests together (also when a group failed): **$( (python -m coverage report || true) | tail -1 | awk '{print $NF}')**"
+            else
+              echo "No coverage data came back from the groups."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Fail when a group failed
+        if: needs.groups.result != 'success'
+        run: exit 1
+
+  mac:
+    name: mac (${{ matrix.label }})
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.mac == true
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            label: Apple Silicon
+          - runner: macos-15-intel
+            label: Intel
+    env:
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: "Source code/requirements.txt"
+      - run: python3 -m pip install -r "Source code/requirements.txt"
+      - name: Run the tests on a Mac
+        run: python3 "Source code/tests/run_tests.py" --summary "$GITHUB_STEP_SUMMARY"

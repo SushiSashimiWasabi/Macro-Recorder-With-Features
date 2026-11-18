@@ -38,6 +38,7 @@ EVENTS = [
     ("fragment", "Divine fragment", "a divine fragment dropped", True),
     ("milestone", "Milestone", "a number of wins or fragments was reached", True),
     ("timed_warning", "Timed start warning", "shortly before a timed start", True),
+    ("timed_countdown", "Timed start countdown", "each second before a timed or start-up play", True),
     ("recover_disconnect", "Rejoin countdown (disconnect)", "before the rejoin macro plays", True),
     ("recover_close", "Reopen countdown (game closed)", "before the game opens again", True),
 ]
@@ -60,6 +61,7 @@ TONES = {
     "fragment": [(1568, 50), (2093, 50), (2637, 50), (3136, 110)],
     "milestone": [(1046, 70), (1318, 70), (1568, 70), (2093, 140)],
     "timed_warning": [(988, 80), (0, 60), (988, 80)],
+    "timed_countdown": [(784, 60)],
     "recover_disconnect": [(740, 70)],
     "recover_close": [(587, 80)],
 }

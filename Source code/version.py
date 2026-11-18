@@ -1,12 +1,95 @@
 # The app's version. Raising it (and pushing to main) makes GitHub publish a new Release,
 # which every copy of the app offers to install when it starts.
-APP_VERSION = "2.11"
+APP_VERSION = "2.12"
 
 # Every version, newest first: (version, the day it was finalized, changes). The newest is shown once after an update;
 # Settings > About > What's new shows them all. Each change is one paragraph (shown as a bullet).
 # Version numbers started at 2.1 (the first one that could update itself); the earlier steps have
 # names instead.
 HISTORY = [
+    ("2.12", "Finalized 18 November 2026", [
+        "If a run gets stuck (Settings > Playback, off at first): when neither MISSION COMPLETED nor MISSION "
+        "FAILED shows for some minutes (about 3 runs is suggested, from Run stats), it starts the run over, "
+        "plays a macro of yours first (to get unstuck or rejoin), or only tells you on Discord. If it stays "
+        "stuck it tries again after a longer wait each time, and after the last try it stops and tells Discord. "
+        "The minutes don't count while paused, while the game isn't in front, while getting back into the game "
+        "or in test plays. RETRY showing counts as a result too. Under its switch it says what it looks for "
+        "(MISSION COMPLETED, MISSION FAILED and RETRY, the built-in pictures in Picture watch > AOT:R, and your "
+        "own result pictures), in orange when one of them is off or missing, with Open Picture watch.",
+        "Edit: new actions. Do maths (a counter = a number or counter + − × ÷ another, whole numbers or 2 "
+        "decimals, shown like \"Total: 1+4=5\" on the timer, in the log or on Discord), Read the copied number "
+        "(into a counter; the copied text is never logged or sent), Send a Discord message ({Counter} filled "
+        "in, with a screenshot if you like), Take a screenshot, Play a sound, Set speed (until the run ends), "
+        "Bring the game to the front / wait for it, Label + Go to a label (with a limit you set, and a guard "
+        "against endless loops), Wait a random time, and Else after an If. Do maths, Type text and Read the "
+        "copied number can play another macro afterwards.",
+        "Edit: more options. Keys: combos like Ctrl+E and time between presses. Type text: {Counter} numbers, "
+        "Enter at the end, type into another program's window (it comes to the front, then the game does), "
+        "letter by letter or paste. Click: where a picture or colour was found, in an area you draw, a random "
+        "spot inside, an offset with \"Show where it clicks\", a small random offset; picked spots are kept in "
+        "the macro's size. Move: slowly over some seconds, or a camera turn. Scroll: time between notches. "
+        "Wait: random. Wait for…: until it's gone, only in an area, and if it doesn't happen: play a macro, "
+        "start over or tell Discord. If: check a counter (= ≥ ≤ ≠ > < a number or another counter), a "
+        "program being open or the time of day, look for some seconds, and more conditions with AND / OR. "
+        "Repeat: until something is true, for some minutes, or until stopped. Retry: how long to check, a wait "
+        "between tries, and what to do if every try fails. Stop: a reason and a Discord ping. Note: on the "
+        "timer. Play another macro: its own speed. Pictures and colours both say \"How close (%)\".",
+        "Times are typed in HH : MM boxes (the \":\" is always there; after two hour digits it jumps to the "
+        "minutes, Backspace in empty minutes jumps back, pasting 21:30 fills both): If the time of day, Start "
+        "playing later's alarm and Stop by itself. A half-typed time never stops a macro. Else: Add action puts "
+        "it right after the If (also when something inside the If is chosen), an Else in the wrong place says "
+        "so in orange, and testing an Else plays its If first. Round option buttons stay dark under the mouse.",
+        "Macros from someone else: one that types into another program or reads the number you copied asks "
+        "once (\"This macro types into notepad.exe. Allow?\"; No skips those steps, and so does a start from "
+        "Discord or a timed start nobody answers). What you add in Edit yourself never asks. A macro can never "
+        "type into a command window (cmd, PowerShell, Terminal), the registry or the Run box, also not when the "
+        "program was renamed. Messages from macros don't ping (@everyone, @here, people, roles) unless you turn "
+        "on \"Allow pings in macro messages\" in Settings > Discord.",
+        "Settings > Discord > Messages from macros: where those messages go (the run cards' webhook, a channel "
+        "the phone remote bot is in, or another webhook), with a test button. The extra webhook stays on this "
+        "PC (never in macros, shared profiles or reports, never in the log).",
+        "Fixes from a bug hunt: Cancel / Stop now also cancel a timed start that waits for the run's end; a "
+        "broken colour in a shared macro no longer stops it from opening; a drawn area can't ask for a giant "
+        "screenshot; counting from Picture watch and from steps at the same moment can't lose a count; with "
+        "short runs a real run isn't taken for the results screen; /log hides whole paths; a timer after the "
+        "PC clock went back no longer waits longer; /schedule answers a bad alarm with a hint. Colour picking: "
+        "with several screens, pick on the main one (said in the window and its ⓘ).",
+        "Fewer Unknown runs: when a run ends with no result, the app looks once more over the whole screen. "
+        "If MISSION COMPLETED or FAILED still shows within 30 seconds, that run gets it (Run stats and "
+        "Discord too), and the short bit after it (only the results screen) isn't counted as a run. The log "
+        "says each time.",
+        "Colour check: If, Retry and Wait for… can check a colour instead of a picture (switch it on in the "
+        "step). Pick the spot and its colour on a frozen screenshot (with a live preview), how different it "
+        "may be, one pixel or a small square, how long it must stay, and where to look: only the spot (best) "
+        "or the whole screen (slower, and other things with that colour can count too). The spot follows "
+        "\"Fit clicks to: The game window\".",
+        "Start playing later (Settings > Playback): an alarm at HH:MM (once, or every day) and / or a timer of N "
+        "minutes (once, or again and again, at least 5 min), both remembered also after the app is closed. When "
+        "it starts it can play the open macro, or open the game first (what to open and the rejoin macro, like "
+        "\"If the game closes\"). First the \"Timed start warning\" sound, then a countdown you can cancel (also "
+        "with Ctrl+Alt+End). If a macro is playing then, it waits for that run to end and starts again. It waits "
+        "for the game's window and gives up after the minutes you set. New sound line: \"Timed start countdown\".",
+        "Settings > General > When Windows starts (off at first): open Macro Recorder when Windows starts, and "
+        "then do nothing, play the open macro, or open the game first (like \"If the game closes\") and then "
+        "play a macro you choose. Only one copy opens. The PC isn't woken from sleep for it. (Mac: not made, "
+        "untested there.)",
+        "Phone remote: /speed (0.1 to 10), /repeat (a number, or loop), /log (the last lines, without paths or "
+        "your Windows name) and /schedule (the alarm, every day, the timer, repeat, open the game first, cancel; "
+        "empty shows what's planned). The /status message also shows the speed, repeat, profile, the alarm and "
+        "timer, the guards and the counters. Every change from the remote is written to the log.",
+        "Picture watch: choose many pictures (Ctrl+click, Shift+click or drag), drag them to another place or "
+        "onto a group, Copy / Paste / Duplicate (each copy gets its own picture file), turn them on / off or "
+        "remove them all at once (more than 5 asks first); one Undo puts it back. The built-in AOT:R group can "
+        "only be copied from.",
+        "Picture watch: a new \"When it shows\": Add to a counter (name, amount, keep between plays). It watches "
+        "all the time while playing and counts once each time the picture shows (it must be gone, and 5 s must "
+        "pass, before it counts again); the run goes on. Also for a colour: Picture watch > Colour…",
+        "Colour check: \"Where to look\" can be an area you draw (like taking a picture of an area), and Look "
+        "now says whether the colour is seen right now, how close the best match is, and where. A spot or area "
+        "picked in Edit is kept in the size the macro was made for.",
+        "Fixed: in Edit, changing an If / Retry condition's drop-down (shows / doesn't show) or typing its "
+        "name gave an error and wasn't kept.",
+    ]),
     ("2.11", "17 November 2026", [
         "Edit window: choose many actions (or macros) at once: Ctrl+click adds or takes away one, Shift+click "
         "chooses everything in between, or drag over them. Duplicate, Remove, Copy, Cut (Ctrl+X), Paste, Move "

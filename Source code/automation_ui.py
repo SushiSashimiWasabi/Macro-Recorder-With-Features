@@ -59,6 +59,10 @@ class AutomationMixin:
                 var = tk.StringVar(value=extra.get(value, next(iter(extra.values()))))
                 ttk.Combobox(row, textvariable=var, state="readonly", width=26,
                              values=list(extra.values())).pack(side="right", padx=(16, 0))
+            elif kind == "time":  # (2.12) HH : MM boxes, the ":" always there
+                box = TimeBox(row, value=str(value or ""))
+                box.pack(side="right", padx=(16, 0))
+                var = box.var
             else:
                 shown = "" if value in (None, "") else (f"{value:g}" if isinstance(value, float) else str(value))
                 var = tk.StringVar(value=shown)
@@ -159,7 +163,7 @@ class AutomationMixin:
             ("runs", "Runs", "0 = not used", "int", 8),
             ("fragments", "Divine fragments this session", "0 = not used", "int", 8),
             ("minutes", "Minutes of playing", "0 = not used", "float", 8),
-            ("at", "At this time", "like 03:30; empty = not used", "text", 8),
+            ("at", "At this time", "hours : minutes; empty = not used", "time", None),
             ("finish_run", "Finish the run first", "stop between runs, not mid-mission", "switch", None),
             (None, "AFTERWARDS", None, "head", None),
             ("then", "Then", None, "choice", core.AUTO_STOP_THEN),
@@ -173,8 +177,8 @@ class AutomationMixin:
                     hh, mm = at.replace(".", ":").split(":")
                     new["at"] = f"{int(hh) % 24:02}:{int(mm) % 60:02}"
                 except ValueError:
-                    self.boxes.showinfo("Stop by itself", "Write the time like 03:30, or leave it empty.",
-                                        parent=win)
+                    self.boxes.showinfo("Stop by itself", "Write both the hours and the minutes (like 03 : 30), "
+                                        "or leave both empty.", parent=win)
                     return False
             self.settings["auto_stop"] = new
         win = self._form_window("Stop by itself", fields, a, save, intro=None)

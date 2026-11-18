@@ -2,5 +2,10 @@ pynput>=1.7
 numpy
 opencv-python-headless
 mss
-pyobjc-framework-WebKit; sys_platform == "darwin"
+pyobjc-framework-WebKit<13; sys_platform == "darwin"
+# (2.12) pyobjc 13 (Oct 2026): pynput's listener calls HIServices.AXIsProcessTrusted, which raised KeyError in the
+# Mac tests (hotkeys and recording would stop): stay on 12 until pynput or pyobjc fixes it
+pyobjc-core<13; sys_platform == "darwin"
+pyobjc-framework-ApplicationServices<13; sys_platform == "darwin"
+pyobjc-framework-Quartz<13; sys_platform == "darwin"
 certifi; sys_platform == "darwin"

@@ -6,6 +6,18 @@ import sys
 import tempfile
 import time
 
+if sys.platform != "win32":
+    # (2.12) which window comes in front is Windows' own window handling (and Alt+Tab): this whole file is
+    # Windows only. On other systems its checks are skipped and counted, never run.
+    for name in ("Settings opens in front of the main window", "Picture watch opens in front of Settings",
+                 "switching to the main window: it comes in front and stays there",
+                 "...nothing is pushed back in front of it a moment later",
+                 "switching to Settings: it comes in front of Picture watch",
+                 "switching to Picture watch: it comes in front again",
+                 "after picking: Picture watch is in front of Settings again"):
+        print("SKIP (Windows only) " + name)
+    print("\n0 of 0 passed")
+    sys.exit(0)
 sys.path.insert(0, sys.argv[1])
 tmp = tempfile.mkdtemp(prefix="mr_win_")
 import macro_recorder as core  # noqa: E402

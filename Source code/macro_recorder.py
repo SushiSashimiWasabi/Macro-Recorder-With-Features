@@ -44,6 +44,7 @@ import importers
 import run_history
 import stats
 import macro_steps as workflow
+import step_more
 import platform_keys
 import raw_mouse
 import window_tools
@@ -216,6 +217,7 @@ BUILTIN_WIN_PICTURE_SCREEN_H = 1440
 # and its gold "MISSION FAILED" title, the built-in "mission failed" picture (also taken at 1440p)
 BUILTIN_LOSS_PICTURE = "failed_default.png"
 BUILTIN_LOSS_PICTURE_SCREEN_H = 1440
+LATE_RESULT_SECONDS = 30  # (2.12) a result this soon after an Unknown run goes to that run
 RESULTS_MATCH_DEFAULT = 80  # the real titles score about 85-92 %, the other title about 55-66 %
 
 
@@ -263,13 +265,17 @@ WATCH_ACTIONS = [
     ("wait", "Wait", "the macro stands still for some seconds, then goes on"),
     ("stop", "Stop the macro", "and say why"),
     ("nothing", "Nothing", "it only counts for another picture's \"only when … also shows\""),
+    ("count", "Add to a counter", "counts up each time it shows (once, until it's gone again); the macro goes on"),
 ]
 WATCH_ACTION_NAMES = {k: n for k, n, _ in WATCH_ACTIONS}
-WATCH_INLINE = ("skip", "key", "wait", "nothing")  # the macro goes on after these
+WATCH_INLINE = ("skip", "key", "wait", "nothing", "count")  # the macro goes on after these
 WATCH_NEED_MACRO = ("play", "switch", "recover")
 # what's remembered for each watched picture besides its file (None / missing = the usual)
 WATCH_FIELDS = ("screen_h", "name", "action", "macro", "key", "seconds", "click", "cooldown", "also", "counts",
-                "tries", "confirm_file", "confirm_screen_h", "confirm_seconds", "match", "ignore_bg")
+                "tries", "confirm_file", "confirm_screen_h", "confirm_seconds", "match", "ignore_bg",
+                # (2.12) "Add to a counter", and a colour instead of the picture (its file is only a swatch)
+                "counter", "amount", "keep", "color_on", "rgb", "tolerance", "area", "hold", "where", "x", "y",
+                "x0", "y0", "x1", "y1")
 # (2.9) "match" (50-99) and "ignore_bg": a picture's own Match % and Ignore background, instead of General's
 
 
@@ -451,6 +457,8 @@ def expand_steps(steps):
             if not isinstance(a, dict):
                 continue
             workflow.clean_counter_step(a)  # (2.11: counters from someone's file are checked)
+            workflow.clean_color_step(a)  # (2.12: and colour checks)
+            step_more.clean_step(a)  # (2.12: and the new actions and options)
             if a.get("kind") == "recorded" and isinstance(a.get("events"), list):
                 a["events"] = expand_moves(a["events"], budget=MAX_EXPANDED - total)
                 total += len(a["events"])
@@ -528,6 +536,9 @@ def _steps_for_file(steps, folder):
         for key in ("file", "on_fail"):
             if a.get("kind") == "play_macro" and a.get(key):
                 b = dict(b, **{key: shared_macro_path(a[key], folder)})
+        for key in step_more.MACRO_KEYS:  # (2.12)
+            if a.get(key):
+                b = dict(b, **{key: shared_macro_path(a[key], folder)})
         if isinstance(a.get("actions"), list):
             b = dict(b, actions=_steps_for_file(a["actions"], folder))
         out.append(b)
@@ -572,6 +583,18 @@ def shared_picture_fields(entry, folder=None):
                 k[name] = key[name]
         if k:
             out["key"] = k
+    if entry.get("action") == "count":  # (2.12)
+        out["counter"] = workflow.clean_counter_name(entry.get("counter"))
+        out["amount"] = workflow.clean_whole(entry.get("amount"), 1)
+        if entry.get("keep") is True:
+            out["keep"] = True
+    if entry.get("color_on") is True:
+        import color_check
+
+        colour = color_check.clean({k: entry[k] for k in ("color_on", "rgb", "tolerance", "area", "hold", "where",
+                                                          "x", "y", "x0", "y0", "x1", "y1") if k in entry})
+        if colour.get("rgb"):
+            out.update(colour)
     macro = entry.get("macro")
     if isinstance(macro, str) and macro.strip():
         name = macro.replace("\\", "/").rsplit("/", 1)[-1].strip()
@@ -832,6 +855,18 @@ def _all_screens():
     return _virtual_screen[1]
 
 
+def combine_checks(first, second):
+    """(2.12) Two of playback's often-asked checks as one: the first one that has something to say."""
+    if first is None:
+        return second
+    if second is None:
+        return first
+
+    def both(held_keys, held_buttons):
+        return first(held_keys, held_buttons) or second(held_keys, held_buttons)
+    return both
+
+
 def move_to(mouse_ctrl, x, y):
     """Put the mouse at x, y (screen pixels) the way a real mouse gets there. Windows: as mouse input
     (SendInput, absolute over all screens), which games like Roblox notice and draw their pointer
@@ -926,7 +961,7 @@ def mac_missing_permissions():
 
 # ---------------------------------------------------------------- recorder app
 
-class MacroRecorder:
+class MacroRecorder(step_more.StepMoreMixin):
     def __init__(self, root):
         self.root = root
         self.events = []  # each: {"t": seconds since start, "type": ..., ...}
@@ -1435,7 +1470,7 @@ class MacroRecorder:
         self.root.withdraw()
         self.root.after(300, self._show_picker)
 
-    def _show_picker(self, on_pick=None, on_cancel=None, hidden=()):
+    def _show_picker(self, on_pick=None, on_cancel=None, hidden=(), on_area=None, tip=None):
         """Freeze the screen and let the user drag a box. on_pick(img, screen_h) gets the picture
         (default: add it to the pictures to watch for). hidden: other windows to show again after."""
         def show_again():
@@ -1467,8 +1502,8 @@ class MacroRecorder:
         photo = tk.PhotoImage(data=image_watch.png_data(shot))
         canvas.create_image(0, 0, image=photo, anchor="nw")
         canvas.photo = photo
-        tip = ("Drag a box around the picture to watch for (for a banner, just around its text and line). "
-               "Esc cancels.")
+        tip = tip or ("Drag a box around the picture to watch for (for a banner, just around its text and line). "
+                      "Esc cancels.")
         canvas.create_rectangle(0, 0, w, 36, fill="black", outline="")
         canvas.create_text(w // 2, 18, text=tip, fill="white", font=("Segoe UI", 12, "bold"))
         state = {"start": None, "rect": None}
@@ -1503,6 +1538,9 @@ class MacroRecorder:
             if right - left < 10 or bottom - top < 10:
                 return  # too small, probably a stray click: let them try again
             close()
+            if on_area is not None:  # (2.12: only where the box is, on the screen)
+                on_area(mon["left"] + left, mon["top"] + top, mon["left"] + right, mon["top"] + bottom)
+                return
             try:
                 (on_pick or (lambda img, sh: self._add_watch_picture(img, screen_h=sh)))(
                     shot[top:bottom, left:right].copy(), h)
@@ -1578,6 +1616,8 @@ class MacroRecorder:
     def _make_matchers(self):
         matchers = []
         for pic in self._active_watch_pictures():
+            if pic.get("action") == "count" or pic.get("color_on"):
+                continue  # (2.12: counted on their own, alongside; a colour's file is only a swatch)
             m = image_watch.Matcher(pic["img"], picked_screen_h=pic["screen_h"],
                                     ignore_background=self.picture_ignores_bg(pic), screen_h=self.screen_h)
             m.need = self.picture_need(pic)
@@ -2096,6 +2136,12 @@ class MacroRecorder:
         # "If the game closes": its rejoin macro is read now, so a missing file shows at once
         self.closed_steps = None
         closed = self._closed_settings()
+        rejoin = (getattr(self, "start_rejoin_opts", None) or {}).get("macro") or closed["macro"]
+        if getattr(self, "start_rejoin_first", False) and rejoin and self._find_macro_file(rejoin):
+            try:  # (2.12: open the game first: the alarm's rejoin macro, or "If the game closes"'s)
+                self.closed_steps = self._load_for_play(rejoin, play_on)
+            except Exception as exc:
+                diag.error("Couldn't read the rejoin macro for start-up", exc)
         if test:
             pass  # (a test never gets the game back: it stops instead)
         elif closed["action"] == "reopen" and closed["macro"] and not self._find_macro_file(closed["macro"]):
@@ -2109,6 +2155,16 @@ class MacroRecorder:
                                      "closes\" (Settings > Playback):\n" + str(exc))
                 return
         self.result_matchers = [] if test else self._build_result_matchers()
+        self.stuck_steps = None
+        stuck = self._stuck_settings()
+        if not test and stuck["on"] and stuck["action"] == "macro" and stuck["macro"]:
+            if not self._find_macro_file(stuck["macro"]):
+                diag.info("The macro of \"If a run gets stuck\" isn't there any more: the run only starts over")
+            else:
+                try:
+                    self.stuck_steps = self._load_for_play(stuck["macro"], play_on)
+                except Exception as exc:
+                    diag.error("Couldn't read the macro of \"If a run gets stuck\"", exc)
         alltime = self.settings.get("stats_all") if isinstance(self.settings.get("stats_all"), dict) else {}
         if not test or getattr(self, "session", None) is None:  # (a test keeps the last real session on show)
             self.session = stats.Session(self._macro_name(), fragments_before=int(alltime.get("fragments", 0)))
@@ -2120,6 +2176,9 @@ class MacroRecorder:
         self.auto_stopped = None
         self.play_vary = self._vary_now()
         self._start_counters(events)
+        if watch is not None and not watch["matchers"]:
+            watch = None  # (only pictures that count were on: no restarting picture to watch for)
+        self.count_list = [] if test else self._count_pictures()  # (on this thread: it reads a Tk switch)
         self.stop_play.clear()
         self.stop_reason = None
         self.away_started = None
@@ -2318,18 +2377,33 @@ class MacroRecorder:
                 out.append({"kind": "macro", "id": a.get("id"), "times": max(1, int(a.get("times", 1) or 1)),
                             "counts": bool(a.get("counts", True)),
                             "name": os.path.splitext(os.path.basename(a["file"]))[0],
-                            "profile": a.get("profile"),
+                            "profile": a.get("profile"), "speed": a.get("speed") or 0,
                             "on_fail": (self._load_for_play(a["on_fail"], play_on, chain)
                                         if a.get("on_fail") else None),
                             "on_fail_name": os.path.splitext(os.path.basename(a.get("on_fail") or ""))[0],
                             "actions": self._load_for_play(a["file"], play_on, chain)})
             elif isinstance(a.get("actions"), list):
-                b = dict(a)
+                b = self._resolve_more_macros(dict(a), play_on, chain)
                 b["actions"] = self._resolve_macros(a["actions"], play_on, chain)
                 out.append(b)
             else:
-                out.append(a)
+                out.append(self._resolve_more_macros(a, play_on, chain))
         return out
+
+    def _resolve_more_macros(self, a, play_on, chain):
+        """(2.12) "Run another macro afterwards" / "if it doesn't show: play a macro" / "if every try
+        fails: play a macro": that macro's steps, read now (a missing one is left out and logged)."""
+        for key in step_more.MACRO_KEYS:
+            path = a.get(key)
+            if not path or a.get("off"):
+                continue
+            a = dict(a)
+            if not self._find_macro_file(path):
+                diag.info(f"A step's macro \"{os.path.basename(path)}\" isn't there any more: left out")
+                a[key] = ""
+                continue
+            a[key.replace("_macro", "_steps")] = self._load_for_play(path, play_on, chain)
+        return a
 
     @staticmethod
     def _has_counted_macro(steps):
@@ -2380,11 +2454,15 @@ class MacroRecorder:
             kind = a.get("kind")
             if kind == "wait_picture":
                 holders.append(a)
-            elif kind in ("if", "retry"):
-                holders.append(a.get("condition", {}))
+            elif kind in ("if", "retry") or (kind == "repeat" and a.get("mode") == "until"):
+                c = a.get("condition") or {}
+                holders += [h for h in [c] + list(c.get("more") or [])
+                            if h.get("type", "picture") == "picture"]  # (2.12: AND / OR parts too)
             elif kind == "recorded":
                 holders.extend(ev for ev in a.get("events", []) if ev.get("type") == "wait_picture")
         for n, h in enumerate(holders, start=1):
+            if h.get("color_on"):
+                continue  # (2.12: a colour check, not a picture)
             if not h.get("png"):
                 # (2.10: nothing stops Play; the step is skipped and Check my macro tells about it)
                 diag.info(f"A picture step or condition ({n}) has no picture: it's skipped")
@@ -2645,6 +2723,11 @@ class MacroRecorder:
             test = getattr(self, "test_play", None)
             closed = None if test else self._closed_watcher(bg)
             away = None if getattr(self, "ghost", False) else (self._away_watcher(bg, closed) or closed)
+            # (2.12) the stuck run guard is asked as often as the "game in front" check
+            away = combine_checks(away, None if test else self._stuck_watcher())
+            self.late_result = None  # (2.12) the last Unknown run, while its result may still show
+            self.timer_text = None  # (2.12) what Do maths / a Note shows on the timer
+            self.last_found = None  # (2.12) where a picture / colour was last found (Click: where it was found)
             if self.result_matchers:
                 self.result_state = {}
                 threading.Thread(target=self._result_worker, args=(self.result_matchers, watch_done),
@@ -2656,11 +2739,28 @@ class MacroRecorder:
                    "watch": watch, "state": state, "vary": self.play_vary}
             threading.Thread(target=self._health_worker, args=(watch_done,), daemon=True,
                              name="health").start()
+            counting = [] if test else getattr(self, "count_list", [])  # (read in play(): no Tk here)
+            if counting:  # (2.12) Picture watch's "Add to a counter": watched alongside, all the time
+                threading.Thread(target=self._count_worker, args=(counting, watch_done), daemon=True,
+                                 name="count").start()
             if self.auto_stop and self.auto_stop.get("deadline"):
                 threading.Thread(target=self._auto_stop_timer, args=(self.auto_stop, watch_done),
                                  daemon=True).start()
             self.play_ctx = ctx
             self.playing_name = None  # set when a picture switched to another macro
+            if getattr(self, "start_rejoin_first", False):  # (2.12: start-up: open the game first)
+                self.start_rejoin_first = False
+                extra = getattr(self, "start_rejoin_opts", None) or {}
+                target = extra.get("open") or self._closed_settings()["open"]
+                exe = (self.play_game_exe or (self.macro_program or {}).get("exe") or self.settings.get("last_game_exe")
+                       or (os.path.basename(target) if target.lower().endswith(".exe") else "RobloxPlayerBeta.exe"))
+                if window_tools.IS_WIN and not window_tools.windows_of(exe):
+                    opts = dict(self._closed_settings(), action="reopen")
+                    if extra.get("open"):
+                        opts["open"] = extra["open"]
+                    self.start_rejoin_opts = None
+                    if self._game_closed(opts, exe, self.closed_steps, startup=True) is True:
+                        return
             while True:
                 times = None if loop else max(1, repeats - state["count"])
                 result = self._run_passes(events, ctx, times, top=True)
@@ -2698,7 +2798,15 @@ class MacroRecorder:
                 self._set_note(f"Playing{name} run {state['count'] + 1}{total}{watching}...")
             if counts:
                 self.run_began = (time.perf_counter(), self._play_clock())
+            if top:
+                self.goto_jumps, self.goto_fast = {}, [0, self._play_clock()]  # (2.12: Go to's limits)
+                if "base_speed" in ctx:  # (2.12: Set speed lasts until the run's end)
+                    ctx["speed"] = ctx.pop("base_speed")
             result = self._run_steps(steps, ctx)
+            if isinstance(result, str) and result.startswith("goto:"):
+                self.stop_reason = f"Stopped: there's no Label \"{result[5:]}\" for Go to."
+                diag.info(self.stop_reason)
+                return "stop"
             if result == "stop" or isinstance(result, tuple):
                 return result
             if result == "gameback":  # the game had closed and is open again: this run starts over
@@ -2741,7 +2849,10 @@ class MacroRecorder:
                 done += 1
                 if counts:
                     state["count"] += 1
-                    self._finish_run(state["count"], "picture" if picture else "end")
+                    if self._finish_run(state["count"], "picture" if picture else "end") is False:
+                        # (2.12) only the results screen of the Unknown run before: not a run of its own
+                        state["count"] -= 1
+                        done -= 1
                     if self._auto_stop_due(state):
                         return "stop"
                     if ctx.get("on_fail") and self.session.runs and self.session.runs[-1][0] == stats.LOSS:
@@ -2762,6 +2873,8 @@ class MacroRecorder:
             seen.clear()
             if self._picture_limit(ctx):
                 return "stop"
+            if pic.get("builtin") == "retry":  # (2.12: RETRY counts as a result for the stuck run guard)
+                self.last_result_clock = self._play_clock()
             self._call_ui(self._picture_seen)
             self._picture_click(pic, watch)
             if action == "stop":
@@ -2854,6 +2967,13 @@ class MacroRecorder:
         return "skip" if action == "skip" else None
 
     def _play_picture_macro(self, pic, ctx, recover=False):
+        try:
+            return self._play_picture_macro_now(pic, ctx, recover)
+        finally:
+            if recover:
+                self.recovery_end_clock = self._play_clock()  # (the stuck run guard starts again from here)
+
+    def _play_picture_macro_now(self, pic, ctx, recover=False):
         """A picture's own macro: played once, then the main macro starts over. With recover (a
         disconnect screen): the rejoin macro is played until the screen is gone and, if one was
         chosen, the "I'm back" picture shows; each failed try waits longer. Returns "ok" or "stop"."""
@@ -3004,6 +3124,62 @@ class MacroRecorder:
             self.recover_left = None
         return not self.stop_play.is_set()
 
+    # ------------------------------------------------------------ (2.12) colour checks
+
+    def _color_until(self, h, want, wait, away=None, held=None):
+        """Looks at the colour until it shows (want True) or is gone (want False) and has stayed so for
+        its "hold" seconds, for up to `wait` seconds (plus the hold): True when that happened."""
+        import color_check
+
+        if not color_check.ready(h):
+            return not want
+        hold = float(h.get("hold", 0) or 0)
+        every = color_check.every(h)
+        deadline = time.perf_counter() + max(0.0, wait) + hold
+        since = None
+        while True:
+            started = time.perf_counter()
+            try:
+                now = color_check.seen(h) == want
+            except Exception as exc:
+                diag.error("Couldn't check a colour", exc)
+                now = False
+            self._note_look("if/retry", time.perf_counter() - started)
+            if now:
+                since = since or started
+                if started - since >= hold:
+                    return True
+            else:
+                since = None
+            if started >= deadline or self.stop_play.is_set():
+                return False
+            if away is not None:
+                gone = away(*held)
+                if gone:
+                    return ("away", gone)  # (the game went away for too long, or closed and is back)
+            self.stop_play.wait(max(every, time.perf_counter() - started))
+
+    def _wait_for_color(self, ev, held_keys, held_buttons, away):
+        """A "Wait for…" step that waits for a colour (up to its time limit), then maybe clicks the spot."""
+        import color_check
+
+        timeout = float(ev.get("timeout", 30))
+        self._set_note("Waiting for " + color_check.describe(ev) + (f" ({timeout:g} s)..." if timeout > 0 else "..."))
+        found = self._color_until(ev, True, timeout if timeout > 0 else 10 ** 9, away, (held_keys, held_buttons))
+        if isinstance(found, tuple):
+            return "gameback" if found[1] == "gameback" else "stop"
+        if self.stop_play.is_set():
+            return "stop"
+        if not found:
+            if ev.get("otherwise") == "stop":
+                self.stop_reason = f"Stopped: {color_check.describe(ev)} didn't show within {timeout:g} s."
+                diag.info(self.stop_reason)
+                return "stop"
+            return "go on"
+        if ev.get("click") and ev.get("where") != "screen" and "x" in ev:
+            self._click_at(int(ev["x"]), int(ev["y"]))
+        return "go on"
+
     def _ghost_event(self, ev):
         """Watch only (2.11): what would have been pressed (the dark window shows it). Sends nothing."""
 
@@ -3025,6 +3201,9 @@ class MacroRecorder:
         if self.result_matchers:
             began_wall, began_clock = getattr(self, "run_began", (time.perf_counter(), self._play_clock()))
             status = self._run_result(began_wall)
+            if status == stats.UNKNOWN and any(self._kinds_found().values()):
+                # (2.12) nothing near the usual spot: one more look, over the whole screen
+                status = self._run_result(began_wall, whole_screen=True)
             if status != stats.UNKNOWN:
                 # the result showing now belongs to this run, even if the watcher only notices it
                 # after the next run has started
@@ -3032,15 +3211,81 @@ class MacroRecorder:
             seconds = self._play_clock() - began_clock
         else:
             seconds = self._play_clock() - getattr(self, "run_began", (0, self._play_clock()))[1]
+        if status in (stats.WIN, stats.LOSS):
+            self.last_result_clock = self._play_clock()  # (2.12: the stuck run guard counts from here)
         fragments = self._count_drops() if self.settings.get("drops_enabled", True) else 0
+        if self._late_leftover(status, seconds, fragments):
+            return False
         self.session.add(status, seconds, fragments)
         name = getattr(self, "chain_step", None) or getattr(self, "playing_name", None) or self._macro_name()
         self.last_run = run_history.add(name, status, seconds, fragments)
+        if status == stats.UNKNOWN and self.result_matchers:
+            with self._late_lock:  # its result may still show (the next run starts meanwhile)
+                self.late_result = {"ended": time.perf_counter(), "index": len(self.session.runs) - 1,
+                                    "run": self.last_run, "count": count, "window": self._late_window(name)}
         # saved after every run (on a helper thread, so the next run isn't held up): a crash or a power
         # cut loses no runs from the stats
         threading.Thread(target=run_history.save, daemon=True, name="save-runs").start()
         diag.info(f"Run {count} over ({how}): {status}, {seconds:.0f} s, {fragments} fragment(s)")
         self._run_finished(count, how)
+
+    _late_lock = threading.Lock()
+    RESULT_TITLES = {stats.WIN: "MISSION COMPLETED", stats.LOSS: "MISSION FAILED"}
+
+    def _late_window(self, name):
+        """(2.12) How long after an Unknown run its result may still show: 30 s, or half the usual run
+        when runs are short (so a real short run isn't taken for the results screen)."""
+        times = [s for st, s in self.session.runs if st in (stats.WIN, stats.LOSS)][-10:]
+        if not times:
+            times = [r["s"] for r in run_history.runs(name) if r.get("status") in ("win", "loss")][-10:]
+        if not times:
+            return LATE_RESULT_SECONDS
+        usual = sorted(times)[len(times) // 2]
+        return max(1.0, min(LATE_RESULT_SECONDS, usual / 2))
+
+    def _give_late_result(self, kind, now=None, late=None):
+        """(2.12) A result showed: if the run before ended Unknown less than LATE_RESULT_SECONDS ago,
+        the result is that run's. Returns True when it was given to it."""
+        now = time.perf_counter() if now is None else now
+        with self._late_lock:
+            late = late or getattr(self, "late_result", None)
+            if kind not in (stats.WIN, stats.LOSS) or not late or late.get("given") \
+                    or now - late["ended"] > late.get("window", LATE_RESULT_SECONDS):
+                return False
+            late["given"] = True
+        i = late["index"]
+        runs = self.session.runs
+        if 0 <= i < len(runs) and runs[i][0] == stats.UNKNOWN:
+            runs[i] = (kind, runs[i][1])
+            self.session.streak = self.session.streak + 1 if kind == stats.WIN else 0
+        if late.get("run") is not None:
+            run_history.correct(late["run"], kind)
+            threading.Thread(target=run_history.save, daemon=True, name="save-runs").start()
+        self.last_result_clock = self._play_clock()
+        diag.info(f"Late result: {self.RESULT_TITLES[kind]} showed {now - late['ended']:.0f} s after run "
+                  f"{late['count']} ended: run {late['count']} counts as {kind} (it was unknown)")
+        return True
+
+    def _late_leftover(self, status, seconds, fragments):
+        """(2.12) The run that just ended came right after an Unknown one. If the Unknown run's result
+        showed in it (and went to that run) and it was short, it was only that results screen: it
+        isn't counted, and its fragments go to the run before. Returns True when it isn't counted."""
+        with self._late_lock:
+            late = getattr(self, "late_result", None)
+            self.late_result = None
+        if not late or not self.result_matchers or seconds >= late.get("window", LATE_RESULT_SECONDS):
+            return False
+        if not late.get("given") and not self._give_late_result(status, late=late):
+            return False
+        i = late["index"]
+        if fragments and 0 <= i < len(self.session.fragments):
+            self.session.fragments[i] += int(fragments)
+            if late.get("run") is not None:
+                run_history.correct(late["run"], late["run"]["status"], fragments)
+        diag.info(f"The short run after run {late['count']} ({seconds:.0f} s) isn't counted: it was only "
+                  f"that run's results screen")
+        self._run_finished(late["count"], "late")
+        return True
 
     def _count_drops(self):
         """Divine fragments on the results screen now (counted by their pink-to-blue frame)."""
@@ -3073,8 +3318,9 @@ class MacroRecorder:
             diag.error("Couldn't count the drops", exc)
             return 0
 
-    def _run_result(self, run_began):
-        """"win", "loss" or "unknown" for the run that started at run_began (perf_counter time)."""
+    def _run_result(self, run_began, whole_screen=False):
+        """"win", "loss" or "unknown" for the run that started at run_began (perf_counter time).
+        whole_screen: look over the whole screen (else near where results showed before)."""
         st = self.result_state
         seen = [(t, kind) for kind, s in st.items() for t in s.get("appeared", []) if t >= run_began]
         if seen:
@@ -3084,7 +3330,7 @@ class MacroRecorder:
             need = self.settings.get("results_match", RESULTS_MATCH_DEFAULT) / 100.0
             # only around the spots where result pictures were seen before (about 0.01 s, so Retry
             # isn't held up); the whole screen only while no result picture was ever found
-            whole = not any(self._kinds_found().values())
+            whole = whole_screen or not any(self._kinds_found().values())
             region = None
             if not whole:
                 areas = [m.near_last_area() for m in list(self.result_matchers) if m.last_rect is not None]
@@ -3096,8 +3342,9 @@ class MacroRecorder:
                 self._unfound_kinds_in(screen, region, need, best)
             kind = self._best_result(best, need)
             since = st.get(kind, {}).get("since") if kind else None
-            # (a picture already showing before this run started belongs to the run before)
-            if kind and (since is None or since >= run_began):
+            # (a picture already showing before this run started belongs to the run before; one given
+            # to the Unknown run before, too)
+            if kind and not st.get(kind, {}).get("given") and (since is None or since >= run_began):
                 return kind
         except Exception as exc:
             diag.error("Couldn't check the result picture", exc)
@@ -3239,9 +3486,13 @@ class MacroRecorder:
                             if consumed and consumed[0] == kind and now - consumed[1] < 15:
                                 pass  # the run that just ended already counted this one
                             elif not s["first"]:  # (already showing when playing started: not this run's)
-                                s["appeared"].append(now)
+                                if self._give_late_result(kind, now):
+                                    s["given"] = True  # (2.12) the Unknown run before's, shown late
+                                else:
+                                    s["appeared"].append(now)
                         elif not on and whole:
                             s["since"] = None
+                            s["given"] = False
                         s["first"] = False
                     took = time.perf_counter() - started
                     self._note_look("results", took)
@@ -3254,15 +3505,38 @@ class MacroRecorder:
     def _run_steps(self, steps, ctx):
         """Play a list of steps. Returns "ok", "picture" (picture watch saw its picture: this run is
         over), "stop" (stop the macro) or "restart" (start the macro again from step 1)."""
-        for a in steps:
+        i = 0
+        prev = None
+        while i < len(steps):
+            a = steps[i]
+            i += 1
             if self.stop_play.is_set():
                 return "stop"
             if ctx["seen"].is_set() and self._picture_now(ctx) == "picture":
                 return "picture"
             if a.get("off"):
+                prev = None
                 continue
-            result = self._run_step(a, ctx)
+            kind = a.get("kind")
+            if kind == "else":  # (2.12) only right after an If whose condition wasn't true
+                was = prev
+                prev = None
+                if was not in ("if", "if_counter") or getattr(self, "last_if_true", True):
+                    continue
+                result = self._run_steps(a.get("actions", []), ctx)
+            else:
+                if kind in ("if", "if_counter"):
+                    self.last_if_true = True
+                result = self._run_step(a, ctx)
+                prev = kind
             if result == "skip":  # a picture's "Skip to the next step"
+                continue
+            if isinstance(result, str) and result.startswith("goto:"):  # (2.12) a Label in this list?
+                at = next((n for n, b in enumerate(steps) if b.get("kind") == "label" and not b.get("off")
+                           and b.get("name") == result[5:]), None)
+                if at is None:
+                    return result  # (maybe in the list around this one)
+                i, prev = at, None
                 continue
             if result != "ok":
                 return result
@@ -3274,6 +3548,9 @@ class MacroRecorder:
         bg = ctx["bg"]
         if kind == "recorded":
             return self._play_events(a.get("events", []), ctx)
+        more = self._run_more_step(a, ctx)  # (2.12: the new actions and options)
+        if more is not None:
+            return more
         if kind == "wait":
             seconds = float(a.get("seconds", 0)) / ctx["speed"]
             vary = ctx.get("vary")
@@ -3294,6 +3571,8 @@ class MacroRecorder:
                                  if vary.get("on") else None))
             if a.get("on_fail"):
                 ctx = dict(ctx, on_fail=(a["on_fail"], a.get("on_fail_name")))
+            if a.get("speed"):  # (2.12: its own speed)
+                ctx = dict(ctx, speed=max(0.01, min(100.0, float(a["speed"]))))
             try:
                 return self._run_passes(a.get("actions", []), ctx, max(1, int(a.get("times", 1))),
                                         counts=bool(a.get("counts", True)))
@@ -3311,7 +3590,8 @@ class MacroRecorder:
                     return result
             return "ok"
         if kind == "if":
-            if self._condition_true(a.get("condition", {})):
+            self.last_if_true = bool(self._condition_one(a.get("condition", {})))
+            if self.last_if_true:
                 return self._run_steps(a.get("actions", []), ctx)
             return "ok"
         if kind == "retry":
@@ -3462,6 +3742,8 @@ class MacroRecorder:
             self._set_note(f"Watch only: {label} counts as {'found' if found else 'not found'}")
             self.stop_play.wait(0.6)
             return found if condition.get("shows", True) else not found
+        if condition.get("color_on"):  # (2.12: a colour instead of a picture)
+            return self._color_until(condition, bool(condition.get("shows", True)), wait)
         matcher = self.wait_matchers.get(id(condition))
         if matcher is None:
             return not condition.get("shows", True)
@@ -3685,6 +3967,89 @@ class MacroRecorder:
             return self._game_closed(opts, exe, steps)
         return check
 
+    # ------------------------------------------------------------ (2.12) stuck run guard
+
+    STUCK_ACTIONS = ("restart", "macro", "ping")
+
+    def _stuck_settings(self):
+        """Settings > Playback > "If a run gets stuck": {"on", "minutes" (0 = suggested), "action":
+        "restart" / "macro" (play it, then start over) / "ping" (only tell Discord), "macro", "tries"}."""
+        saved = self.settings.get("stuck_guard")
+        saved = saved if isinstance(saved, dict) else {}
+        action = saved.get("action") if saved.get("action") in self.STUCK_ACTIONS else "restart"
+        return {"on": saved.get("on") is True, "minutes": int_setting(saved, "minutes", 0, 0, 600),
+                "action": action, "macro": str(saved.get("macro") or ""), "tries": int_setting(saved, "tries", 3, 1, 20)}
+
+    def stuck_minutes_suggested(self, name=None):
+        """About 3 times as long as the macro's usual run (from Run stats), at least 3 minutes."""
+        try:
+            usual = run_history.summary(run_history.runs(name or self._macro_name()))["usual"]
+        except Exception:
+            usual = 0
+        return max(3, int(round(3 * usual / 60))) if usual else 10
+
+    def _stuck_watcher(self):
+        """A function playback calls often: when neither MISSION COMPLETED nor MISSION FAILED was seen
+        for the set minutes (the clock stands still while paused, while the game isn't in front and
+        during disconnect / game-close recovery), it does what "If a run gets stuck" says. It returns
+        False (all fine), True (stop playback) or "gameback" (start the run over)."""
+        opts = self._stuck_settings()
+        if not opts["on"] or not self.settings.get("results_enabled", True):
+            return None
+        minutes = opts["minutes"] or self.stuck_minutes_suggested()
+        st = {"since": self._play_clock(), "tries": 0, "last": 0.0, "result": getattr(self, "last_result_clock", 0.0)}
+        diag.info(f"Stuck run guard: on, {minutes} min without a result")
+
+        def check(held_keys, held_buttons):
+            wall = time.perf_counter()
+            if wall - st["last"] < 1.0:
+                return False
+            st["last"] = wall
+            result = getattr(self, "last_result_clock", 0.0)
+            if result > st["result"]:  # a result showed: all fine again
+                st["result"] = result
+                st["tries"] = 0
+            st["since"] = max(st["since"], result, getattr(self, "recovery_end_clock", 0.0))
+            wait = minutes * 60 * (1.5 ** st["tries"])  # (each new try waits longer)
+            if self._play_clock() - st["since"] < wait:
+                return False
+            return self._stuck(opts, st, wait, held_keys, held_buttons)
+        return check
+
+    def _stuck(self, opts, st, waited, held_keys, held_buttons):
+        st["tries"] += 1
+        self._release_held(None, held_keys, held_buttons)
+        mins = f"{waited / 60:.0f} min"
+        if st["tries"] > opts["tries"]:
+            self.stop_reason = (f"Stopped: no MISSION COMPLETED or MISSION FAILED for {mins}, also after "
+                                f"{opts['tries']} {'try' if opts['tries'] == 1 else 'tries'} (Settings > Playback > "
+                                "If a run gets stuck).")
+            diag.error(self.stop_reason)
+            self._recovery_event("failed", self.stop_reason)
+            return True
+        text = (f"No MISSION COMPLETED or MISSION FAILED for {mins}: the run seems stuck (try {st['tries']} of "
+                f"{opts['tries']}).")
+        diag.info("Stuck run guard: " + text)
+        self._recovery_event("stuck", text)
+        if opts["action"] == "ping":
+            st["since"] = self._play_clock()
+            return False
+        steps = getattr(self, "stuck_steps", None)
+        if opts["action"] == "macro" and steps:
+            name = os.path.splitext(os.path.basename(opts["macro"]))[0]
+            self._set_note(f"The run seems stuck: playing \"{name}\"...")
+            diag.info(f"Stuck run guard: playing \"{name}\"")
+            ctx = getattr(self, "play_ctx", None) or {}
+            sub = dict(ctx, seen=threading.Event(), watch=None, away=None)
+            result = self._run_passes(steps, sub, 1, counts=False)
+            if sub.get("held"):
+                self._release_held(None, *sub["held"])
+            if result == "stop" or self.stop_play.is_set():
+                return True
+        diag.info("Stuck run guard: the run starts over")
+        st["since"] = self._play_clock()
+        return "gameback"
+
     def _open_target(self, target):
         """Open a link, shortcut or program as if it was double-clicked."""
         if hasattr(os, "startfile"):
@@ -3694,7 +4059,13 @@ class MacroRecorder:
 
             subprocess.Popen(["open", target])
 
-    def _game_closed(self, opts, exe, steps):
+    def _game_closed(self, opts, exe, steps, startup=False):
+        try:
+            return self._game_closed_now(opts, exe, steps, startup)
+        finally:
+            self.recovery_end_clock = self._play_clock()  # (the stuck run guard starts again from here)
+
+    def _game_closed_now(self, opts, exe, steps, startup=False):
         """Every window of the game is gone. Stop, or open the game again and play the rejoin macro
         (each failed try waits longer). Returns True (stop) or "gameback"."""
         if opts["action"] == "stop":
@@ -3702,7 +4073,10 @@ class MacroRecorder:
             diag.info(self.stop_reason)
             return True
         self._away_pause(False)
-        self._recovery_event("lost", "The game closed. Opening it again.")
+        if startup:
+            diag.info("Start-up: opening the game first")
+        else:
+            self._recovery_event("lost", "The game closed. Opening it again.")
         ctx = getattr(self, "play_ctx", None) or {}
         sub = dict(ctx, seen=threading.Event(), watch=None, away=None)
         tries = opts["tries"]
@@ -3756,6 +4130,9 @@ class MacroRecorder:
             if self.stop_play.is_set():
                 return True
             if window_tools.windows_of(exe):
+                if startup:
+                    diag.info(f"Start-up: the game is open after {n + 1} {'try' if n == 0 else 'tries'}")
+                    return "gameback"
                 self.session.reconnects += 1
                 run_history.note("reconnects")
                 self._recovery_event("back", f"The game is open again after {n + 1} "
@@ -3873,6 +4250,8 @@ class MacroRecorder:
                 self.stop_reason = None
                 return "stop"
             return "go on"
+        if ev.get("color_on"):  # (2.12: wait until a colour shows)
+            return self._wait_for_color(ev, held_keys, held_buttons, away)
         matcher = self.wait_matchers.get(id(ev))
         if matcher is None:
             return "go on"
@@ -3912,6 +4291,7 @@ class MacroRecorder:
                 if score >= need and rect is not None:
                     x, y, w, h = rect
                     found = (origin[0] + x + w // 2, origin[1] + y + h // 2)
+                    self.last_found = (origin[0] + x, origin[1] + y, w, h)  # (2.12)
                     break
                 # look 4 times a second; when a look is slow, rest at least as long as it took (so
                 # waiting never takes more than about half of one CPU core away from the game)
@@ -4007,23 +4387,107 @@ class MacroRecorder:
         """Every counter starts at 0 on Play, except the ones a step says to keep (their last value is
         kept in this PC's settings, never in the macro file)."""
         self.counters = {}
-        self.kept_counter_names = workflow.kept_counters(steps)
+        self.kept_counter_names = workflow.kept_counters(steps) | {
+            workflow.clean_counter_name(p.get("counter")) for p in self._count_pictures() if p.get("keep") is True}
         saved = self.settings.get("counter_values")
         saved = saved.get(self._counters_key()) if isinstance(saved, dict) else None
         for name in self.kept_counter_names:
             value = saved.get(name) if isinstance(saved, dict) else None
-            self.counters[name] = workflow.clean_whole(value, 0) if value is not None else 0
+            self.counters[name] = step_more.clean_number(value, 0) if value is not None else 0
+
+    def _count_pictures(self):
+        """Picture watch's pictures and colours that "Add to a counter" (when picture watch is on)."""
+        try:
+            on = bool(self.watch_var.get())
+        except Exception:
+            on = True
+        if not on or image_watch is None:
+            return []
+        return [p for p in self._active_watch_pictures() if p.get("action") == "count"]
+
+    COUNT_EVERY = 0.5
+
+    def _count_worker(self, pictures, done):
+        """Counts once each time a picture (or colour) shows: then it must be gone (and its cooldown,
+        5 s unless set, must be over) before it can count again. Never while paused or away."""
+        import color_check
+
+        names = {id(p): watch_name(p) for p in pictures}
+        state = {id(p): {"since": None, "armed": True, "last": -1e9} for p in pictures}
+        matchers = {}
+        for p in pictures:
+            if not p.get("color_on"):
+                try:
+                    m = image_watch.Matcher(p["img"], picked_screen_h=p.get("screen_h"),
+                                            ignore_background=self.picture_ignores_bg(p), screen_h=self.screen_h)
+                    m.need = self.picture_need(p)
+                    matchers[id(p)] = m
+                except Exception as exc:
+                    diag.error(f"Picture watch: couldn't use {names[id(p)]} for counting", exc)
+        diag.info(f"Picture watch: counting with {len(pictures)} picture(s) / colour(s)")
+        while not done.is_set() and not self.stop_play.is_set():
+            started = time.perf_counter()
+            if self._play_paused_now():
+                done.wait(0.3)
+                continue
+            screen = None
+            for p in pictures:
+                st = state[id(p)]
+                try:
+                    if p.get("color_on"):
+                        seen = color_check.seen(p)
+                    elif id(p) in matchers:
+                        if screen is None:
+                            screen = self._hide_own_window(image_watch.grab_screen(), image_watch.screen_origin())
+                        m = matchers[id(p)]
+                        seen = m.find(screen, good_enough=m.need)[0] >= m.need
+                    else:
+                        continue
+                except Exception as exc:
+                    diag.error("Picture watch: a counting look failed", exc)
+                    continue
+                now = time.perf_counter()
+                if not seen:
+                    st["since"], st["armed"] = None, True
+                    continue
+                st["since"] = st["since"] or now
+                cooldown = float(p.get("cooldown") or 5)
+                if st["armed"] and now - st["since"] >= float(p.get("hold") or 0) and now - st["last"] >= cooldown:
+                    st["armed"], st["last"] = False, now
+                    self._count_now(p, names[id(p)])
+            self._note_look("Picture watch", time.perf_counter() - started)
+            done.wait(max(self.COUNT_EVERY, time.perf_counter() - started))
+
+    def _play_paused_now(self):
+        """Paused by the user or because the game isn't in front (the dark window knows)."""
+        return getattr(self, "play_paused_at", None) is not None or getattr(self, "away_started", None) is not None
+
+    _counter_lock = threading.Lock()  # (2.12: Picture watch counting and counter steps can meet)
+
+    def _count_now(self, p, label):
+        name = workflow.clean_counter_name(p.get("counter"))
+        amount = workflow.clean_whole(p.get("amount"), 1)
+        counters = self.__dict__.setdefault("counters", {})
+        with self._counter_lock:
+            counters[name] = max(-self.COUNTER_MAX, min(self.COUNTER_MAX, counters.get(name, 0) + amount))
+        diag.info(f"Picture watch: {label} showed: counter \"{name}\" {'+' if amount >= 0 else ''}{amount} "
+                  f"(now {counters[name]})")
 
     def _counter_step(self, a, ctx):
         kind = a.get("kind")
         name = workflow.clean_counter_name(a.get("counter"))
         counters = self.__dict__.setdefault("counters", {})
-        now = counters.get(name, 0)
-        if kind == "counter_add":
-            counters[name] = max(-self.COUNTER_MAX, min(self.COUNTER_MAX, now + workflow.clean_whole(a.get("amount"), 1)))
-        elif kind == "counter_set":
-            counters[name] = workflow.clean_whole(a.get("value"), 0)
-        elif now >= workflow.clean_whole(a.get("at_least"), 1):  # "if_counter"
+        with self._counter_lock:
+            now = counters.get(name, 0)
+            if kind == "counter_add":
+                counters[name] = max(-self.COUNTER_MAX, min(self.COUNTER_MAX,
+                                                            now + workflow.clean_whole(a.get("amount"), 1)))
+            elif kind == "counter_set":
+                counters[name] = workflow.clean_whole(a.get("value"), 0)
+        if kind in ("counter_add", "counter_set"):
+            return "ok"
+        self.last_if_true = now >= workflow.clean_whole(a.get("at_least"), 1)
+        if self.last_if_true:  # "if_counter"
             return self._run_steps(a.get("actions", []), ctx)
         return "ok"
 

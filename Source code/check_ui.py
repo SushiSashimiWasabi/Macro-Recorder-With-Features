@@ -97,10 +97,11 @@ class CheckMixin:
                 continue
             kind = a.get("kind")
             holder = a.get("condition", {}) if kind in ("if", "retry") else a if kind == "wait_picture" else None
-            if holder is not None and not holder.get("png"):
+            if holder is not None and not holder.get("png") and not holder.get("color_on"):
                 what = {"if": "An \"If\"", "retry": "A \"Retry\""}.get(kind, "A \"Wait for a picture\"")
                 add(f"steppic:{a.get('id')}", SURE, f"{what} step has no picture, so it never sees one. "
                                                     "Choose one in Edit.")
+            self._check_more_step(a, _lst, _i, steps, add)
             if kind != "play_macro":
                 continue
             for key, what in (("file", "a \"Play another macro\" step plays"),
@@ -122,6 +123,32 @@ class CheckMixin:
                 except Exception:
                     continue  # (a broken file is told when it plays)
                 self._check_steps(inner, add, visited, depth + 1)
+
+    def _check_more_step(self, a, lst, i, steps, add):
+        """(2.12) The new steps: a Go to without its Label, a macro a step plays that isn't there, an Else
+        that doesn't come right after an If, a program window that isn't open now."""
+        import step_more
+
+        kind = a.get("kind")
+        if kind == "goto":
+            labels = {b.get("name") for b, _l, _i, _p in workflow.walk(steps) if b.get("kind") == "label"
+                      and not b.get("off")}
+            if a.get("label") not in labels:
+                add(f"goto:{a.get('id')}", SURE, f"\"Go to {a.get('label')}\" has no Label \"{a.get('label')}\" to "
+                                                  "jump to: the macro would stop there. Add the Label in Edit.")
+        if kind == "else":
+            if not step_more.else_has_if(lst, i):
+                add(f"else:{a.get('id')}", SURE, "An Else doesn't come right after an If, so it never runs. "
+                                                  "Move it under an If in Edit.")
+        for key in step_more.MACRO_KEYS:
+            path = a.get(key)
+            if path and not self._find_macro_file(path):
+                add(f"then:{_name(path).lower()}", SURE, f"The macro \"{_name(path)}\" that a step plays isn't there "
+                                                         "any more. That part is skipped.")
+        window = a.get("window") if kind == "type" else None
+        if window and window.get("exe") and window_tools.IS_WIN and not window_tools.windows_of(window["exe"]):
+            add(f"window:{window['exe'].lower()}", MAYBE, f"\"Type text\" types into {window['exe']}, which isn't "
+                                                          "open now. Open it before playing (else nothing is typed).")
 
     def _fits_game_window(self):
         """Clicks are fitted to the game's window (then the screen's size doesn't matter)."""
