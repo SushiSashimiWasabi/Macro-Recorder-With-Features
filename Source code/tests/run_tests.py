@@ -101,6 +101,9 @@ def report(path, proc, took):
     print(f"{'OK  ' if ok else 'FAIL'} {name}: {passed} of {count} passed ({took:.0f} s)"
           + (f", {skipped} skipped (PC / Windows only)" if skipped else ""), flush=True)
     why = []
+    for line in out.splitlines():  # (2.13) a test's own notes for the run's page (like a timeline)
+        if line.startswith("::notice") and os.environ.get("GITHUB_ACTIONS"):
+            print(line, flush=True)
     if not ok:
         in_trace = False
         hung = False

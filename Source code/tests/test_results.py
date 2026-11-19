@@ -145,14 +145,20 @@ def timed_result(*a, **k):
 
 
 app._run_result = timed_result
+import collections  # noqa: E402
+
+events_seen = collections.Counter()
+bind_id = root.bind_all("<Configure>", lambda e: events_seen.update([str(e.widget)[:30]]), add="+")
 t_play = time.time()
 took = run_play(evs, repeats=3)
 app._run_result = real_result
+root.unbind_all("<Configure>")
 statuses = [st for st, _ in app.session.runs]
 # (2.13) when it's wrong, when each run started and how long each took tells why (a slow computer?)
 timeline = (f"took {took:.1f} s, runs started at " + ", ".join(f"{t - t_play:.1f}" for t in phase["run_starts"])
             + " s, run lengths " + ", ".join(f"{s:.1f}" for _st, s in app.session.runs) + " s, end looks "
-            + ", ".join(looks))
+            + ", ".join(looks) + f"; window size events {sum(events_seen.values())}: "
+            + ", ".join(f"{w} x{n}" for w, n in events_seen.most_common(5)))
 if os.environ.get("GITHUB_ACTIONS"):
     print(f"::notice title=results timeline ({sys.platform})::{statuses}; {timeline}", flush=True)
 check("results: run 1 won, run 2 lost, run 3 unknown", statuses == ["win", "loss", "unknown"],
