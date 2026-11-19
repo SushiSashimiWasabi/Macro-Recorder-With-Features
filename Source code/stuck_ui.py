@@ -93,7 +93,7 @@ class StuckMixin:
         opts = self._stuck_settings()
         parent = self.settings_win if self.settings_win is not None else self.root
         win = tk.Toplevel(parent, bg=BG)
-        win.title("If a run gets stuck")
+        win.title("If a run gets stuck (no result seen)")
         win.transient(parent)
         win.attributes("-topmost", True)
         win.resizable(False, False)

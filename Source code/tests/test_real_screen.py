@@ -79,7 +79,10 @@ check("while playing: the results screen is noticed once",
 c = make_app({"found_factor": 1.0, "found_screen": [2560, 1440], "found_step": step})
 cur["img"] = shot
 t = time.perf_counter()
-check("next session: found at once", c._run_result(0) == "win" and time.perf_counter() - t < 0.3,
+# (Preview 4) GitHub's Intel Macs are several times slower: "at once" is 0.3 s here, 1.2 s there (missed by a
+# little in 2.12's Mac run; a whole-size search takes far longer, so this still tells the two apart)
+limit = 1.2 if sys.platform == "darwin" else 0.3
+check("next session: found at once", c._run_result(0) == "win" and time.perf_counter() - t < limit,
       f"{time.perf_counter() - t:.2f} s")
 cur["img"] = blank
 c.result_state = {}

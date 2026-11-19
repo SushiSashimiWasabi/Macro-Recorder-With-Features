@@ -546,15 +546,15 @@ if box:
 m = ed._menu()
 ed._test_items(m)
 labels = [m.entrycget(i, "label") for i in range(m.index("end") + 1) if m.type(i) == "command"]
-check("menu: \"Pretend pictures are NOT found: off\" with a dot", any("NOT found: off" in t for t in labels)
+check("menu: \"Test as if pictures are missing: off\" with a dot", any("are missing: off" in t for t in labels)
       and any(m.entrycget(i, "image") for i in range(m.index("end") + 1) if m.type(i) == "command"
-              and "NOT found" in m.entrycget(i, "label")), labels)
-k = next(i for i in range(m.index("end") + 1) if m.type(i) == "command" and "NOT found" in m.entrycget(i, "label"))
+              and "are missing" in m.entrycget(i, "label")), labels)
+k = next(i for i in range(m.index("end") + 1) if m.type(i) == "command" and "are missing" in m.entrycget(i, "label"))
 m.invoke(k)
 m2 = ed._menu()
 ed._test_items(m2)
 check("menu: one click turns it on (green)", ed.ghost_not_found.get() and any(
-    "NOT found: on" in m2.entrycget(i, "label") for i in range(m2.index("end") + 1) if m2.type(i) == "command"))
+    "are missing: on" in m2.entrycget(i, "label") for i in range(m2.index("end") + 1) if m2.type(i) == "command"))
 ed.ghost_not_found.set(False)
 asked.clear()
 ed._ghost_help()

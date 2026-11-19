@@ -20,9 +20,14 @@ from automation_ui import AutomationMixin
 from check_ui import CheckMixin
 from record_window_ui import RecordWindowMixin
 from stuck_ui import StuckMixin
+from milestones_ui import MilestonesMixin
+from macro_folders import MacroFoldersMixin
+from keys_overlay import KeysOverlayMixin
+from tour_ui import TourMixin
 from timed_start_ui import TimedStartMixin
 import timed_start_ui
 import step_more
+import themes
 import macro_versions
 from discord_ui import DiscordMixin
 from extras_ui import ExtrasMixin
@@ -38,7 +43,7 @@ from settings_window import SettingsWindowMixin
 from video_ui import VideoMixin
 
 
-class ModernMacroRecorder(TimedStartMixin, CheckMixin, RecordWindowMixin, StuckMixin, ExtrasMixin, ProfilesMixin, PictureWatchMixin, SettingsPagesMixin, PictureActionsMixin, AutomationMixin, DiscordMixin, RemoteMixin, ResultsMixin, SettingsWindowMixin, MacroEditorMixin, EditWindowMixin, VideoMixin, core.MacroRecorder):
+class ModernMacroRecorder(TourMixin, KeysOverlayMixin, MacroFoldersMixin, MilestonesMixin, TimedStartMixin, CheckMixin, RecordWindowMixin, StuckMixin, ExtrasMixin, ProfilesMixin, PictureWatchMixin, SettingsPagesMixin, PictureActionsMixin, AutomationMixin, DiscordMixin, RemoteMixin, ResultsMixin, SettingsWindowMixin, MacroEditorMixin, EditWindowMixin, VideoMixin, core.MacroRecorder):
     def __init__(self, root, preview=False):
         self.preview = preview
         self.sub_note = "Record something, or open a macro"
@@ -57,8 +62,9 @@ class ModernMacroRecorder(TimedStartMixin, CheckMixin, RecordWindowMixin, StuckM
         root = self.root
         s = self.settings
         root.title("Macro Recorder (preview)" if self.preview else "Macro Recorder")
-        root.resizable(False, False)
+        root.resizable(True, True)  # (Preview 4: drag the corner; scroll bars when it's smaller)
         root.attributes("-topmost", bool(s.get("always_on_top", True)))
+        themes.set_globals(s.get("accent", "Blue"))  # (Preview 4: the chosen accent colour, before anything is made)
         apply_theme(root)
         self.window_stack = WindowStack(root)  # (a window opened from another stays in front of it)
         # ready-made sizes of the icon and logo (read by Tk directly next time: a quicker start)
@@ -163,8 +169,12 @@ class ModernMacroRecorder(TimedStartMixin, CheckMixin, RecordWindowMixin, StuckM
         self.video.opacity = self.video_opacity_var.get()
         self.video_job = None
 
-        outer = tk.Frame(root, bg=BG)
-        outer.pack(fill="both", expand=True)
+        # (Preview 4) everything sits in a scroll area: the window keeps its size by itself, can be made
+        # bigger or smaller by dragging its corner, and gets scroll bars when it's smaller than its parts
+        self.main_scroll = ScrollArea(root, BG, natural=True, on_scroll=lambda: self._scrolled(self.backdrop))
+        self.main_scroll.pack(fill="both", expand=True)
+        wheel_scrolls(root, lambda: self.main_scroll)
+        outer = self.main_scroll.inner
 
         # header: name of the app + settings
         head = tk.Frame(outer, bg=BG)
@@ -176,7 +186,7 @@ class ModernMacroRecorder(TimedStartMixin, CheckMixin, RecordWindowMixin, StuckM
         if self.preview:
             tk.Label(head, text="PREVIEW", bg=AMBER, fg="#111", font=(FAMILY, 7, "bold"),
                      padx=4).pack(side="left", padx=(8, 0), pady=(4, 0))
-        gear = link(head, "⚙  Settings", self.open_settings, fg=MUTED, font=(FAMILY, 10))
+        gear = self.gear_link = link(head, "⚙  Settings", self.open_settings, fg=MUTED, font=(FAMILY, 10))
         gear.pack(side="right")
 
         panel = tk.Frame(outer, bg=PANEL, highlightthickness=1, highlightbackground=BORDER)
@@ -212,12 +222,20 @@ class ModernMacroRecorder(TimedStartMixin, CheckMixin, RecordWindowMixin, StuckM
         self.loop_switch = Switch(rep, self.loop_var, command=self._loop_changed, bg=PANEL)
         self.loop_switch.pack(side="left")
         tk.Label(rep, text="Repeat continuously", bg=PANEL, fg=TEXT, font=F_BASE).pack(side="left", padx=(10, 0))
+        # (Preview 4) "or play N times" hides while Repeat continuously is on, but its place stays, so the
+        # window never changes size
         self.times_frame = tk.Frame(rep, bg=PANEL)
-        tk.Label(self.times_frame, text="   or play", bg=PANEL, fg=MUTED, font=F_BASE).pack(side="left")
-        self.repeat_box = ttk.Spinbox(self.times_frame, from_=1, to=9999, width=5, textvariable=self.repeat_var,
+        self.times_frame.pack(side="left")
+        self.times_inner = tk.Frame(self.times_frame, bg=PANEL)
+        self.times_inner.pack(side="left")
+        tk.Label(self.times_inner, text="   or play", bg=PANEL, fg=MUTED, font=F_BASE).pack(side="left")
+        self.repeat_box = ttk.Spinbox(self.times_inner, from_=1, to=9999, width=5, textvariable=self.repeat_var,
                                       command=self._save_settings)
         self.repeat_box.pack(side="left", padx=4)
-        tk.Label(self.times_frame, text="times", bg=PANEL, fg=MUTED, font=F_BASE).pack(side="left")
+        tk.Label(self.times_inner, text="times", bg=PANEL, fg=MUTED, font=F_BASE).pack(side="left")
+        self.times_frame.update_idletasks()
+        self.times_frame.config(width=self.times_inner.winfo_reqwidth(), height=self.times_inner.winfo_reqheight())
+        self.times_frame.pack_propagate(False)
         self.speed_box = ttk.Combobox(rep, width=6, textvariable=self.speed_var, values=SPEED_PRESETS)
         self.speed_box.pack(side="right")
         tk.Label(rep, text="Speed", bg=PANEL, fg=MUTED, font=F_BASE).pack(side="right", padx=(0, 6))
@@ -231,6 +249,9 @@ class ModernMacroRecorder(TimedStartMixin, CheckMixin, RecordWindowMixin, StuckM
         sw = tk.Frame(body, bg=PANEL)
         sw.pack(fill="x", pady=(0, 8))
         tk.Label(sw, text="Saved macros", bg=PANEL, fg=MUTED, font=F_SMALL).pack(side="left")
+        # (Preview 4) ◀ ▶ can go through one folder only
+        self.row_folder_link = link(sw, "All ▾", self._row_folder_menu, bg=PANEL, fg=MUTED, font=F_SMALL)
+        self.row_folder_link.pack(side="left", padx=(6, 0))
         self.mac_prev = link(sw, "◀", lambda: self.step_macro(-1), bg=PANEL, fg=TEXT, font=(FAMILY, 11))
         self.mac_prev.pack(side="left", padx=(10, 0))
         self.mac_label = tk.Label(sw, bg=PANEL, fg=MUTED, font=F_SMALL, width=34)
@@ -255,7 +276,7 @@ class ModernMacroRecorder(TimedStartMixin, CheckMixin, RecordWindowMixin, StuckM
         # a YouTube video or playlist in a window over the game
         vid = tk.Frame(body, bg=PANEL)
         vid.pack(fill="x", pady=(0, 2))
-        tk.Label(vid, text="Video", bg=PANEL, fg=MUTED, font=F_SMALL).pack(side="left")
+        tk.Label(vid, text="Video overlay", bg=PANEL, fg=MUTED, font=F_SMALL).pack(side="left")
         self.video_entry = tk.Entry(vid, textvariable=self.video_var, bg=FIELD, fg=TEXT, font=F_SMALL,
                                     relief="flat", insertbackground=TEXT, highlightthickness=1,
                                     highlightbackground=BORDER, highlightcolor=ACCENT)
@@ -303,8 +324,8 @@ class ModernMacroRecorder(TimedStartMixin, CheckMixin, RecordWindowMixin, StuckM
         self.statusbar_label = tk.Label(foot, bg=BG, fg=DIM, font=F_SMALL, anchor="w")
         self.statusbar_label.pack(side="left")
         link(foot, "About", lambda: self.open_settings("About"), fg=MUTED).pack(side="right")
-        link(foot, "Dashboard", self.open_dashboard, fg=MUTED).pack(side="right", padx=(0, 10))
-        link(foot, "Check", self.open_check, fg=MUTED).pack(side="right", padx=(0, 10))
+        link(foot, "Stats dashboard", self.open_dashboard, fg=MUTED).pack(side="right", padx=(0, 10))
+        link(foot, "Check my macro", self.open_check, fg=MUTED).pack(side="right", padx=(0, 10))
         self.picture_link = link(foot, "Picture watch", lambda: self.open_picture_watch(), fg=MUTED)
         self.picture_link.pack(side="right", padx=(0, 10))
         tk.Label(foot, text=f"v{APP_VERSION}", bg=BG, fg=DIM, font=F_SMALL).pack(side="right", padx=(0, 8))
@@ -336,16 +357,75 @@ class ModernMacroRecorder(TimedStartMixin, CheckMixin, RecordWindowMixin, StuckM
         root.after(80, self._apply_background)
 
         self._build_settings_window()
+        self._keep_window_size(root, "main_size")
 
     def _loop_changed(self, save=True):
         if self.loop_var.get():
-            self.times_frame.pack_forget()
+            self.times_inner.pack_forget()
         else:
-            self.times_frame.pack(side="left")
+            self.times_inner.pack(side="left")
         if getattr(self, "backdrop", None) is not None:
             self.root.after_idle(self.backdrop.refresh)
         if save:
             self._save_settings()
+
+    # ------------------------------------------------------------ (Preview 4) window sizes
+
+    @staticmethod
+    def _scrolled(bd):
+        """A scroll area moved: the background picture's pieces follow the parts that moved."""
+        if bd is not None and bd.active:
+            bd._crop_all()
+
+    def _keep_window_size(self, win, key, default=None):
+        """Remember the size you drag a window to (settings[key] = "WxH"); it opens at that size next time
+        (made smaller when it doesn't fit the screen). Its usual size is the size of its parts."""
+        saved = self.settings.get(key)
+        try:
+            w, h = (int(v) for v in str(saved).split("x"))
+        except (TypeError, ValueError):
+            w = h = 0
+        if w > 0 and h > 0:
+            w = max(200, min(w, win.winfo_screenwidth() - 20))
+            h = max(150, min(h, win.winfo_screenheight() - 60))
+            win.geometry(f"{w}x{h}")
+        state = {"job": None}
+
+        def store():
+            state["job"] = None
+            try:
+                if win.state() != "normal" or not win.winfo_viewable():
+                    return
+                size = f"{win.winfo_width()}x{win.winfo_height()}"
+            except tk.TclError:
+                return
+            usual = default() if default else f"{win.winfo_reqwidth()}x{win.winfo_reqheight()}"
+            want = None if size == usual else size  # (its usual size isn't kept: it may change with a version)
+            if self.settings.get(key) != want:
+                if want is None:
+                    self.settings.pop(key, None)
+                else:
+                    self.settings[key] = want
+                core.save_settings(self.settings)
+
+        def changed(event):
+            if event.widget is not win:
+                return
+            if state["job"] is not None:
+                win.after_cancel(state["job"])
+            state["job"] = win.after(500, store)
+        win.bind("<Configure>", changed, add="+")
+
+    def reset_window_sizes(self):
+        """Settings > General > "Reset window sizes": the main window and Settings get their usual size."""
+        for key, win in (("main_size", self.root), ("settings_size", self.settings_win)):
+            self.settings.pop(key, None)
+            if win is not None:
+                win.geometry("")
+        if self.settings_win is not None and getattr(self, "settings_default_size", None):
+            self.settings_win.geometry(self.settings_default_size)
+        core.save_settings(self.settings)
+        core.diag.info("Window sizes reset to the usual ones")
 
     # ------------------------------------------------------------ settings window
 
@@ -687,6 +767,11 @@ class ModernMacroRecorder(TimedStartMixin, CheckMixin, RecordWindowMixin, StuckM
     def _replay_event(self, ev, held_keys, held_buttons):
         self.held_now = (held_keys, held_buttons)
         super()._replay_event(ev, held_keys, held_buttons)
+        self._keys_seen(ev)  # (Preview 4: keys on screen)
+
+    def _add(self, event):
+        super()._add(event)
+        self._keys_seen(event)  # (Preview 4: keys on screen, while recording)
 
     def toggle_pause(self):
         """While recording: pause the recording. While playing: pause playback, or go on."""
@@ -725,6 +810,8 @@ class ModernMacroRecorder(TimedStartMixin, CheckMixin, RecordWindowMixin, StuckM
 
     def _run_finished(self, count, how):
         super()._run_finished(count, how)
+        if not getattr(self, "test_play", None):  # (Preview 4: a milestone may have been reached)
+            self._call_ui(self.check_milestones)
         if getattr(self, "restart_after_run", None):  # (2.12: a timed start waits for this run's end)
             core.diag.info("Timed start: the run ended, the macro stops and starts again")
             self.stop_play.set()
@@ -749,6 +836,8 @@ class ModernMacroRecorder(TimedStartMixin, CheckMixin, RecordWindowMixin, StuckM
     def _tick_overlay(self):
         """Keep the top-of-screen timer up to date while playing or recording (every quarter second)."""
         self.overlay_job = None
+        if self.playing or self.recording:
+            self._keys_start()  # (Preview 4: keys on screen)
         if not (self.playing or self.recording or self.record_countdown_left > 0):
             return
         if not self.overlay_var.get():
@@ -802,7 +891,11 @@ class ModernMacroRecorder(TimedStartMixin, CheckMixin, RecordWindowMixin, StuckM
                     note = "Nothing is pressed" + (f"  ·  {also}" if also else "")
                 if self.play_paused_at is not None:
                     self.overlay.show("Paused", clock, note, AMBER, keys)
+                    away = getattr(self, "away_games", None) if getattr(self, "away_paused", False) else None
+                    self.overlay.front_button(self._bring_game_front if away and IS_WIN else None,
+                                              f"Bring {self._away_name(away) or 'it'} to front")
                 else:
+                    self.overlay.front_button(None)
                     self.overlay.show(word, clock, note, AMBER if test else ACCENT, keys)
                     # the next look is when the shown second changes (at most half a second away, so
                     # a pause or a new note still shows quickly)
@@ -811,7 +904,21 @@ class ModernMacroRecorder(TimedStartMixin, CheckMixin, RecordWindowMixin, StuckM
                     return
         self.overlay_job = self.root.after(250, self._tick_overlay)
 
+    def _bring_game_front(self):
+        """(Preview 4) "Bring it to front" under the timer: the paused macro's window comes to the front
+        (playback then goes on by itself, as when you click into it)."""
+        try:  # (the playback thread may add a window to the set right now)
+            wins = [h for h in list(getattr(self, "away_games", None) or ()) if window_tools.is_window(h)]
+        except RuntimeError:
+            return
+        if not wins:
+            return
+        core.diag.info("Bring it to front: the macro's window was put in front")
+        window_tools.force_to_front(wins[0])
+
     def _finish_overlay(self, recording=False):
+        if self.overlay is not None:
+            self.overlay.front_button(None)
         if recording:
             if self.overlay_job is not None:
                 self.root.after_cancel(self.overlay_job)
@@ -1155,8 +1262,11 @@ class ModernMacroRecorder(TimedStartMixin, CheckMixin, RecordWindowMixin, StuckM
 
     def _show_macro_list(self, busy=False):
         self._forget_deleted_macros()
-        lib = self.macro_list()
-        i = self._list_index(self.current_file)
+        lib = self.row_macros()  # (Preview 4: only one folder's, when one is chosen)
+        i = self._row_index(lib, self.current_file)
+        folder = self.row_folder()
+        if getattr(self, "row_folder_link", None) is not None:
+            self.row_folder_link.config(text=(short(folder, 14) if folder else "All") + " ▾")
         only = i is None and len(lib) == 1 and not busy  # one saved macro, not open: click its name
         if i is not None:
             name = os.path.splitext(os.path.basename(lib[i]))[0]
@@ -1164,7 +1274,9 @@ class ModernMacroRecorder(TimedStartMixin, CheckMixin, RecordWindowMixin, StuckM
         elif only:
             text = "Click to open:  " + short(os.path.splitext(os.path.basename(lib[0]))[0], 18)
         elif lib:
-            text = f"{len(lib)} saved  ·  this one isn't in the list"
+            text = f"{len(lib)} saved  ·  this one isn't in " + ("this folder" if folder else "the list")
+        elif folder:
+            text = "no macros in this folder"
         else:
             text = "macros you open or save show up here"
         self.mac_label.config(text=text, cursor="hand2" if only else "arrow")
@@ -1172,8 +1284,13 @@ class ModernMacroRecorder(TimedStartMixin, CheckMixin, RecordWindowMixin, StuckM
         arrows = len(lib) > 1 and not busy  # (nothing to switch to with one macro or none)
         for a, sym in ((self.mac_prev, "◀"), (self.mac_next, "▶")):
             a.config(text=sym if arrows else "", cursor="hand2" if arrows else "arrow")
-        rem = i is not None and not busy
+        rem = self._list_index(self.current_file) is not None and not busy
         self.mac_remove.config(text="Remove" if rem else "", cursor="hand2" if rem else "arrow")
+
+    @staticmethod
+    def _row_index(lib, path):
+        key = os.path.normcase(os.path.abspath(path)) if path else None
+        return next((i for i, p in enumerate(lib) if os.path.normcase(os.path.abspath(p)) == key), None)
 
     def _has_unsaved_macro(self):
         return bool(self.events) and (self.current_file is None or getattr(self, "unsaved", False))
@@ -1183,11 +1300,11 @@ class ModernMacroRecorder(TimedStartMixin, CheckMixin, RecordWindowMixin, StuckM
             self.step_macro(1)
 
     def step_macro(self, d):
-        """◀ / ▶: open the previous or next saved macro."""
-        lib = self.macro_list()
+        """◀ / ▶: open the previous or next saved macro (Preview 4: of the chosen folder only)."""
+        lib = self.row_macros()
         if self.recording or self.playing or not lib:
             return
-        i = self._list_index(self.current_file)
+        i = self._row_index(lib, self.current_file)
         if i is not None and len(lib) < 2:
             return
         if self._has_unsaved_macro() and not messagebox.askyesno(
@@ -1437,6 +1554,7 @@ def main(preview=False):
     if startup:
         root.after(4000, app.startup_action)
     root.after(3000, app.schedule_start)  # (2.12: the remembered alarm and timer)
+    root.after(5000, app.tour_when_ready)  # (Preview 4: the guided tour, once)
     if IS_MAC:
         def open_documents(*paths):
             if paths:

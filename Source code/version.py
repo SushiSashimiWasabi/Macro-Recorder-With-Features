@@ -1,12 +1,40 @@
 # The app's version. Raising it (and pushing to main) makes GitHub publish a new Release,
 # which every copy of the app offers to install when it starts.
-APP_VERSION = "2.12"
+APP_VERSION = "2.13"
 
 # Every version, newest first: (version, the day it was finalized, changes). The newest is shown once after an update;
 # Settings > About > What's new shows them all. Each change is one paragraph (shown as a bullet).
 # Version numbers started at 2.1 (the first one that could update itself); the earlier steps have
 # names instead.
 HISTORY = [
+    ("2.13", "Finalized 19 November 2026", [
+        "Windows keep their size: the main window no longer changes size when you switch Repeat continuously, "
+        "and Settings has one size for every page, never taller than your screen. Drag a window's corner to make "
+        "it bigger or smaller: scroll bars show when it's smaller than its parts, and the size is kept. "
+        "Settings > General > Reset window sizes puts both back.",
+        "The Settings search list closes when you close or move Settings, change page or click somewhere else. "
+        "Search also finds the old names of options that were renamed, and jumping to an option scrolls to it.",
+        "Change the window a macro plays in without recording it again: Edit > Game window > Change… (or Forget). "
+        "Check my macro links there when the macro's game isn't open. When the game isn't in front, the pause "
+        "message names it (\"Paused: Roblox isn't in front\") and a Bring Roblox to front button shows under the "
+        "timer. Saved .macro files no longer keep the window's full title, only the program's name.",
+        "Moving actions in and out of an If or a group: ⇤ Out and In ⇥ buttons next to Duplicate / Remove / More, "
+        "and Move out of the group, Move into the group above, Put in a new If / Repeat / Retry and Ungroup in the "
+        "right-click menu. Picture watch's right-click menu has Move to group.",
+        "Clearer names for many options, like Pause when the macro's window isn't in front, If the game closes or "
+        "disconnects, Stats dashboard and Check my macro. Your settings stay as they were.",
+        "Milestones (Settings > Results): goals for your all-time results (1,000 runs, 50 divine fragments, 500 "
+        "wins in a row, 500 hours played) and your own ones. Reaching one plays the Milestone sound, says so in "
+        "the main window and can send a Discord message.",
+        "Macro folders and tags: in Edit, right-click a macro to put it in a folder or give it tags, and filter the "
+        "list by name, folder or #tag. The main window's Saved macros row can go through one folder only (All ▾). "
+        "Your .macro files never move.",
+        "Colour themes: pick the accent colour (blue, purple, green, orange, pink or red) in Settings > Background. "
+        "It changes at once in every window.",
+        "Keys on screen (Settings > Playback): a small box in a corner shows the keys and clicks being played or "
+        "recorded, for videos. It shows in screen recordings, and Picture watch never sees it.",
+        "A short guided tour of the main window, shown once. Replay it any time from Settings > About.",
+    ]),
     ("2.12", "Finalized 18 November 2026", [
         "If a run gets stuck (Settings > Playback, off at first): when neither MISSION COMPLETED nor MISSION "
         "FAILED shows for some minutes (about 3 runs is suggested, from Run stats), it starts the run over, "

@@ -392,7 +392,7 @@ class PictureActionsMixin:
         opts["action"] = opts["chosen"]
         parent = self.settings_win if self.settings_win is not None else self.root
         win = tk.Toplevel(parent, bg=BG)
-        win.title("If the game closes")
+        win.title("If the game closes or disconnects")
         win.transient(parent)
         win.attributes("-topmost", True)
         win.resizable(False, False)
@@ -416,7 +416,7 @@ class PictureActionsMixin:
 
         action_var = tk.StringVar(value=self.CLOSED_CHOICES[opts["action"]])
         r = row("If the game closes while playing")
-        link(r, "ⓘ", lambda: self.boxes.showinfo("If the game closes", self.CLOSED_HELP, parent=win), bg=BG).pack(
+        link(r, "ⓘ", lambda: self.boxes.showinfo("If the game closes or disconnects", self.CLOSED_HELP, parent=win), bg=BG).pack(
             side="left", padx=(6, 0))
         box = ttk.Combobox(r, textvariable=action_var, state="readonly", width=28,
                            values=list(self.CLOSED_CHOICES.values()))
@@ -457,7 +457,7 @@ class PictureActionsMixin:
             action = next(k for k, v in self.CLOSED_CHOICES.items() if v == action_var.get())
             macro = macros.get(macro_var.get(), "")
             if action == "reopen" and not open_var.get().strip() and not macro:
-                self.boxes.showinfo("If the game closes", "Fill in what to open, or choose a rejoin macro "
+                self.boxes.showinfo("If the game closes or disconnects", "Fill in what to open, or choose a rejoin macro "
                                     "that opens the game itself.", parent=win)
                 return
 

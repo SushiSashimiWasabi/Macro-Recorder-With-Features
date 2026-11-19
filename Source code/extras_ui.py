@@ -38,6 +38,27 @@ def safe_name(name):
     return "".join(c for c in name if c not in '<>:"/\\|?*' and ord(c) >= 32).strip(". ") or "file"
 
 
+# (Preview 4) Settings names that changed: new name -> old name, so Settings search still finds the old one
+OLD_NAMES = {
+    "Status line at the bottom": "Status bar",
+    "Open .macro files with this app": "Open .macro files with a double-click Link .macro files",
+    "Offer to switch to the macro's window": "Offer to switch to the macro's game",
+    "Pause when the macro's window isn't in front": "Pause if the game isn't in front",
+    "Stop if still paused after…": "Stop after waiting",
+    "If the game closes or disconnects": "If the game closes",
+    "Countdown before reopening the game": "Countdown before rejoining",
+    "If a run gets stuck (no result seen)": "If a run gets stuck",
+    "Let clicks pass through the video": "Clicks go through it",
+    "Video transparency": "See-through",
+    "Remember YouTube sign-in": "Saved browser data",
+    "Record camera turning (Shift Lock)": "Record game camera movement",
+    "RUN RESULTS (AOT:R)": "MISSION RESULTS",
+    "Win / loss pictures": "Result pictures",
+    "Update one message instead of sending new ones": "One card that updates",
+    "Screenshot shows": "Screenshot of",
+}
+
+
 class ExtrasMixin:
     # ------------------------------------------------------------ one live Discord card
 
@@ -504,6 +525,44 @@ class ExtrasMixin:
         box.bind("<Escape>", lambda e: (self.search_var.set(""), self._search_close()))
         box.bind("<Down>", lambda e: self.search_list and self.search_list.winfo_exists()
                  and (self.search_list.lst.focus_set(), self.search_list.lst.selection_set(0)))
+        # (Preview 4) the list is its own little window: it closes when Settings is moved, hidden or
+        # closed, when the page changes, and when you click anywhere else
+        win = self.settings_win
+        box.bind("<FocusOut>", lambda e: win.after(150, self._search_close_unless_used), add="+")
+        win.bind("<Configure>", self._search_settings_moved, add="+")
+        win.bind("<Unmap>", lambda e: e.widget is win and self._search_close(), add="+")
+        # (a click on a plain part of Settings doesn't take the keyboard away from the box)
+        win.bind("<Button-1>", lambda e: e.widget is not box and self._search_close(), add="+")
+        self.tabs.bind("<<NotebookTabChanged>>", lambda e: self._search_close(), add="+")
+        self.search_at = None
+
+    def _search_settings_moved(self, event):
+        if event.widget is not self.settings_win:
+            return
+        at = (self.settings_win.winfo_rootx(), self.settings_win.winfo_rooty())
+        if at != self.search_at:
+            self.search_at = at
+            self._search_close()
+
+    def _search_close_unless_used(self):
+        """The search box lost the keyboard: close the list, unless it went to the list itself."""
+        lst = self.search_list.lst if self.search_list is not None and self.search_list.winfo_exists() else None
+        try:
+            now = self.settings_win.focus_get()
+        except (KeyError, tk.TclError):
+            now = None
+        if lst is not None and (now is lst or self._pointer_in(self.search_list)):
+            return  # (a click on the list: it opens that setting on letting go)
+        self._search_close()
+
+    @staticmethod
+    def _pointer_in(win):
+        try:
+            x, y = win.winfo_pointerxy()
+            return (win.winfo_rootx() <= x < win.winfo_rootx() + win.winfo_width()
+                    and win.winfo_rooty() <= y < win.winfo_rooty() + win.winfo_height())
+        except tk.TclError:
+            return False
 
     def search_settings(self, text):
         """Every setting whose name or grey words hold the text: [(page, widget, its text)]."""
@@ -520,7 +579,9 @@ class ExtrasMixin:
                     label = ""
                 if label and len(label) > 1 and isinstance(child, (tk.Label, ttk.Label, ttk.Checkbutton,
                                                                     tk.Checkbutton, ttk.Button, ttk.Labelframe)):
-                    if all(word in label.lower() for word in words):
+                    # (Preview 4) names changed in Preview 4 are still found by their old name
+                    text = (label + " " + OLD_NAMES.get(label, "")).lower()
+                    if all(word in text for word in words):
                         out.append((page, child, " ".join(label.split())))
                 walk(page, child)
         for page, frame in self.tab_frames.items():
@@ -554,8 +615,19 @@ class ExtrasMixin:
         lst.bind("<ButtonRelease-1>", lambda e: self._search_go(lst.nearest(e.y)))
         lst.bind("<Return>", lambda e: self._search_go((lst.curselection() or [0])[0]))
         lst.bind("<Escape>", lambda e: self._search_close())
+        lst.bind("<FocusOut>", lambda e: self.settings_win.after(150, self._search_close_unless_typing), add="+")
         win.lst = lst
         self.search_list = win
+        self.search_at = (self.settings_win.winfo_rootx(), self.settings_win.winfo_rooty())
+
+    def _search_close_unless_typing(self):
+        """The list lost the keyboard: close it, unless you went back to typing in the search box."""
+        try:
+            now = self.settings_win.focus_get()
+        except (KeyError, tk.TclError):
+            now = None
+        if now is not self.search_box:
+            self._search_close()
 
     def _search_go(self, index):
         found = getattr(self, "search_found", [])
@@ -563,7 +635,7 @@ class ExtrasMixin:
         if not (0 <= index < len(found)):
             return
         page, widget, _label = found[index]
-        self.tabs.select(self.tab_frames[page])
+        self.tabs.select(self.tab_areas[page])
         # a setting inside a folded "Advanced" part: open that part
         for part in getattr(self, "advanced_parts", []):
             try:
@@ -573,6 +645,7 @@ class ExtrasMixin:
                 pass
         if widget is self.tab_frames[page]:
             return
+        self.tab_areas[page].see(widget)  # (Preview 4: the page may need scrolling to show it)
         try:  # show where it is: its text turns blue for a moment
             before = widget.cget("foreground")
             widget.configure(foreground=ACCENT)
@@ -593,7 +666,7 @@ class ExtrasMixin:
 
     def open_first_start(self):
         """Three questions, each with what it changes; everything can be changed later in Settings."""
-        win = tk.Toplevel(self.root, bg=BG)
+        win = self.first_start_win = tk.Toplevel(self.root, bg=BG)  # (Preview 4: the tour waits for it)
         win.title("Welcome to Macro Recorder")
         win.transient(self.root)
         win.attributes("-topmost", True)
@@ -689,7 +762,7 @@ class ExtrasMixin:
                                            f"{'s' if len(active) != 1 else ''}. {rules}"))
         else:
             lines.append(("Picture watch", "Off"))
-        lines.append(("If the game closes", self.closed_summary()))
+        lines.append(("If the game closes or disconnects", self.closed_summary()))
         stop = self.auto_stop_summary()
         if self.playing and getattr(self, "auto_stop", None) and self.auto_stop["cancelled"]:
             stop += " (cancelled for this playback)"

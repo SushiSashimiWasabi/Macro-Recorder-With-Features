@@ -109,6 +109,17 @@ class MacroEditor(EditMoreMixin):
         self.btn_undo = ttk.Button(top, text="Undo", width=8, command=self.undo)
         for b in (self.btn_apply, self.btn_reset, self.btn_redo, self.btn_undo):
             b.pack(side="right", padx=(8, 0))
+        # (Preview 4) the window the macro plays in: change it without recording again
+        game = tk.Frame(win, bg=BG)
+        game.pack(fill="x", padx=14, pady=(0, 8))
+        tk.Label(game, text="Game window:", bg=BG, fg=MUTED, font=F_SMALL).pack(side="left")
+        self.game_label = tk.Label(game, text="", bg=BG, fg=TEXT, font=F_SMALL)
+        self.game_label.pack(side="left", padx=(6, 0))
+        if IS_WIN:
+            link(game, "Change…", self.change_game_window, bg=BG).pack(side="left", padx=(10, 0))
+        self.game_forget = link(game, "Forget", self.forget_game_window, bg=BG)
+        self.game_forget.pack(side="left", padx=(10, 0))
+        self.program = self.base_program = None
         tk.Frame(win, bg=BORDER, height=1).pack(fill="x")
 
         body = tk.Frame(win, bg=BG)
@@ -119,8 +130,18 @@ class MacroEditor(EditMoreMixin):
         left.pack_propagate(False)
         tk.Label(left, text="MACROS", bg=BG, fg=MUTED, font=F_SECTION, anchor="w").pack(fill="x", padx=14,
                                                                                       pady=(12, 6))
+        # (Preview 4) a filter: name, folder or #tag
+        self.macro_filter_var = tk.StringVar()
+        mfilter = tk.Entry(left, textvariable=self.macro_filter_var, bg=FIELD, fg=TEXT, font=F_SMALL, relief="flat",
+                           insertbackground=TEXT, highlightthickness=1, highlightbackground=BORDER,
+                           highlightcolor=ACCENT)
+        mfilter.pack(fill="x", padx=(14, 6), pady=(0, 6), ipady=3)
+        entry_hint(mfilter, self.macro_filter_var, "Filter: name, folder or #tag", size=9)
+        self.macro_filter_var.trace_add("write", lambda *a: self._fill_macros())
         self.macros = ttk.Treeview(left, show="tree", selectmode="extended")
         self.macros.pack(fill="both", expand=True, padx=(14, 6))
+        self.macros.tag_configure("folder", foreground=AMBER)
+        self.macros.bind("<Button-3>", self._macros_right_click)
         self.macros.bind("<<TreeviewSelect>>", lambda e: self._macro_clicked())
         self.macros.bind("<FocusIn>", lambda e: self._set_focus("macros"))
         tk.Frame(body, bg=BORDER, width=1).pack(side="left", fill="y")
@@ -150,9 +171,15 @@ class MacroEditor(EditMoreMixin):
         # bottom left: Duplicate / Remove / More (only while a macro or step is chosen)
         self.bottom = tk.Frame(mid, bg=BG)
         self.bottom.pack(fill="x", padx=12, pady=10)
-        self.btn_dup = ttk.Button(self.bottom, text="Duplicate", command=self.duplicate)
-        self.btn_remove = ttk.Button(self.bottom, text="Remove", command=self.remove)
-        self.btn_more = ttk.Button(self.bottom, text="More", command=self._more_menu)
+        # (Preview 4: a bit narrower, so ⇤ Out and In ⇥ fit next to them)
+        self.btn_dup = ttk.Button(self.bottom, text="Duplicate", width=9, command=self.duplicate)
+        self.btn_remove = ttk.Button(self.bottom, text="Remove", width=7, command=self.remove)
+        self.btn_more = ttk.Button(self.bottom, text="More", width=5, command=self._more_menu)
+        # (Preview 4) small buttons to move the chosen action out of / into a group
+        self.btn_out = ttk.Button(self.bottom, text="⇤ Out", width=6, command=self.out_of_group)
+        self.btn_in = ttk.Button(self.bottom, text="In ⇥", width=6, command=self.into_group_above)
+        hover_text(self.btn_out, lambda: "Move out of its group (Alt+Left)")
+        hover_text(self.btn_in, lambda: "Move into the group above it (Alt+Right)")
         tk.Frame(body, bg=BORDER, width=1).pack(side="left", fill="y")
 
         # right: the chosen step's details
@@ -170,7 +197,7 @@ class MacroEditor(EditMoreMixin):
         self.macros.bind("<Delete>", lambda e: self.remove())
         # (2.11) Ctrl+click / Shift+click / drag to choose many; drag chosen ones to move them
         TreeDrag(self.tree, self._drop_steps, is_group=lambda iid: "group" in self.tree.item(iid, "tags"))
-        TreeDrag(self.macros, self._drop_macros)
+        TreeDrag(self.macros, self._drop_macros, is_group=lambda iid: iid.startswith("f:"))
         win.bind("<Control-x>", lambda e: (self.cut(), "break")[1] if not self._typing(e) else None)
         self.tree.bind("<Button-3>", self._right_click)
         dark_title_bar(win)
@@ -308,10 +335,29 @@ class MacroEditor(EditMoreMixin):
                 all(p != app.current_file for _l, p in self.entries):
             self.entries.insert(0, (os.path.splitext(os.path.basename(app.current_file))[0], app.current_file))
         self.macros.delete(*self.macros.get_children())
+        # (Preview 4) folders first (open, amber), then the macros with no folder; tags after the name
+        query = self.macro_filter_var.get().strip() if hasattr(self, "macro_filter_var") else ""
+        meta = {i: (app.macro_meta(p) if p else {"folder": "", "tags": []}) for i, (_l, p) in enumerate(self.entries)}
+        for folder in (app.macro_folders() if hasattr(app, "macro_folders") else []):
+            inside = [i for i, m in meta.items() if m["folder"] == folder]
+            self.macros.insert("", "end", iid="f:" + folder, text=f"{folder}  ({len(inside)})", open=True,
+                               tags=("folder",))
         for i, (label, path) in enumerate(self.entries):
+            if query and not (path and app.macro_matches(path, query)) and \
+                    not (path is None and query.lower() in label.lower()):
+                continue
             mark = "  ●" if (path == app.current_file and path) or (path is None) else ""
-            self.macros.insert("", "end", iid=str(i), text=label + mark)
-        if self.current is not None and self.current < len(self.entries):
+            tags = meta[i]["tags"]
+            text = label + mark + (f"   · {', '.join(tags)}" if tags else "")
+            parent = "f:" + meta[i]["folder"] if meta[i]["folder"] else ""
+            if parent and not self.macros.exists(parent):
+                parent = ""
+            self.macros.insert(parent, "end", iid=str(i), text=text)
+        if query:  # (a filter hides folders with nothing that matches)
+            for f in self.macros.get_children(""):
+                if f.startswith("f:") and not self.macros.get_children(f):
+                    self.macros.delete(f)
+        if self.current is not None and self.current < len(self.entries) and self.macros.exists(str(self.current)):
             self.macros.selection_set(str(self.current))
 
     def _macro_clicked(self):
@@ -320,6 +366,8 @@ class MacroEditor(EditMoreMixin):
             return
         if len(sel) > 1:  # (2.11: several chosen: Duplicate / Remove work on all of them)
             self._set_focus("macros")
+            return
+        if not sel[0].isdigit():  # (Preview 4: a folder's row)
             return
         i = int(sel[0])
         try:
@@ -338,7 +386,7 @@ class MacroEditor(EditMoreMixin):
                 "Yes = apply, No = throw them away.", parent=self.win)
             if answer is None or (answer and not self.apply()):
                 if self.current is not None:
-                    self.macros.selection_set(str(self.current))
+                    self._select_macro_row(self.current)
                 return
         label, path = self.entries[i]
         app = self.app
@@ -355,10 +403,14 @@ class MacroEditor(EditMoreMixin):
         self.steps = workflow.ensure_ids(steps)
         self.base_steps = workflow.snapshot(self.steps)
         self.file_data = data
+        prog = app.macro_program if (path is None or path == app.current_file) else data.get("program")
+        self.program = copy.deepcopy(prog) if isinstance(prog, dict) else None
+        self.base_program = copy.deepcopy(self.program)
+        self._show_game()
         self.base_name = label if path else (app.name_var.get().strip() or "")
         self.name_var.set(self.base_name)
         self.undo_stack, self.redo_stack = [], []
-        self.macros.selection_set(str(i))
+        self._select_macro_row(i)
         self._fill_steps()
         self._show_detail(None)
         self._show_buttons()
@@ -441,7 +493,111 @@ class MacroEditor(EditMoreMixin):
     # ------------------------------------------------------------ changes, Undo / Redo / Reset / Apply
 
     def _changed(self):
-        return self.steps != self.base_steps or self.name_var.get().strip() != self.base_name
+        return self.steps != self.base_steps or self.name_var.get().strip() != self.base_name \
+            or getattr(self, "program", None) != getattr(self, "base_program", None)
+
+    # ------------------------------------------------------------ (Preview 4) the macro's game window
+
+    def _show_game(self):
+        if not hasattr(self, "game_label"):
+            return
+        p = self.program or {}
+        exe = p.get("exe")
+        if exe:
+            text = f"{window_tools.friendly_name(exe)}  ({exe})"
+            client = p.get("client")
+            if isinstance(client, (list, tuple)) and len(client) == 4:
+                text += f",  {client[2]}×{client[3]}"
+            self.game_label.config(text=text, fg=TEXT)
+            self.game_forget.config(text="Forget")
+        else:
+            self.game_label.config(text="none (it plays on the whole screen)", fg=DIM)
+            self.game_forget.config(text="")
+
+    def forget_game_window(self):
+        if not self.program:
+            return
+        self.program = None
+        self._show_game()
+        self._show_buttons()
+
+    def change_game_window(self):
+        """Pick another open window for this macro (like "Record in which window?"). The size the macro
+        was recorded at stays, so its clicks are still fitted from there to the new window."""
+        if self.current is None:
+            return
+        own = os.getpid()
+        wins = [(h, t, e) for h, t, e in window_tools.app_windows() if window_tools.pid_of(h) != own and e]
+        win = tk.Toplevel(self.win, bg=BG)
+        win.withdraw()
+        win.title("Game window")
+        win.transient(self.win)
+        win.attributes("-topmost", True)
+        win.resizable(False, False)
+        body = tk.Frame(win, bg=BG)
+        body.pack(fill="both", padx=20, pady=(16, 8))
+        tk.Label(body, text="Which window does this macro play in?", bg=BG, fg=TEXT, font=F_BOLD,
+                 anchor="w").pack(fill="x")
+        old = self.program or {}
+        client = old.get("client")
+        if isinstance(client, (list, tuple)) and len(client) == 4:
+            warn = (f"It was recorded in a window of {client[2]}×{client[3]}. With \"Fit clicks to: The game window\" "
+                    "(Settings > Playback) its clicks are fitted to the new window. With \"The whole screen\" they "
+                    "stay where they were recorded, so a window of another size or place can be missed.")
+        else:
+            warn = ("It didn't remember a window's size, so its clicks stay where they were recorded. The new "
+                    "window's size is remembered from now on.")
+        tk.Label(body, text=warn, bg=BG, fg=AMBER, font=F_SMALL, anchor="w", justify="left",
+                 wraplength=470).pack(fill="x", pady=(4, 8))
+        if not wins:
+            tk.Label(body, text="No other window is open. Open the game first.", bg=BG, fg=MUTED, font=F_BASE,
+                     anchor="w").pack(fill="x")
+        lst = ttk.Treeview(body, show="tree", selectmode="browse", height=max(1, min(10, len(wins))))
+        lst.column("#0", width=470)
+        if wins:
+            lst.pack(fill="x")
+        pick = None
+        for k, (_h, title, exe) in enumerate(wins):
+            lst.insert("", "end", iid=str(k), text=f"{short(title, 52)}   ({os.path.splitext(exe)[0]})")
+            if pick is None and old.get("exe") and exe.lower() == str(old["exe"]).lower():
+                pick = str(k)
+        if wins:
+            lst.selection_set(pick or "0")
+            lst.see(pick or "0")
+
+        def ok(_e=None):
+            sel = lst.selection()
+            if not sel or not wins:
+                return
+            hwnd, _title, exe = wins[int(sel[0])]
+            new = {k: v for k, v in old.items() if k != "title"}
+            new["exe"] = exe
+            if not (isinstance(client, (list, tuple)) and len(client) == 4):
+                rect = window_tools.client_rect(hwnd)
+                if rect:
+                    new["client"] = list(rect)
+            win.destroy()
+            self.program = new
+            core.diag.info(f"Edit: the macro's game window is now {exe}")
+            self._show_game()
+            self._show_buttons()
+        bottom = tk.Frame(win, bg=BG)
+        bottom.pack(fill="x", padx=20, pady=(4, 16))
+        ttk.Button(bottom, text="Cancel", width=8, command=win.destroy).pack(side="right")
+        ttk.Button(bottom, text="OK", width=8, style="Accent.TButton", command=ok,
+                   state="normal" if wins else "disabled").pack(side="right", padx=(0, 8))
+        lst.bind("<Double-1>", ok)
+        win.bind("<Return>", ok)
+        win.bind("<Escape>", lambda e: win.destroy())
+        dark_title_bar(win)
+        win.update_idletasks()
+        x = self.win.winfo_rootx() + max(0, (self.win.winfo_width() - win.winfo_reqwidth()) // 2)
+        y = self.win.winfo_rooty() + max(0, (self.win.winfo_height() - win.winfo_reqheight()) // 3)
+        win.geometry(f"+{x}+{y}")
+        win.deiconify()
+        win.lift()
+        self.game_box = win  # (for tests)
+        return win
 
     def change(self, fn, select=None, keep_detail=False):
         """Make a change (fn changes self.steps) so it can be undone."""
@@ -485,6 +641,8 @@ class MacroEditor(EditMoreMixin):
         self.redo_stack = []
         self.steps = workflow.snapshot(self.base_steps)
         self.name_var.set(self.base_name)
+        self.program = copy.deepcopy(self.base_program)
+        self._show_game()
         self._after_jump()
 
     def _after_jump(self):
@@ -511,6 +669,15 @@ class MacroEditor(EditMoreMixin):
                 b.pack(side="left", padx=(0, 6))
             elif not chosen:
                 b.pack_forget()
+        if hasattr(self, "btn_out"):  # (Preview 4) only for actions, greyed out when it can't be done
+            steps = chosen and self.focus == "steps"
+            in_group, above_group, _g = self._group_moves() if steps else (False, False, False)
+            for b, ok in ((self.btn_out, in_group), (self.btn_in, above_group)):
+                if steps and not b.winfo_ismapped():
+                    b.pack(side="left", padx=(0, 6))
+                elif not steps:
+                    b.pack_forget()
+                b.config(state="normal" if ok else "disabled")
 
     def apply(self):
         """Write the changes: to the macro's file (renamed if the name changed), and to the open
@@ -542,6 +709,10 @@ class MacroEditor(EditMoreMixin):
                                                                                "imported_from", "workflow")}
             data.update({"app": "macro_recorder", "version": core.FILE_VERSION, "name": name})
             data["events"] = workflow.all_events(steps)
+            if self.program:  # (Preview 4: the game window can be changed or forgotten here)
+                data["program"] = copy.deepcopy(self.program)
+            else:
+                data.pop("program", None)
             if not workflow.is_simple(steps):
                 data["actions"] = steps
             if own:
@@ -552,6 +723,8 @@ class MacroEditor(EditMoreMixin):
                 if os.path.normcase(new_path) != os.path.normcase(path) and own:
                     os.remove(path)  # renamed: the old name goes (it was this same macro)
                     macro_versions.renamed(path, new_path)  # (its older versions and warnings go along)
+                    if hasattr(app, "meta_renamed"):
+                        app.meta_renamed(path, new_path)  # (Preview 4: and its folder and tags)
                     if hasattr(app, "rename_check_ignored"):
                         app.rename_check_ignored(macro_versions._key(path), macro_versions._key(new_path))
             except OSError as exc:
@@ -580,12 +753,17 @@ class MacroEditor(EditMoreMixin):
             app.trust_steps("", added)
         if is_open:
             app.set_steps(copy.deepcopy(steps))
+            if self.program != self.base_program:
+                app.macro_program = copy.deepcopy(self.program)
+                if isinstance(getattr(app, "file_data", None), dict):
+                    app.file_data["program"] = copy.deepcopy(self.program)
             app.name_var.set(name)
             app.unsaved = path is None
             app.sub_note = "Macro edited" + (" (Save… to keep it in a file)" if path is None else " and saved")
             app._refresh()
         self.base_steps = workflow.snapshot(steps)
         self.steps = workflow.snapshot(steps)
+        self.base_program = copy.deepcopy(self.program)
         self.base_name = name
         self.name_var.set(name)
         self._fill_macros()
@@ -1012,7 +1190,27 @@ class MacroEditor(EditMoreMixin):
         for label, fn in (("Duplicate", self.duplicate), ("Copy", self.copy), ("Cut", self.cut),
                           ("Remove", self.remove)):
             m.add_command(label=label, command=fn)
+        # (Preview 4) in and out of groups, right here (greyed out when it can't be done now)
+        m.add_separator()
+        in_group, above_group, is_group = self._group_moves()
+        for label, accel, fn, ok in (
+                ("Move out of the group", "Alt+Left", self.out_of_group, in_group),
+                ("Move into the group above", "Alt+Right", self.into_group_above, above_group),
+                ("Put in a new If", "", lambda: self.group_into("if"), True),
+                ("Put in a new Repeat", "", lambda: self.group_into("repeat"), True),
+                ("Put in a new Retry", "", lambda: self.group_into("retry"), True),
+                ("Ungroup", "", self.ungroup, is_group)):
+            m.add_command(label=label, accelerator=accel, command=fn, state="normal" if ok else "disabled")
         m.tk_popup(e.x_root, e.y_root)
+
+    def _group_moves(self):
+        """(Preview 4) What the chosen action can do: (move out of its group, move into the group above it,
+        ungroup it)."""
+        found = self._selected()
+        a = found[0] if found else {}
+        in_group = bool(found and found[3] is not None)
+        above_group = bool(found and found[2] > 0 and found[1][found[2] - 1].get("kind") in workflow.GROUPS)
+        return in_group, above_group, a.get("kind") in workflow.GROUPS
 
     def _test_items(self, m):
         ok = "normal" if self._selected_id() and not self.app.playing and not self.app.recording else "disabled"
@@ -1023,7 +1221,7 @@ class MacroEditor(EditMoreMixin):
         if not hasattr(self, "ghost_not_found"):
             self.ghost_not_found = tk.BooleanVar(value=False)
         on = self.ghost_not_found.get()
-        m.add_command(label="  Pretend pictures are NOT found: " + ("on" if on else "off"),
+        m.add_command(label="  Test as if pictures are missing: " + ("on" if on else "off"),
                       image=self._dot(GREEN if on else RED), compound="left",
                       command=lambda: self.ghost_not_found.set(not self.ghost_not_found.get()))
         m.add_command(label="  What does that mean?", command=self._ghost_help)
@@ -1052,7 +1250,7 @@ class MacroEditor(EditMoreMixin):
                   "at the screen.")
 
     def _ghost_help(self):
-        self.app.boxes.showinfo("Pretend pictures are NOT found", self.GHOST_HELP, parent=self.win)
+        self.app.boxes.showinfo("Test as if pictures are missing", self.GHOST_HELP, parent=self.win)
 
     def to_macro_size(self, events):
         """(2.11) A recording made now, moved to the size this macro was made for (its game window, or
@@ -1081,13 +1279,16 @@ class MacroEditor(EditMoreMixin):
     def _macro_fit(self):
         """The screen size and game the edited macro was recorded for (to fit its spots to this screen)."""
         path = self.entries[self.current][1] if self.current is not None else None
+        program = getattr(self, "program", None)  # (Preview 4: as shown in Edit, also before Apply)
         if path is None or path == self.app.current_file:
-            return self.app.macro_screen, self.app.macro_program
+            return self.app.macro_screen, program if hasattr(self, "game_label") else self.app.macro_program
         d = self.file_data or {}
         try:
             screen = (int(d["screen"]["width"]), int(d["screen"]["height"]))
         except (KeyError, TypeError, ValueError):
             screen = None
+        if hasattr(self, "game_label"):
+            return screen, program
         return screen, d.get("program") if isinstance(d.get("program"), dict) else None
 
     def test_play(self, how):
@@ -1150,11 +1351,20 @@ class MacroEditor(EditMoreMixin):
         self.change(do, select=[b["id"] for b in moving])
 
     def _drop_macros(self, ids, target, where):
-        """(2.11) Chosen macros dragged in the list: the saved macros list gets that order."""
-        paths = [self.entries[int(i)][1] for i in ids if self.entries[int(i)][1]]
+        """(2.11) Chosen macros dragged in the list: the saved macros list gets that order.
+        (Preview 4) Dropped on a folder: they go into it; next to a macro: into that macro's folder."""
+        paths = [self.entries[int(i)][1] for i in ids if i.isdigit() and self.entries[int(i)][1]]
+        if target.startswith("f:"):
+            if paths:
+                self.app.set_macro_folder(paths, target[2:])
+                self._fill_macros()
+            return
         tpath = self.entries[int(target)][1]
         if not paths or not tpath or tpath in paths:
             return
+        folder = self.app.macro_meta(tpath)["folder"]
+        if any(self.app.macro_meta(p)["folder"] != folder for p in paths):
+            self.app.set_macro_folder(paths, folder)
         lib = self.app.macro_list()
         keys = {os.path.normcase(os.path.abspath(p)) for p in paths}
         moving = [p for p in lib if os.path.normcase(os.path.abspath(p)) in keys]
@@ -1170,7 +1380,75 @@ class MacroEditor(EditMoreMixin):
         self._fill_macros()
         if current:
             self.current = next((k for k, (_l, p) in enumerate(self.entries) if p == current), self.current)
-        self.macros.selection_set([str(k) for k, (_l, p) in enumerate(self.entries) if p in paths])
+        self.macros.selection_set([str(k) for k, (_l, p) in enumerate(self.entries)
+                                   if p in paths and self.macros.exists(str(k))])
+
+    # ------------------------------------------------------------ (Preview 4) folders and tags
+
+    def _select_macro_row(self, i):
+        if i is not None and self.macros.exists(str(i)):
+            self.macros.selection_set(str(i))
+
+    def _macros_right_click(self, e):
+        iid = self.macros.identify_row(e.y)
+        if not iid:
+            return
+        m = self._menu()
+        if iid.startswith("f:"):
+            name = iid[2:]
+            m.add_command(label="Rename folder…", command=lambda: self._rename_folder(name))
+            m.add_command(label="Remove folder (its macros stay)", command=lambda: self._remove_folder(name))
+        else:
+            if iid not in self.macros.selection():
+                self.macros.selection_set(iid)
+            self._folder_items(m)
+        m.tk_popup(e.x_root, e.y_root)
+
+    def _folder_items(self, m):
+        """Move to folder ▸ and Tags… for the chosen macros (right-click, and More)."""
+        paths = [p for _l, p in self._chosen_macros() if p]
+        sub = self._menu()
+        for f in self.app.macro_folders():
+            sub.add_command(label=f, command=lambda f=f: self._to_folder(paths, f))
+        if self.app.macro_folders():
+            sub.add_separator()
+        sub.add_command(label="New folder…", command=lambda: self._to_folder(paths, None))
+        sub.add_command(label="No folder", command=lambda: self._to_folder(paths, ""))
+        m.add_cascade(label="Move to folder", menu=sub, state="normal" if paths else "disabled")
+        m.add_command(label="Tags…", command=lambda: self._edit_tags(paths[0]),
+                      state="normal" if len(paths) == 1 else "disabled")
+
+    def _ask_text(self, title, question, text=""):
+        ok, answer = self.app.boxes._box(title, question, "question", [("OK", True), ("Cancel", False)], True,
+                                         False, self.win, entry=text)
+        return answer if ok else None
+
+    def _to_folder(self, paths, folder):
+        if folder is None:
+            folder = self._ask_text("New folder", "A name for the new folder:")
+            if not folder or not folder.strip():
+                return
+        self.app.set_macro_folder(paths, folder)
+        self._fill_macros()
+
+    def _edit_tags(self, path):
+        now = ", ".join(self.app.macro_meta(path)["tags"])
+        text = self._ask_text("Tags", "Tags for this macro, with commas between them\n(like: aot:r, farm, rejoin):",
+                              now)
+        if text is not None:
+            self.app.set_macro_tags(path, text)
+            self._fill_macros()
+
+    def _rename_folder(self, name):
+        new = self._ask_text("Rename folder", "A new name for the folder:", name)
+        if new and new.strip() and self.app.rename_folder(name, new):
+            self._fill_macros()
+
+    def _remove_folder(self, name):
+        if self.app.boxes.askyesno("Remove folder", f"Remove the folder \"{name}\"?\n\nIts macros stay in the list "
+                                   "(with no folder). No file is deleted.", parent=self.win):
+            self.app.remove_folder(name)
+            self._fill_macros()
 
     def _more_menu(self):
         m = self._menu()
@@ -1180,6 +1458,8 @@ class MacroEditor(EditMoreMixin):
             path = self.entries[self.current][1] if self.current is not None else None
             m.add_command(label="Restore an older version…", command=self._restore_version,
                           state="normal" if path and macro_versions.versions(path) else "disabled")
+            m.add_separator()
+            self._folder_items(m)  # (Preview 4)
         else:
             found = self._selected()
             a = found[0] if found else {}

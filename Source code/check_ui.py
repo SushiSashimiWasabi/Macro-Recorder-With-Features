@@ -271,6 +271,9 @@ class CheckMixin:
                      font=F_SMALL, anchor="w").pack(fill="x")
             tk.Label(row, text=p["text"], bg=BG, fg=MUTED if off else TEXT, font=F_BASE, anchor="w",
                      justify="left", wraplength=440).pack(fill="x")
+            if p["id"] == "game" and IS_WIN:  # (Preview 4: Edit can pick another window for the macro)
+                link(row, "Pick another window in Edit (Game window > Change…)",
+                     lambda: (win.destroy(), self.open_editor()), bg=BG).pack(anchor="w")
             if self.current_file:
                 link(row, "Warn me again" if off else "Don't warn me again for this macro",
                      lambda pid=p["id"], o=off: (self.set_check_ignored(pid, not o), self._fill_check(win, body)),

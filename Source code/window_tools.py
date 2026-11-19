@@ -194,6 +194,18 @@ def is_window(hwnd):
     return bool(IS_WIN and hwnd and user32.IsWindow(hwnd))
 
 
+FRIENDLY_NAMES = {"robloxplayerbeta.exe": "Roblox", "windows10universal.exe": "Roblox"}
+
+
+def friendly_name(exe):
+    """(Preview 4) A short name for a program file to show people: 'Roblox' for RobloxPlayerBeta.exe,
+    else the file name without .exe ('' when unknown)."""
+    if not exe:
+        return ""
+    base = str(exe).replace("\\", "/").rsplit("/", 1)[-1]
+    return FRIENDLY_NAMES.get(base.lower()) or os.path.splitext(base)[0]
+
+
 def program_info(hwnd):
     """What a recording remembers about the window it was made in."""
     exe = exe_of(hwnd)

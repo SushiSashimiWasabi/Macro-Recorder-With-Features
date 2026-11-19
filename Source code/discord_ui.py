@@ -47,10 +47,10 @@ class DiscordMixin:
                            values=list(SHOT_SIZE.values()))
         box.pack(side="right")
         box.bind("<<ComboboxSelected>>", lambda e: (box.selection_clear(), self._save_settings()))
-        self._choice_row(f, "One card that updates", self.live_summary, self.toggle_live_card,
+        self._choice_row(f, "Update one message instead of sending new ones", self.live_summary, self.toggle_live_card,
                          tip="instead of a new card each run (no screenshot)")
         self._choice_row(f, "Daily or weekly summary", self.summary_summary, self.open_summary_options)
-        row = self._row(f, "Screenshot of")
+        row = self._row(f, "Screenshot shows")
         self.discord_program_box = ttk.Combobox(row, width=20, textvariable=self.discord_program_var,
                                                 postcommand=self._list_programs)
         self.discord_program_box.pack(side="right")

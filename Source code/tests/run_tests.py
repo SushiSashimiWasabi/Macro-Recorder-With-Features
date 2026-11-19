@@ -29,7 +29,7 @@ here = os.path.dirname(os.path.abspath(__file__))
 src = os.path.dirname(here)
 # these open windows (Edit, Settings, Picture watch, dashboards...): one at a time
 WINDOW_TESTS = {"test_automation.py", "test_chains.py", "test_editor.py", "test_pictures.py", "test_preview1.py",
-                "test_preview2.py", "test_preview3.py", "test_preview3_edges.py", "test_preview3_actions.py",
+                "test_preview2.py", "test_preview3.py", "test_preview3_edges.py", "test_preview3_actions.py", "test_preview4.py",
                 "test_security.py", "test_remote.py", "test_settings_undo.py", "test_stage3.py", "test_stage4.py",
                 "test_windows.py"}
 AT_ONCE = 4  # how many of the other tests run side by side
@@ -39,7 +39,7 @@ GROUPS = {
     "basic": ["test_steps.py", "test_playback.py", "test_editor.py", "test_windows.py", "test_settings_undo.py",
               "test_stage3.py", "test_stage4.py", "test_automation.py", "test_chains.py", "test_pictures.py",
               "test_results.py", "test_real_screen.py", "test_preview1.py", "test_preview2.py",
-              "test_updater_folder.py"],
+              "test_updater_folder.py", "test_preview4.py"],
     "security": ["test_files.py", "test_security.py"],
     "timing": ["test_preview3.py"],
     "discord": ["test_remote.py"],
@@ -61,6 +61,9 @@ def group_of(name):
 COVDATA = os.path.join(os.path.dirname(src), "covdata")  # (coverage files, one per test file)
 
 
+HANG_AFTER = 150 if sys.platform == "darwin" else 600  # seconds before a test counts as hung
+
+
 def run(path, coverage=False):
     started = time.time()
     cmd = [sys.executable, "-X", "utf8"]
@@ -70,8 +73,22 @@ def run(path, coverage=False):
         os.makedirs(COVDATA, exist_ok=True)
         env = dict(os.environ, COVERAGE_FILE=os.path.join(COVDATA, ".coverage"))
         cmd += ["-m", "coverage", "run", "-p", f"--source={src}", "--omit=*/tests/*"]
-    proc = subprocess.run(cmd + [path, src], capture_output=True, text=True, encoding="utf-8", errors="replace",
-                          timeout=900, env=env)
+    args = [path, src]
+    if not coverage:
+        # (2.13) a test that hangs prints where every thread is stuck and ends, before the runner gives up on it
+        # (Macs: sooner, so the whole run fits in GitHub's 30 minutes and every test still reports)
+        args = ["-c", "import faulthandler, runpy, sys; faulthandler.dump_traceback_later(%d, exit=True); "
+                      "sys.argv = sys.argv[1:]; runpy.run_path(sys.argv[0], run_name='__main__')" % HANG_AFTER,
+                path, src]
+    try:
+        proc = subprocess.run(cmd + args, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              timeout=900, env=env)
+    except subprocess.TimeoutExpired as exc:
+        # (2.13) a test that hangs is a FAIL with what it printed so far, not a crash of the whole run
+        def text(b):
+            return b.decode("utf-8", "replace") if isinstance(b, bytes) else (b or "")
+        proc = subprocess.CompletedProcess(exc.cmd, 1, text(exc.stdout),
+                                           text(exc.stderr) + "\nFAIL the test hung: stopped after 900 s (Error)")
     return path, proc, time.time() - started
 
 
@@ -88,8 +105,16 @@ def report(path, proc, took):
     why = []
     if not ok:
         in_trace = False
+        hung = False
         for line in out.splitlines():
             # every FAIL line, and every traceback in full (where it happened, not only its last line)
+            if line.startswith("Timeout ("):  # (2.13) it hung: where every thread was, to the end
+                hung = True
+                line = "FAIL the test hung. " + line
+            if hung:
+                print("     " + line)
+                why.append(line.rstrip())
+                continue
             if line.startswith("Traceback"):
                 in_trace = True
             if in_trace or line.startswith("FAIL") or "Error" in line:

@@ -173,6 +173,7 @@ class SettingsWindowMixin:
         tk.Label(row, textvariable=self.update_status_var, bg=BG, fg=MUTED, font=F_SMALL, anchor="w",
                  wraplength=330, justify="left").pack(side="left", fill="x", padx=(10, 0))
         link(f, "What's new (every version)", self.show_whats_new, fg=ACCENT).pack(anchor="w", pady=(4, 0))
+        link(f, "Replay the tour", self.start_tour, fg=ACCENT).pack(anchor="w", pady=(4, 0))  # (Preview 4)
         self._section(f, "HELP")
         row = tk.Frame(f, bg=BG)
         row.pack(fill="x", pady=4)
@@ -407,7 +408,7 @@ class SettingsWindowMixin:
         win.lift()
         only_close_button(win)
         if tab in self.tab_frames:
-            self.tabs.select(self.tab_frames[tab])
+            self.tabs.select(self.tab_areas[tab])
         self._show_tab_bar()
         win.focus_set()
         self._refresh()
@@ -431,6 +432,8 @@ class SettingsWindowMixin:
             self.root.after_cancel(self.settings_watch_job)
             self.settings_watch_job = None
         self._forget_removed_pictures()
+        if hasattr(self, "_search_close"):
+            self._search_close()  # (Preview 4: the search list closes with Settings)
         self.settings_win.withdraw()
         self._refresh()
 
@@ -517,7 +520,8 @@ class SettingsWindowMixin:
                      "discord_runs", "discord_ping_fragments", "discord_screenshot", "discord_shot_size", "discord_stops", "discord_name",
                      "discord_ping", "discord_ping_when", "discord_capture", "discord_title", "discord_content",
                      "discord_message", "results_enabled", "drops_enabled", "simplify_moves",
-                     "game_closed", "stuck_guard", "auto_stop", "vary", "discord_summary", "discord_live")
+                     "game_closed", "stuck_guard", "auto_stop", "vary", "discord_summary", "discord_live", "accent",
+                     "keys_on_screen", "keys_corner")
 
     def _is_page_setting(self, key):
         if key in self.PAGE_SETTINGS:
@@ -650,6 +654,13 @@ class SettingsWindowMixin:
     def _load_page_settings(self):
         """Every control on the Settings pages shows what self.settings holds again."""
         s = self.settings
+        if hasattr(self, "apply_accent"):
+            self.apply_accent(s.get("accent", "Blue"), save=False)  # (Preview 4: Undo / Reset of the colour)
+        if hasattr(self, "keys_var"):  # (Preview 4: keys on screen)
+            import keys_overlay
+
+            self.keys_var.set(bool(s.get("keys_on_screen", False)))
+            self.keys_corner_var.set(keys_overlay.CORNERS.get(s.get("keys_corner"), "Bottom right"))
         detail = s.get("mouse_detail")
         through = s.get("video_click_through")
         for var, value in (

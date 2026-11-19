@@ -1683,6 +1683,16 @@ class PictureWatchWindow:
                       state="normal" if getattr(self, "clipboard", None) else "disabled")
         m.add_command(label="Duplicate", accelerator="Ctrl+D", command=self.duplicate_pictures, state=st)
         m.add_command(label="Turn on / off", accelerator="Ctrl+E", command=self.toggle_pictures, state=st)
+        # (Preview 4) Move to group, as in the button under the list (for the picture that's chosen)
+        e = self._pic(self.sel_pic)
+        sub = self._menu()
+        stuck = e is None or (e.get("builtin") and e["group"] == AOTR_ID)
+        for g in self.groups:
+            if e is not None and g["id"] != e["group"]:
+                sub.add_command(label=g.get("name", "Group"), state="disabled" if stuck else "normal",
+                                command=lambda gid=g["id"]: self.move_picture(gid))
+        m.add_cascade(label="Move to group", menu=sub, state="disabled" if stuck or len(self._chosen_pics()) > 1
+                      else "normal")
         m.add_separator()
         m.add_command(label="Remove", accelerator="Delete", command=self.remove_picture, state=st)
         try:

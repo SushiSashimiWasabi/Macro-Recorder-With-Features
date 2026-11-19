@@ -80,6 +80,12 @@ MUTED = "#9b9ba6"
 DIM = "#5a5a64"
 ACCENT = "#4f7cff"    # blue
 ACCENT_DARK = "#1c2648"
+ACCENT_HOVER = "#6a90ff"
+# (Preview 4) accent colours to pick in Settings > Background > LOOK: (accent, dark, hover). White text on
+# the accent has at least 3:1 contrast, and the accent as text on the dark window at least 4.5:1.
+THEMES = {"Blue": ("#4f7cff", "#1c2648", "#6a90ff"), "Purple": ("#8f62f7", "#2a1f48", "#a07cf8"),
+          "Green": ("#1f9d58", "#14331f", "#2bb56a"), "Orange": ("#d9661f", "#3a2312", "#e87d3a"),
+          "Pink": ("#e0457f", "#401a2c", "#ea6a99"), "Red": ("#e2434f", "#3e1a1f", "#ea6370")}
 RED = "#ff4757"
 RED_DARK = "#3a1a20"
 GREEN = "#2ecc71"
@@ -117,7 +123,7 @@ def apply_theme(root):
     style.map("TButton", background=[("disabled", BG), ("active", CARD_HOVER)],
               bordercolor=[("active", "#4a4a56")])
     style.configure("Accent.TButton", background=ACCENT, foreground="white", bordercolor=ACCENT)
-    style.map("Accent.TButton", background=[("active", "#6a90ff")])
+    style.map("Accent.TButton", background=[("active", ACCENT_HOVER)])
     style.configure("Danger.TButton", background=RED_DARK, foreground=RED, bordercolor="#5a2630")
     style.map("Danger.TButton", background=[("active", "#4a2028")])
     style.configure("TCheckbutton", background=BG, foreground=TEXT, indicatorbackground=FIELD,
@@ -319,6 +325,132 @@ class Switch(tk.Canvas):
         self.create_oval(x, 4, x + h - 8, h - 4, fill=knob, outline="")
 
 
+class ScrollArea(tk.Frame):
+    """(Preview 4) A part of a window that gets scroll bars when the window is made smaller than what's
+    inside it. Put things into .inner. natural=True: it asks for the size of what's inside (the window
+    keeps its usual size until you drag its corner); False: it asks for almost nothing (the window's
+    size is set by its owner). on_scroll: called (once things stand still) after scrolling or resizing."""
+
+    SKIP_WHEEL = ("Scale", "TScale", "TCombobox", "TSpinbox", "Spinbox", "Listbox", "Treeview", "Text")
+
+    def __init__(self, parent, bg, natural=True, on_scroll=None):
+        super().__init__(parent, bg=bg)
+        self.natural, self.on_scroll, self.job = natural, on_scroll, None
+        self.canvas = tk.Canvas(self, bg=bg, highlightthickness=0, bd=0, width=1, height=1)
+        self.vbar = ttk.Scrollbar(self, orient="vertical", command=self._yview)
+        self.hbar = ttk.Scrollbar(self, orient="horizontal", command=self._xview)
+        self.inner = tk.Frame(self.canvas, bg=bg)
+        self.item = self.canvas.create_window(0, 0, window=self.inner, anchor="nw")
+        self.canvas.configure(yscrollcommand=self.vbar.set, xscrollcommand=self.hbar.set)
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        self.rowconfigure(0, weight=1)
+        self.columnconfigure(0, weight=1)
+        self.inner.bind("<Configure>", lambda e: self._fit(), add="+")
+        self.canvas.bind("<Configure>", lambda e: self._fit(), add="+")
+        self.bind("<Configure>", lambda e: self._fit() if e.widget is self else None, add="+")
+
+    def _fit(self):
+        # (2.13 Mac fix) Which bars are needed is worked out from this area's own size (set by its window,
+        # not by the bars), and a bar is only placed or taken away when that changes. Before, a hidden window
+        # on a Mac kept placing its bars again, each time making a new layout: an endless loop.
+        if getattr(self, "fitting", False):
+            return
+        self.fitting = True
+        try:
+            c, i = self.canvas, self.inner
+            rw, rh = i.winfo_reqwidth(), i.winfo_reqheight()
+            if self.natural and (int(c.cget("width")), int(c.cget("height"))) != (rw, rh):
+                c.configure(width=rw, height=rh)
+            if not self.winfo_ismapped():
+                return  # (hidden: laid out once it shows)
+            aw, ah = max(1, self.winfo_width()), max(1, self.winfo_height())
+            bw = max(1, self.vbar.winfo_reqwidth())
+            bh = max(1, self.hbar.winfo_reqheight())
+            need_v = rh > ah + 1
+            need_h = rw > aw - (bw if need_v else 0) + 1
+            need_v = need_v or (need_h and rh > ah - bh + 1)
+            cw, ch = aw - (bw if need_v else 0), ah - (bh if need_h else 0)
+            w, h = max(cw, rw), max(ch, rh)
+            c.itemconfigure(self.item, width=w, height=h)
+            c.configure(scrollregion=(0, 0, w, h))
+            for bar, need, where in ((self.vbar, need_v, dict(row=0, column=1, sticky="ns")),
+                                     (self.hbar, need_h, dict(row=1, column=0, sticky="ew"))):
+                shown = bool(bar.winfo_manager())
+                if need and not shown:
+                    bar.grid(**where)
+                elif not need and shown:
+                    bar.grid_remove()
+            if not need_v:
+                c.yview_moveto(0)
+            if not need_h:
+                c.xview_moveto(0)
+        finally:
+            self.fitting = False
+        self._moved()
+
+    def _yview(self, *args):
+        self.canvas.yview(*args)
+        self._moved()
+
+    def _xview(self, *args):
+        self.canvas.xview(*args)
+        self._moved()
+
+    def _moved(self):
+        if self.on_scroll is None:
+            return
+        if self.job is not None:
+            self.after_cancel(self.job)
+        self.job = self.after(60, self._tell)
+
+    def _tell(self):
+        self.job = None
+        try:
+            self.on_scroll()
+        except tk.TclError:
+            pass
+
+    def wheel(self, event):
+        """Mouse wheel over this area (the window calls it): scrolls when there's more to see."""
+        if event.widget.winfo_class() in self.SKIP_WHEEL or not self.vbar.winfo_ismapped():
+            return
+        steps = -1 if event.delta > 0 else 1
+        self.canvas.yview_scroll(steps * 3, "units")
+        self._moved()
+        return "break"
+
+    def see(self, widget):
+        """Scroll so widget (somewhere inside) shows."""
+        try:
+            self.update_idletasks()
+            self._fit()  # (a part that was just opened: its size counts now)
+            self.update_idletasks()
+            y = widget.winfo_rooty() - self.inner.winfo_rooty()
+            total = max(1, self.inner.winfo_height())
+            view = self.canvas.winfo_height()
+            top = self.canvas.canvasy(0)
+            if y < top or y + widget.winfo_height() > top + view:
+                self.canvas.yview_moveto(max(0.0, (y - 20) / total))
+                self._moved()
+        except tk.TclError:
+            pass
+
+
+def wheel_scrolls(window, area_of):
+    """(Preview 4) The mouse wheel scrolls the scroll area under the pointer. area_of(): the area."""
+    def on_wheel(event):
+        area = area_of()
+        if area is None or not hasattr(area, "wheel"):
+            return None
+        try:
+            if not str(event.widget).startswith(str(area)):
+                return None
+        except tk.TclError:
+            return None
+        return area.wheel(event)
+    window.bind("<MouseWheel>", on_wheel, add="+")
+
+
 class Card(tk.Frame):
     """A big action button: icon, name and its hotkey."""
 
@@ -350,6 +482,10 @@ class Card(tk.Frame):
         self._draw()
 
     def update_card(self, title=None, key=None, enabled=True, active=False):
+        shown = (title, key, enabled, active)
+        if shown == getattr(self, "shown", None):
+            return  # nothing changed (hover redraws on its own)
+        self.shown = shown
         if title is not None:
             self.label.config(text=title)
         if key is not None:
@@ -524,6 +660,47 @@ class PlayOverlay:
     def hide(self):
         self.last_shown = None
         self.win.withdraw()
+        self.front_button(None)
+
+    def front_button(self, command, text="Bring it to front"):
+        """(Preview 4) A small button just under the timer (the timer itself lets clicks through):
+        command None hides it. It never takes the keyboard from the window you're in."""
+        btn = getattr(self, "front_win", None)
+        if command is None:
+            if btn is not None:
+                btn.withdraw()
+            return
+        if btn is None:
+            btn = self.front_win = tk.Toplevel(self.win, bg=ACCENT)
+            btn.withdraw()
+            btn.overrideredirect(True)
+            btn.attributes("-topmost", True)
+            self.front_label = tk.Label(btn, bg=ACCENT, fg="white", font=(FAMILY, 9, "bold"), padx=12, pady=4,
+                                        cursor="hand2")
+            self.front_label.pack()
+            self.front_label.bind("<ButtonRelease-1>", lambda e: self.front_command and self.front_command())
+        self.front_command = command
+        self.front_label.config(text=text)
+        btn.update_idletasks()
+        w = self.win
+        x = w.winfo_rootx() + (w.winfo_width() - btn.winfo_reqwidth()) // 2
+        y = w.winfo_rooty() + w.winfo_height() + 4
+        btn.geometry(f"+{max(0, x)}+{y}")
+        if btn.state() == "withdrawn":
+            btn.deiconify()
+            if IS_WIN:
+                try:
+                    import ctypes
+
+                    u = ctypes.windll.user32
+                    hwnd = u.GetParent(btn.winfo_id()) or btn.winfo_id()
+                    # TOOLWINDOW | NOACTIVATE: off the taskbar, and clicking it doesn't make this app the
+                    # window in front (so the game can be put there)
+                    u.SetWindowLongW(hwnd, -20, u.GetWindowLongW(hwnd, -20) | 0x80 | 0x8000000)
+                except Exception:
+                    pass
+        btn.lift()
+        btn.attributes("-topmost", True)
 
 
 def format_clock(seconds):

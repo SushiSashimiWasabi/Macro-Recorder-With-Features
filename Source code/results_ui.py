@@ -130,17 +130,18 @@ class ResultsMixin:
         self._setup_picture_groups()
 
     def _build_results_tab(self, f):
-        self._section(f, "MISSION RESULTS", first=True)
+        self._section(f, "RUN RESULTS (AOT:R)", first=True)
         row = self._row(f, "Run stats", "win rate, run times, fragments an hour, a chart of each day")
         ttk.Button(row, text="Open…", command=self.open_stats).pack(side="right")
         self._switch_row(f, "Count wins and losses while playing", self.results_var, info=self.RESULTS_HELP)
         # the MISSION COMPLETED / FAILED pictures and their Match are in the Picture watch window (2.9)
-        row = self._row(f, "Result pictures", "MISSION COMPLETED / FAILED: in Picture watch > AOT:R")
+        row = self._row(f, "Win / loss pictures", "MISSION COMPLETED / FAILED: in Picture watch > AOT:R")
         b = ttk.Button(row, text="Open Picture watch…", command=lambda: self.open_picture_watch("aotr"))
         b.pack(side="right")
         self.result_buttons = [b]
-        self._switch_row(f, "Count divine fragments", self.drops_var, "by their pink-to-blue frame",
+        self._switch_row(f, "Count divine fragments (AOT:R)", self.drops_var, "by their pink-to-blue frame",
                          info=self.DROPS_HELP)
+        self._build_milestones_rows(f)  # (Preview 4)
         self._section(f, "RESULTS")
         tk.Label(f, textvariable=self.session_var, bg=BG, fg=TEXT, font=F_SMALL, anchor="w", justify="left").pack(
             fill="x")
@@ -225,6 +226,7 @@ class ResultsMixin:
         a["unknown"] = a.get("unknown", 0) + sess.count(stats.UNKNOWN)
         a["fragments"] = a.get("fragments", 0) + sum(sess.fragments)
         a["seconds"] = a.get("seconds", 0) + int(time.time() - sess.started)
+        sess.added = True  # (Preview 4: milestones then count it from the all-time results only)
         core.save_settings(self.settings)
 
     def _reset_all_time(self):

@@ -50,6 +50,19 @@ def screen_origin(sct=None):
             sct.close()
 
 
+# (Preview 4) parts of the main screen covered by this app's own boxes ("keys on screen"): (x0, y0, x1, y1).
+# Screenshots for pictures and colours show them black, so they never count as something seen.
+IGNORE_RECTS = []
+
+
+def _blank_ignored(img, ox=0, oy=0):
+    for x0, y0, x1, y1 in list(IGNORE_RECTS):
+        x0, y0, x1, y1 = max(0, x0 - ox), max(0, y0 - oy), min(img.shape[1], x1 - ox), min(img.shape[0], y1 - oy)
+        if x1 > x0 and y1 > y0:
+            img[y0:y1, x0:x1] = 0
+    return img
+
+
 def grab_screen(sct=None, region=None):
     """Screenshot of the main screen as a BGR image, one pixel per mouse position.
 
@@ -76,12 +89,12 @@ def grab_screen(sct=None, region=None):
             if part.shape[1] != x1 - x0 or part.shape[0] != y1 - y0:
                 part = cv2.resize(part, (x1 - x0, y1 - y0), interpolation=cv2.INTER_AREA)
             img[y0:y1, x0:x1] = part
-            return img
+            return _blank_ignored(img)
         shot = sct.grab(mon)
         img = np.ascontiguousarray(np.asarray(shot)[:, :, :3])
         if img.shape[1] != mon["width"] or img.shape[0] != mon["height"]:
             img = cv2.resize(img, (mon["width"], mon["height"]), interpolation=cv2.INTER_AREA)
-        return img
+        return _blank_ignored(img)
     finally:
         if own:
             sct.close()
@@ -96,7 +109,7 @@ def grab_part(x0, y0, x1, y1):
         img = np.ascontiguousarray(np.asarray(shot)[:, :, :3])
         if img.shape[1] != x1 - x0 or img.shape[0] != y1 - y0:  # (a Mac Retina screen)
             img = cv2.resize(img, (x1 - x0, y1 - y0), interpolation=cv2.INTER_AREA)
-        return img, (mon["left"] + x0, mon["top"] + y0)
+        return _blank_ignored(img, x0, y0), (mon["left"] + x0, mon["top"] + y0)
 
 
 def load_image(path):

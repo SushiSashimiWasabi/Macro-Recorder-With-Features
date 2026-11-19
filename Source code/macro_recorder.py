@@ -256,7 +256,7 @@ def saved_picture(file, **fields):
 # what a watched picture does when it shows (Picture watch): name, a few words
 WATCH_ACTIONS = [
     ("restart", "Start the macro over", "the run is finished: start again from the beginning"),
-    ("recover", "Disconnected: play my rejoin macro, then go on",
+    ("recover", "Disconnected: play my rejoin macro (Roblox), then go on",
      "for Roblox's Disconnected box: plays your rejoin macro, checks you're back, then the macro starts over"),
     ("play", "Play another macro, then start over", "for a screen that needs a few steps first"),
     ("switch", "Switch to another macro for good", "from now on that macro plays (and loops) instead of this one"),
@@ -622,6 +622,10 @@ def dump_macro(data, f):
                     keep["macro"] = keep["macro"].replace("\\", "/").rsplit("/", 1)[-1]
                 pics.append(keep)
         data = dict(data, watch_pictures=pics)
+    if isinstance(data.get("program"), dict) and "title" in data["program"]:
+        # (Preview 4) a window's title can hold private things (a page, a chat, a user name): files
+        # keep only the program's name and the window's size
+        data = dict(data, program={k: v for k, v in data["program"].items() if k != "title"})
     events = data.get("events", [])
     head = {k: v for k, v in data.items() if k != "events"}
     compact = {"separators": (",", ":"), "ensure_ascii": False}
@@ -2498,6 +2502,8 @@ class MacroRecorder(step_more.StepMoreMixin):
 
     def _set_note(self, text):
         def update():
+            if self.play_note == text:
+                return  # (shown already: no redraw, e.g. 10 times a second while paused)
             self.play_note = text
             self._refresh()
         self._call_ui(update)
@@ -4189,18 +4195,21 @@ class MacroRecorder(step_more.StepMoreMixin):
                 return False
             # pause: let go of everything, and wait for the game to come back
             self._release_held(None, held_keys, held_buttons)
+            self.away_games = games  # (Preview 4: for "Bring it to front" on the timer)
+            name = self._away_name(games)
             self._away_pause(True)
-            diag.info("Paused: the game isn't in front")
+            diag.info(f"Paused: {name or 'the game'} isn't in front")
             began = time.perf_counter()
             try:
                 while not self.stop_play.is_set():
                     waited = time.perf_counter() - began
                     if limit and waited >= limit:
                         self.stop_reason = (f"Stopped: the game wasn't in front for {limit} s "
-                                            "(Settings > Playback > Pause if the game isn't in front).")
+                                            "(Settings > Playback > Pause when the macro's window isn't in front).")
                         diag.info(self.stop_reason)
                         return True
-                    note = "Paused: the game isn't in front. Click back into the game to go on"
+                    note = (f"Paused: {name} isn't in front. Click {name} to go on" if name else
+                            "Paused: the game isn't in front. Click back into the game to go on")
                     if limit:
                         note += f" (stops in {int(limit - waited) + 1} s)"
                     self._set_note(note + ".")
@@ -4217,12 +4226,23 @@ class MacroRecorder(step_more.StepMoreMixin):
                     self.stop_play.wait(0.1)
             finally:
                 self._away_pause(False)
+                self.away_games = None
                 state["since"] = None
             self._set_note("Playing...")
             diag.info("Going on: the game is in front again")
             return False
 
         return check
+
+    def _away_name(self, games=None):
+        """(Preview 4) The name of the macro's window for the pause message ("Roblox"), or ""."""
+        exe = (self.macro_program or {}).get("exe") or getattr(self, "play_game_exe", None)
+        if not exe and games:
+            try:
+                exe = window_tools.exe_of(next(iter(games)))
+            except Exception:
+                exe = None
+        return window_tools.friendly_name(exe)
 
     def _user_paused(self):
         """True while the user paused playback (the dark window's Pause key)."""

@@ -18,3 +18,7 @@ CLAUDE.md
 # Kong's own documents (overview etc.), kept on this PC only
 Documents/
 covdata/
+
+# Graphify project map (local only)
+graphify-out/
+.claude/

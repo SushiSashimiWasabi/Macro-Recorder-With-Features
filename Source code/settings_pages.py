@@ -13,7 +13,7 @@ class SettingsPagesMixin:
         win.withdraw()
         self.settings_win = win
         win.title("Settings - Macro Recorder")
-        win.resizable(False, False)
+        win.resizable(True, True)  # (Preview 4: drag the corner; each page scrolls when it's smaller)
         win.attributes("-topmost", True)
         win.protocol("WM_DELETE_WINDOW", self.close_settings_x)
         self.title_bar = None  # (an own title bar was tried and rolled back: Windows' own is used)
@@ -29,10 +29,15 @@ class SettingsPagesMixin:
         self.tabs = ttk.Notebook(self.settings_body, style="Flat.TNotebook")
         self.tabs.pack(fill="both", expand=True, padx=8, pady=(4, 0))
         self.tab_frames = {}
+        self.tab_areas = {}  # (Preview 4) each page sits in its own scroll area
         for name in SETTINGS_PAGES:
-            f = ttk.Frame(self.tabs, padding=(18, 14))
-            self.tabs.add(f, text=name)
+            area = ScrollArea(self.tabs, BG, natural=False,
+                              on_scroll=lambda: self._scrolled(getattr(self, "settings_backdrop", None)))
+            f = ttk.Frame(area.inner, padding=(18, 14))
+            f.pack(fill="both", expand=True)
+            self.tabs.add(area, text=name)
             self.tab_frames[name] = f
+            self.tab_areas[name] = area
             cell = tk.Frame(bar, bg=BG)
             cell.pack(side="left", padx=(0, 4))
             # as wide as the name in bold, so the names don't shift when the open one turns bold
@@ -45,7 +50,7 @@ class SettingsPagesMixin:
             cell.config(width=lab.winfo_reqwidth(), height=lab.winfo_reqheight() + 2)
             cell.pack_propagate(False)
             lab.config(font=(FAMILY, 10))
-            lab.bind("<Button-1>", lambda e, n=name: self.tabs.select(self.tab_frames[n]))
+            lab.bind("<Button-1>", lambda e, n=name: self.tabs.select(self.tab_areas[n]))
             lab.bind("<Enter>", lambda e, n=name: self._tab_hover(n, True))
             lab.bind("<Leave>", lambda e, n=name: self._tab_hover(n, False))
             self.tab_labels[name] = (lab, line)
@@ -86,6 +91,7 @@ class SettingsPagesMixin:
             lift_colors={DIM: MUTED, MUTED: "#c2c2cc"},
             skip=(self.tab_bar,) + ((self.title_bar,) if self.title_bar else ()))
         self.tabs.bind("<<NotebookTabChanged>>", lambda e: win.after(10, self._settings_tab_changed), add="+")
+        wheel_scrolls(win, self._settings_page)
 
     def _finish_settings_window(self):
         """The first time Settings opens: make the Background page, then size every page."""
@@ -97,16 +103,54 @@ class SettingsPagesMixin:
             build(f)
             self._recolor_notes(f)
             self._title_labels(f)
-        # every page the same size (the biggest page, with a little room for lists that grow), so the
-        # window doesn't change size between pages
-        # (measured with every "Advanced" part open, so nothing is cut off when one is opened)
+        # (Preview 4) Settings has one size for every page, so it never changes size by itself: as wide as
+        # the widest page (with every "Advanced" part open) and as tall as the tallest page with them
+        # closed, but never taller than the screen. A taller page (or an open Advanced part) scrolls.
+        # Drag the corner to make it bigger or smaller; that size is kept (Reset window sizes in General).
+        win = self.settings_win
         for part in getattr(self, "advanced_parts", []):
             part.toggle(True)
-        self.settings_win.update_idletasks()
-        self.tabs.configure(width=max(f.winfo_reqwidth() for f in self.tab_frames.values()),
-                            height=max(f.winfo_reqheight() for f in self.tab_frames.values()) + 40)
+        win.update_idletasks()
+        width = max(f.winfo_reqwidth() for f in self.tab_frames.values()) + 20
         for part in getattr(self, "advanced_parts", []):
             part.toggle(False)
+        win.update_idletasks()
+        height = max(f.winfo_reqheight() for f in self.tab_frames.values()) + 10
+        self.tabs.configure(width=width, height=height)
+        win.update_idletasks()
+        w = min(win.winfo_reqwidth(), win.winfo_screenwidth() - 20)
+        h = min(win.winfo_reqheight(), win.winfo_screenheight() - 80)
+        self.tabs.configure(width=1, height=1)  # (from now on the window's size decides the pages' size)
+        self.settings_default_size = f"{w}x{h}"
+        win.geometry(self.settings_default_size)
+        self._keep_window_size(win, "settings_size", default=lambda: self.settings_default_size)
+
+    KEYS_HELP = ("While a macro plays or records, a small box in a corner of the screen shows the keys and clicks, "
+                 "like \"W\", \"Shift + E\" or \"Left click\". Good for videos and for checking what a macro "
+                 "presses.\n\nIt shows in screen recordings. Picture watch and colour checks don't look at its "
+                 "corner, so it never changes what they see. Clicks go through it.")
+
+    def apply_accent(self, name, save=True):
+        """(Preview 4) Change the accent colour now, in every open window."""
+        if name not in THEMES:
+            name = "Blue"
+        import themes
+
+        changed = themes.apply(self.root, name)
+        if save and self.settings.get("accent", "Blue") != name:
+            self.settings["accent"] = name
+            self._save_settings()
+        if changed:
+            core.diag.info(f"Accent colour: {name} ({changed} colours changed)")
+            for bd in (getattr(self, "backdrop", None), getattr(self, "settings_backdrop", None)):
+                if bd is not None and bd.active:
+                    self.root.after_idle(bd.repaint)
+        self._show_accent_choice()
+
+    def _show_accent_choice(self):
+        now = self.settings.get("accent", "Blue")
+        for name, sw in getattr(self, "accent_swatches", {}).items():
+            sw.config(highlightbackground=TEXT if name == now else BG)
 
     def _settings_page(self):
         """The settings page that's open (the area the background picture fills)."""
@@ -245,15 +289,17 @@ class SettingsPagesMixin:
                  bg=BG, fg=DIM, font=F_SMALL, anchor="w").pack(fill="x", pady=(4, 0))
 
         self._section(f, "INTERFACE")
-        self._switch_row(f, "Status bar", self.statusbar_var, "shortcuts and options at the bottom",
+        self._switch_row(f, "Status line at the bottom", self.statusbar_var, "shortcuts and options at the bottom",
                          command=lambda: (self._save_settings(), self._refresh()))
         self._switch_row(f, "Keep window on top", self.ontop_var,
                          command=lambda: (self._save_settings(), self._apply_on_top()))
+        row = self._row(f, "Window sizes", "drag a window's corner to resize it; its size is kept")
+        ttk.Button(row, text="Reset window sizes", command=self.reset_window_sizes).pack(side="right")
         self._build_icon_logo_rows(f)
         if IS_WIN:
             self._section(f, "FILES")
-            row = self._row(f, "Open .macro files with a double-click")
-            b = ttk.Button(row, text="Link .macro files", command=self.link_file_type)
+            row = self._row(f, "Open .macro files with this app")
+            b = ttk.Button(row, text="Link", command=self.link_file_type)
             b.pack(side="right")
             if self.preview:
                 b.config(state="disabled")  # the preview must not take over your real app's files
@@ -558,7 +604,22 @@ class SettingsPagesMixin:
     # ------------------------------------------------------------ background picture
 
     def _build_background_tab(self, f):
-        self._section(f, "MAIN WINDOW", first=True)
+        # (Preview 4) the accent colour: buttons, switches, the blue lines and links
+        self._section(f, "LOOK", first=True)
+        row = self._row(f, "Accent colour", "buttons, switches, lines and links")
+        self.accent_swatches = {}
+        for name in reversed(list(THEMES)):
+            sw = tk.Frame(row, bg=BG, highlightthickness=2, highlightbackground=BG, cursor="hand2")
+            sw.pack(side="right", padx=(4, 0))
+            dot = tk.Label(sw, bg=THEMES[name][0], width=2, height=1, cursor="hand2")
+            dot.pack(padx=1, pady=1)
+            dot.keep_colour = True
+            for w in (sw, dot):
+                w.bind("<Button-1>", lambda e, n=name: self.apply_accent(n))
+            hover_text(dot, lambda n=name: n)
+            self.accent_swatches[name] = sw
+        self._show_accent_choice()
+        self._section(f, "MAIN WINDOW")
         self.bg_main.build(f)
         self._section(f, "SETTINGS WINDOW")
         self._switch_row(f, "A different background for each page", self.bg_per_page_var,
@@ -738,7 +799,7 @@ class SettingsPagesMixin:
         self._section(f, "MOUSE")
         self._switch_row(f, "Record mouse movement", self.rec_moves_var,
                          "off = only clicks, scrolls and keys")
-        self._switch_row(f, "Record game camera movement", self.camera_var, "Shift Lock, right-click turning",
+        self._switch_row(f, "Record camera turning (Shift Lock)", self.camera_var, "Shift Lock, right-click turning",
                          info=self.CAMERA_HELP)
         adv = self._advanced(f)
         row = self._row(adv, "Mouse detail")
@@ -768,26 +829,44 @@ class SettingsPagesMixin:
                     command=self._save_settings).pack(side="right")
         self._switch_row(f, "Timer at the top of the screen", self.overlay_var,
                          "countdown, then how long it's been playing or recording")
-        self._switch_row(f, "Offer to switch to the macro's game", self.switch_prog_var,
+        # (Preview 4) keys on screen
+        import keys_overlay
+
+        self.keys_var = tk.BooleanVar(value=bool(self.settings.get("keys_on_screen", False)))
+        self.keys_corner_var = tk.StringVar(value=keys_overlay.CORNERS.get(self.settings.get("keys_corner"),
+                                                                           "Bottom right"))
+
+        def keys_changed(*_a):
+            self.settings["keys_on_screen"] = bool(self.keys_var.get())
+            self.settings["keys_corner"] = next((k for k, v in keys_overlay.CORNERS.items()
+                                                 if v == self.keys_corner_var.get()), "bottom_right")
+            self._save_settings()
+        sw = self._switch_row(f, "Show keys on screen", self.keys_var, "the keys and clicks played or recorded",
+                              command=keys_changed, info=self.KEYS_HELP)
+        corner = ttk.Combobox(sw.master, textvariable=self.keys_corner_var, state="readonly", width=12,
+                              values=list(keys_overlay.CORNERS.values()))
+        corner.pack(side="right", padx=(0, 10))
+        corner.bind("<<ComboboxSelected>>", lambda e: (corner.selection_clear(), keys_changed()))
+        self._switch_row(f, "Offer to switch to the macro's window", self.switch_prog_var,
                          "when you press Play here", info=self.SWITCH_HELP)
         self._section(f, "WHILE PLAYING")
-        self._switch_row(f, "Pause if the game isn't in front", self.away_var, "a pop-up, Discord, this app",
+        self._switch_row(f, "Pause when the macro's window isn't in front", self.away_var, "a pop-up, Discord, this app",
                          info=self.AWAY_HELP)
-        row = self._row(f, "Stop after waiting", "seconds (0 = keep waiting)")
+        row = self._row(f, "Stop if still paused after…", "seconds (0 = keep waiting)")
         ttk.Spinbox(row, from_=0, to=3600, width=5, textvariable=self.away_stop_var,
                     command=self._save_settings).pack(side="right")
-        row = self._row(f, "If the game closes", info=self.CLOSED_HELP)
+        row = self._row(f, "If the game closes or disconnects", info=self.CLOSED_HELP)
         self.closed_on_var = tk.BooleanVar(value=self._closed_settings()["on"])
         Switch(row, self.closed_on_var, command=self.closed_switched).pack(side="right", padx=(10, 0))
         ttk.Button(row, text="Change…", command=self.open_game_closed).pack(side="right")
         self.closed_var = tk.StringVar(value=self.closed_summary())
         self.closed_var.trace_add("write", lambda *a: self.root.after_idle(self._settings_text_changed))
         tk.Label(row, textvariable=self.closed_var, bg=BG, fg=MUTED, font=F_SMALL).pack(side="right", padx=(0, 10))
-        row = self._row(f, "Countdown before rejoining", "seconds, with a sound each second (0 = none)")
+        row = self._row(f, "Countdown before reopening the game", "seconds, with a sound each second (0 = none)")
         ttk.Spinbox(row, from_=0, to=60, width=5, textvariable=self.recover_count_var,
                     command=self._save_settings).pack(side="right")
         # (2.12) the stuck run guard: a switch (off at first) and Change…
-        row = self._row(f, "If a run gets stuck", info=self.STUCK_HELP)
+        row = self._row(f, "If a run gets stuck (no result seen)", info=self.STUCK_HELP)
         self.stuck_on_var = tk.BooleanVar(value=self._stuck_settings()["on"])
         Switch(row, self.stuck_on_var, command=self.stuck_switched).pack(side="right", padx=(10, 0))
         ttk.Button(row, text="Change…", command=self.open_stuck).pack(side="right")
@@ -818,19 +897,19 @@ class SettingsPagesMixin:
                  bg=BG, fg=DIM, font=F_SMALL, anchor="w").pack(fill="x")
         self._section(adv, "VIDEO WINDOW")
         f = adv
-        row = self._row(f, "Clicks go through it", "so the macro and the game don't notice it")
+        row = self._row(f, "Let clicks pass through the video", "so the macro and the game don't notice it")
         box = ttk.Combobox(row, width=24, state="readonly", textvariable=self.video_through_var,
                            values=VIDEO_THROUGH)
         box.pack(side="right")
         box.bind("<<ComboboxSelected>>", lambda e: (self._save_settings(), self._video_mode()))
         row = self._row(f, "Keys for the video", "skip, volume, speed, next video", info=self.VIDEO_KEYS_HELP)
         ttk.Button(row, text="Change keys…", command=self.open_video_keys).pack(side="right")
-        row = self._row(f, "See-through", "lower shows more of the game")
+        row = self._row(f, "Video transparency", "lower shows more of the game")
         scale = ttk.Scale(row, from_=20, to=100, length=160, variable=self.video_opacity_var,
                           command=lambda v: self._video_opacity())
         scale.pack(side="right")
         scale.bind("<ButtonRelease-1>", lambda e: self._save_settings())
-        row = self._row(f, "Saved browser data", info=self.VIDEO_DATA_HELP)
+        row = self._row(f, "Remember YouTube sign-in", info=self.VIDEO_DATA_HELP)
         ttk.Button(row, text="Clear…", command=self.clear_video_data).pack(side="right")
         self.video_data_var = tk.StringVar(value="")
         tk.Label(row, textvariable=self.video_data_var, bg=BG, fg=MUTED, font=F_SMALL).pack(side="right",
@@ -846,7 +925,7 @@ class SettingsPagesMixin:
         "If another window comes in front of the game while a macro plays (a pop-up, a message, "
         "Discord, this app), the macro lets go of every key and button and pauses. Click back into "
         "the game and it carries on from the same spot, so it never clicks into another program.\n\n"
-        "\"Stop after waiting\" ends the macro if the game stays away that long (0 = wait as long as "
+        "\"Stop if still paused after…\" ends the macro if the game stays away that long (0 = wait as long as "
         "it takes). Not used with \"Play into\" a background window.")
     FIT_HELP = (
         "The whole screen: clicks are moved to fit your screen size (for macros recorded in fullscreen).\n\n"
