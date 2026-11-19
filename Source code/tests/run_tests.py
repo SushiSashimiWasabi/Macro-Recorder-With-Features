@@ -125,8 +125,20 @@ def report(path, proc, took):
         if not why:
             why.append(f"exit code {proc.returncode}, no result line")
         if os.environ.get("GITHUB_ACTIONS"):
-            # (2.13) also as a note on the run's page, which anyone can read without signing in
-            text = " | ".join(why[:8])[:1500].replace("%", "%25").replace("\r", "").replace("\n", " ")
+            # (2.13) also as a note on the run's page, which anyone can read without signing in. A hung test:
+            # the test's own thread (the one that runs <module>), most recent call first, is what matters
+            note = why
+            if hung:
+                blocks, cur = [], []
+                for w in why[1:]:
+                    if w.startswith(("Thread 0x", "Current thread")) and cur:
+                        blocks.append(cur)
+                        cur = []
+                    cur.append(w.strip())
+                blocks.append(cur)
+                main_block = next((b for b in blocks if any("<module>" in w for w in b)), blocks[-1])
+                note = [why[0]] + [w for w in main_block if "frozen runpy" not in w and "<string>" not in w]
+            text = " | ".join(note[:14])[:2500].replace("%", "%25").replace("\r", "").replace("\n", " ")
             print(f"::error title={name} failed::{text}", flush=True)
     return ok, passed, count, skipped, why
 
