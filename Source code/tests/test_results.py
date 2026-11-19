@@ -160,7 +160,13 @@ timeline = (f"took {took:.1f} s, runs started at " + ", ".join(f"{t - t_play:.1f
             + ", ".join(looks) + f"; window size events {sum(events_seen.values())}: "
             + ", ".join(f"{w} x{n}" for w, n in events_seen.most_common(5)))
 if os.environ.get("GITHUB_ACTIONS"):
-    print(f"::notice title=results timeline ({sys.platform})::{statuses}; {timeline}", flush=True)
+    try:  # (and what the app's log says went wrong, if anything)
+        with open(os.path.join(tmp, "log.txt"), encoding="utf-8", errors="replace") as f:
+            bad = [ln.strip() for ln in f if "rror" in ln or "Traceback" in ln or "File " in ln][-12:]
+    except OSError:
+        bad = ["(no log)"]
+    print(f"::notice title=results timeline ({sys.platform})::{statuses}; {timeline}; log: {' | '.join(bad)}",
+          flush=True)
 check("results: run 1 won, run 2 lost, run 3 unknown", statuses == ["win", "loss", "unknown"],
       f"{statuses}; {timeline}")
 v = app.session.values()
