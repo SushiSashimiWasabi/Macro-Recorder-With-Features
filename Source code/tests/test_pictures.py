@@ -19,6 +19,14 @@ import image_watch  # noqa: E402
 import modern_ui  # noqa: E402
 import stats  # noqa: E402
 
+def core_text(folder):
+    """macro_recorder.py and the core_*.py files the core class is built from (it was split in 2.13)."""
+    import glob
+
+    parts = [os.path.join(folder, "macro_recorder.py")] + sorted(glob.glob(os.path.join(folder, "core_*.py")))
+    return "".join(open(p, encoding="utf-8").read() for p in parts)
+
+
 results = []
 
 
@@ -346,8 +354,10 @@ check("macro file: opened, the picture comes back with them",
       app.watch_pictures and app.watch_pictures[0].get("name") == "Lobby"
       and app.watch_pictures[0].get("action") == "key", [{k: v for k, v in p.items() if k != "img"} for p in app.watch_pictures])
 # the log says which picture ended a run, and how sure
-src = open(os.path.join(sys.argv[1], "macro_recorder.py"), encoding="utf-8").read()
-check("log: the picture that showed is named with its %", 'Picture watch: \\"{watch_name(pic, i + 1)}\\" showed' in src)
+src = core_text(sys.argv[1])
+check("log: the picture that showed is named with its %",
+      'Picture watch: \\"{watch_name(pic, i + 1)}\\" showed' in src
+      or 'Picture watch: \\"{core.watch_name(pic, i + 1)}\\" showed' in src)  # (core. since the 2.13 split)
 
 failed = [n for n, ok in results if not ok]
 print(f"\n{len(results) - len(failed)} of {len(results)} passed")

@@ -32,6 +32,7 @@ import diag
 import icon_picture
 import importers
 import macro_recorder as core
+import own_windows
 import platform_keys
 import stats
 import window_tools
@@ -460,7 +461,7 @@ def wheel_scrolls(window, area_of):
         if area is None or not hasattr(area, "wheel"):
             return None
         try:
-            if not str(event.widget).startswith(str(area)):
+            if not (str(event.widget) + ".").startswith(str(area) + "."):  # (".!scrollarea" is not ".!scrollarea2")
                 return None
         except tk.TclError:
             return None
@@ -667,7 +668,9 @@ class PlayOverlay:
         w = self.win
         w.update_idletasks()
         width, height = max(w.winfo_reqwidth(), 210), w.winfo_reqheight()  # same size, so it doesn't jump
-        w.geometry(f"{width}x{height}+{max(0, (self.screen_w - width) // 2)}+12")
+        x = max(0, (self.screen_w - width) // 2)
+        w.geometry(f"{width}x{height}+{x}+12")
+        own_windows.set_rect("timer", (x, 12, x + width, 12 + height))  # (Picture watch doesn't look at it)
         if w.state() == "withdrawn":
             w.deiconify()
             self._click_through()
@@ -677,6 +680,7 @@ class PlayOverlay:
     def hide(self):
         self.last_shown = None
         self.win.withdraw()
+        own_windows.set_rect("timer", None)
         self.front_button(None)
 
     def front_button(self, command, text="Bring it to front"):
@@ -684,6 +688,7 @@ class PlayOverlay:
         command None hides it. It never takes the keyboard from the window you're in."""
         btn = getattr(self, "front_win", None)
         if command is None:
+            own_windows.set_rect("front", None)
             if btn is not None:
                 btn.withdraw()
             return
@@ -703,6 +708,7 @@ class PlayOverlay:
         x = w.winfo_rootx() + (w.winfo_width() - btn.winfo_reqwidth()) // 2
         y = w.winfo_rooty() + w.winfo_height() + 4
         btn.geometry(f"+{max(0, x)}+{y}")
+        own_windows.set_rect("front", (max(0, x), y, max(0, x) + btn.winfo_reqwidth(), y + btn.winfo_reqheight()))
         if btn.state() == "withdrawn":
             btn.deiconify()
             if IS_WIN:

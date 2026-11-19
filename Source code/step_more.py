@@ -24,6 +24,8 @@ import re
 import threading
 import time
 
+import macro_steps as workflow
+
 # ---------------------------------------------------------------- what Edit offers
 
 ADDABLE = [
@@ -163,10 +165,7 @@ def do_maths(a, op, b, decimals):
     return (round(n, 2) if decimals else int(round(n))), None
 
 
-def else_has_if(lst, i):
-    """(2.12) Is the Else at lst[i] right after an If (the action just before it, and that one turned on)?"""
-    before = lst[i - 1] if i > 0 else None
-    return before is not None and not before.get("off") and before.get("kind") in ("if", "if_counter")
+else_has_if = workflow.else_has_if  # (2.13 review: the rule lives in macro_steps, with the moves that keep it)
 
 
 def in_time(now_hm, start, end):

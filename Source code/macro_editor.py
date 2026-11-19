@@ -109,6 +109,7 @@ class MacroEditor(EditMoreMixin):
         self.btn_undo = ttk.Button(top, text="Undo", width=8, command=self.undo)
         for b in (self.btn_apply, self.btn_reset, self.btn_redo, self.btn_undo):
             b.pack(side="right", padx=(8, 0))
+        link(top, "Tour", lambda: self.app.start_tour("edit"), bg=BG).pack(side="right", padx=(8, 0))
         # (Preview 4) the window the macro plays in: change it without recording again
         game = tk.Frame(win, bg=BG)
         game.pack(fill="x", padx=14, pady=(0, 8))
@@ -722,11 +723,7 @@ class MacroEditor(EditMoreMixin):
                     core.dump_macro(data, f)
                 if os.path.normcase(new_path) != os.path.normcase(path) and own:
                     os.remove(path)  # renamed: the old name goes (it was this same macro)
-                    macro_versions.renamed(path, new_path)  # (its older versions and warnings go along)
-                    if hasattr(app, "meta_renamed"):
-                        app.meta_renamed(path, new_path)  # (Preview 4: and its folder and tags)
-                    if hasattr(app, "rename_check_ignored"):
-                        app.rename_check_ignored(macro_versions._key(path), macro_versions._key(new_path))
+                    app.macro_renamed(path, new_path)  # (its versions, warnings, folder, tags, pictures and OK'd steps go along)
             except OSError as exc:
                 app.boxes.showerror("Edit", f"Couldn't save the macro:\n{exc}", parent=self.win)
                 return False
@@ -736,14 +733,8 @@ class MacroEditor(EditMoreMixin):
                 lib[i] = os.path.abspath(new_path)
             elif app._list_index(new_path) is None:
                 lib.append(os.path.abspath(new_path))
-            if own and os.path.normcase(new_path) != os.path.normcase(path) and \
-                    hasattr(app, "_pictures_macro_renamed"):
-                app._pictures_macro_renamed(path, new_path)  # (pictures used only for it follow it)
             if added and hasattr(app, "trust_steps"):
                 app.trust_steps(app._macro_key(new_path), added)
-            old_key = app._macro_key(path)
-            if hasattr(app, "_trusted") and old_key in app._trusted() and app._macro_key(new_path) != old_key:
-                app.trust_steps(app._macro_key(new_path), app._trusted()[old_key])
             core.save_settings(app.settings)
             if is_open:
                 app.current_file = new_path
@@ -874,16 +865,10 @@ class MacroEditor(EditMoreMixin):
 
         def do():
             lst, i = self._place()
-            found = self._selected()
-            if kind == "else" and found:
+            if kind == "else":
                 # (2.12) an Else goes right after its If: the chosen If, or the If the chosen action is in
                 # (a key just added inside the If is still chosen: the Else must not land inside the If)
-                if found[0].get("kind") in ("if", "if_counter"):
-                    lst, i = found[1], found[2] + 1
-                elif found[3] is not None and found[3].get("kind") in ("if", "if_counter"):
-                    outer = workflow.find(self.steps, found[3].get("id"))
-                    if outer:
-                        lst, i = outer[1], outer[2] + 1
+                lst, i = workflow.else_slot(self.steps, self._selected_id()) or (lst, i)
             lst.insert(i, a)
         self.change(do, select=a["id"])
 
@@ -1099,33 +1084,14 @@ class MacroEditor(EditMoreMixin):
         self.change(do, select=[b["id"] for b in new])
 
     def out_of_group(self):
-        found = self._selected()
-        if not found or found[3] is None:
-            return
-        a, lst, i, parent = found
-        outer = workflow.find(self.steps, parent["id"])
-        if not outer:
-            return
-        _g, glist, gi, _gp = outer
-
-        def do():
-            lst.pop(i)
-            glist.insert(gi + 1, a)
-        self.change(do, select=a["id"])
+        sid = self._selected_id()
+        if sid and workflow.can_move_out(self.steps, sid):
+            self.change(lambda: workflow.move_out(self.steps, sid), select=sid)
 
     def into_group_above(self):
-        found = self._selected()
-        if not found:
-            return
-        a, lst, i, _p = found
-        if i == 0 or lst[i - 1].get("kind") not in workflow.GROUPS:
-            return
-        group = lst[i - 1]
-
-        def do():
-            lst.pop(i)
-            group.setdefault("actions", []).append(a)
-        self.change(do, select=a["id"])
+        sid = self._selected_id()
+        if sid and workflow.can_move_into_above(self.steps, sid):
+            self.change(lambda: workflow.move_into_above(self.steps, sid), select=sid)
 
     def group_into(self, kind):
         chosen = self._chosen()
@@ -1148,15 +1114,12 @@ class MacroEditor(EditMoreMixin):
         self.change(do, select=g["id"])
 
     def ungroup(self):
-        found = self._selected()
-        if not found or found[0].get("kind") not in workflow.GROUPS:
+        sid = self._selected_id()
+        found = workflow.find(self.steps, sid) if sid else None
+        if not found or not workflow.can_ungroup(self.steps, sid):
             return
-        g, lst, i, _p = found
-        inner = g.get("actions", [])
-
-        def do():
-            lst[i:i + 1] = inner
-        self.change(do, select=inner[0]["id"] if inner else None)
+        inner = found[0].get("actions", [])
+        self.change(lambda: workflow.ungroup(self.steps, sid), select=inner[0]["id"] if inner else None)
 
     def toggle_off(self):
         """Turn the chosen actions off (or, when they're all off already, on again)."""
@@ -1205,12 +1168,12 @@ class MacroEditor(EditMoreMixin):
 
     def _group_moves(self):
         """(Preview 4) What the chosen action can do: (move out of its group, move into the group above it,
-        ungroup it)."""
-        found = self._selected()
-        a = found[0] if found else {}
-        in_group = bool(found and found[3] is not None)
-        above_group = bool(found and found[2] > 0 and found[1][found[2] - 1].get("kind") in workflow.GROUPS)
-        return in_group, above_group, a.get("kind") in workflow.GROUPS
+        ungroup it). The rules are in macro_steps (an If and its Else only move together)."""
+        sid = self._selected_id()
+        if not sid:
+            return False, False, False
+        return (workflow.can_move_out(self.steps, sid), workflow.can_move_into_above(self.steps, sid),
+                workflow.can_ungroup(self.steps, sid))
 
     def _test_items(self, m):
         ok = "normal" if self._selected_id() and not self.app.playing and not self.app.recording else "disabled"
@@ -1428,7 +1391,9 @@ class MacroEditor(EditMoreMixin):
             folder = self._ask_text("New folder", "A name for the new folder:")
             if not folder or not folder.strip():
                 return
-        self.app.set_macro_folder(paths, folder)
+        if self.app.set_macro_folder(paths, folder) is False:
+            self.app.boxes.showinfo("Edit", "That folder can't be made (use a name, and 50 folders at most).",
+                                    parent=self.win)
         self._fill_macros()
 
     def _edit_tags(self, path):

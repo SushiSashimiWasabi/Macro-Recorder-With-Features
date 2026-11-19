@@ -248,8 +248,8 @@ pids = [p["id"] for p in app.check_macro()]
 check("check: the game isn't open (maybe)", ("game" in pids) == window_tools.IS_WIN, pids)
 window_tools.windows_of = lambda exe: [123]
 check("check: the game is open: no warning", "game" not in [p["id"] for p in app.check_macro()])
-window_tools.windows_of = lambda exe: []
-app.macro_program = None
+window_tools.windows_of = lambda exe: [123]
+app.macro_program = {"exe": "RobloxPlayerBeta.exe"}  # (a "fine" macro knows its game and it's open: no "no game window" note)
 app.settings["fit_to"] = "screen"
 app.macro_screen = (1920, 1080)
 check("check: 16:9 on 16:10 is fine", not [p for p in app.check_macro((1920, 1200)) if p["id"] == "screen"])

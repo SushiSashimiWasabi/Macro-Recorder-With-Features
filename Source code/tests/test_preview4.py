@@ -101,8 +101,8 @@ else:
     app.settings["main_size"] = "99999x99999"
     app._keep_window_size(root, "main_size")
     pump(5)
-    check("main window: a saved size bigger than the screen is cut to the screen",
-          root.winfo_width() <= root.winfo_screenwidth() and root.winfo_height() <= root.winfo_screenheight())
+    check("main window: a saved size bigger than the screens is cut to all the screens together",
+          root.winfo_width() <= root.winfo_vrootwidth() and root.winfo_height() <= root.winfo_vrootheight())
     app.reset_window_sizes()
     pump(10)
 
@@ -319,7 +319,8 @@ for _ in range(100):
 reached = app.check_milestones()
 check("milestones: reached during a session (wins 900 + 100)", [m.get("name") for m in reached] == ["My 1k wins"]
       and sounds_played == ["milestone"], reached)
-check("milestones: wins in a row are counted over sessions", app.settings["stats_all"]["best_streak"] == 1)
+check("milestones: wins in a row are counted over sessions", app.settings["stats_all"]["best_streak"] == 100,
+      app.settings["stats_all"])
 again = app.check_milestones()
 check("milestones: told only once", again == [] and sounds_played == ["milestone"])
 app.session.added = True
@@ -437,11 +438,13 @@ ov.tick()
 pump()
 check("keys: the box shows in its corner", ov.win.winfo_viewable() and ov.label.cget("text") == "W"
       and ov.win.winfo_rootx() > root.winfo_screenwidth() // 2)
-check("keys: Picture watch doesn't look at it", ov.rect in image_watch.IGNORE_RECTS)
+import own_windows  # noqa: E402
+
+check("keys: Picture watch doesn't look at it", ov.rect in own_windows.rects_by_name().values())
 img = image_watch.np.full((50, 50, 3), 255, image_watch.np.uint8)
-image_watch.IGNORE_RECTS.append((10, 10, 20, 20))
-image_watch._blank_ignored(img)
-image_watch.IGNORE_RECTS.pop()
+own_windows.set_rect("test", (10, 10, 20, 20))
+own_windows.blank(img)
+own_windows.set_rect("test", None)
 check("keys: its place is black in Picture watch's screenshots", img[15, 15].sum() == 0 and img[5, 5].sum() == 765)
 ov.hide()
 pump()

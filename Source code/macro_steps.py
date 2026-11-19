@@ -125,6 +125,99 @@ def find(actions, action_id):
     return None
 
 
+# ---------------------------------------------------------------- If / Else and moving steps between groups
+# (2.13 review) One place for the rule "an Else belongs right after its If" and for the moves that must keep it:
+# Edit's buttons and menus only ask these. Playback keeps its own run-time rule (an Else runs when the If
+# before it wasn't true) in macro_recorder._run_steps.
+
+IF_KINDS = ("if", "if_counter")
+
+
+def else_has_if(lst, i):
+    """Is the Else at lst[i] right after an If (the action just before it, and that one turned on)?"""
+    before = lst[i - 1] if i > 0 else None
+    return before is not None and not before.get("off") and before.get("kind") in IF_KINDS
+
+
+def pairs_with_else(lst, i):
+    """lst[i] is an If with an Else right after it, or an Else that has its If: they only move together."""
+    a = lst[i]
+    if a.get("kind") == "else":
+        return else_has_if(lst, i)
+    return a.get("kind") in IF_KINDS and i + 1 < len(lst) and lst[i + 1].get("kind") == "else"
+
+
+def else_slot(steps, chosen_id):
+    """Where a new Else goes: (list, index) right after the chosen If, or after the If the chosen step is
+    in; None when the chosen step isn't an If or in one (the usual place then)."""
+    found = find(steps, chosen_id) if chosen_id else None
+    if not found:
+        return None
+    a, lst, i, parent = found
+    if a.get("kind") in IF_KINDS:
+        return lst, i + 1
+    if parent is not None and parent.get("kind") in IF_KINDS:
+        outer = find(steps, parent.get("id"))
+        if outer:
+            return outer[1], outer[2] + 1
+    return None
+
+
+def can_move_out(steps, step_id):
+    """The step is inside a group and can leave it (not an If with its Else, nor that Else: alone they'd come apart)."""
+    found = find(steps, step_id)
+    return bool(found and found[3] is not None and not pairs_with_else(found[1], found[2]))
+
+
+def move_out(steps, step_id):
+    """Take the step out of its group, to just after it (after the Else too, when the group is an If that has one)."""
+    if not can_move_out(steps, step_id):
+        return False
+    a, lst, i, parent = find(steps, step_id)
+    outer = find(steps, parent["id"])
+    if not outer:
+        return False
+    _g, glist, gi, _gp = outer
+    if parent.get("kind") in IF_KINDS and gi + 1 < len(glist) and glist[gi + 1].get("kind") == "else":
+        gi += 1
+    lst.pop(i)
+    glist.insert(gi + 1, a)
+    return True
+
+
+def can_move_into_above(steps, step_id):
+    """The step is right after a group and can go inside it (not an If with its Else, nor that Else)."""
+    found = find(steps, step_id)
+    return bool(found and found[2] > 0 and found[1][found[2] - 1].get("kind") in GROUPS
+                and not pairs_with_else(found[1], found[2]))
+
+
+def move_into_above(steps, step_id):
+    """Put the step at the end of the group right above it."""
+    if not can_move_into_above(steps, step_id):
+        return False
+    a, lst, i, _p = find(steps, step_id)
+    lst.pop(i)
+    lst[i - 1].setdefault("actions", []).append(a)
+    return True
+
+
+def can_ungroup(steps, step_id):
+    """The step is a group whose steps can go up a level (not an If that has an Else after it)."""
+    found = find(steps, step_id)
+    return bool(found and found[0].get("kind") in GROUPS
+                and not (found[0].get("kind") in IF_KINDS and pairs_with_else(found[1], found[2])))
+
+
+def ungroup(steps, step_id):
+    """Replace a group by its steps."""
+    if not can_ungroup(steps, step_id):
+        return False
+    g, lst, i, _p = find(steps, step_id)
+    lst[i:i + 1] = g.get("actions", [])
+    return True
+
+
 def all_events(actions):
     """Every recorded action, one step after another, for older versions of the app (and for the
     things that look at all of a macro's actions, like the action count)."""

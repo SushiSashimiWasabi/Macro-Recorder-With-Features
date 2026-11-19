@@ -83,11 +83,13 @@ def duration_text(seconds):
 class Session:
     """The runs since Play was pressed."""
 
-    def __init__(self, macro="", fragments_before=0):
+    def __init__(self, macro="", fragments_before=0, streak_before=0, best_streak_before=0):
         self.macro = macro
         self.started = time.time()
         self.runs = []  # (status, seconds)
         self.streak = 0
+        self.streak_before = streak_before  # (the all-time win streak when the session started)
+        self.best_streak_before = best_streak_before
         self.fragments = []  # divine fragments dropped in each run
         self.fragments_before = fragments_before  # all-time count when the session started
         self.reconnects = 0  # times a rejoin macro got the game back after a disconnect

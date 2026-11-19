@@ -147,6 +147,21 @@ NEVER_TYPE_INTO = {"cmd.exe", "powershell.exe", "pwsh.exe", "powershell_ise.exe"
 CONSOLE_CLASSES = {"ConsoleWindowClass", "CASCADIA_HOSTING_WINDOW_CLASS", "PseudoConsoleWindow"}
 
 
+def moved_game_file(path):
+    """A saved game file that is gone (Roblox puts every update in a new ...\\Versions\\version-xxx folder):
+    the same file name in the newest sibling folder, or None when there is none. A link (roblox://...) or a file
+    that is still there comes back as it was."""
+    if not path or "://" in path or os.path.exists(path):
+        return path
+    versions = os.path.dirname(os.path.dirname(path))
+    try:
+        found = [os.path.join(versions, d, os.path.basename(path)) for d in os.listdir(versions)]
+        found = [p for p in found if os.path.isfile(p)]
+        return max(found, key=os.path.getmtime) if found else None
+    except OSError:
+        return None
+
+
 def never_type_into(hwnd=None, exe=None):
     """(2.12) Is this a window (or program name) a macro must never type into? Checked by the program's
     file name, the name it was built with (a renamed copy) and the kind of window (any console), never

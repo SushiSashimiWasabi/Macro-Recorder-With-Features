@@ -22,6 +22,7 @@ from record_window_ui import RecordWindowMixin
 from stuck_ui import StuckMixin
 from milestones_ui import MilestonesMixin
 from macro_folders import MacroFoldersMixin
+from macro_records import MacroRecordsMixin
 from keys_overlay import KeysOverlayMixin
 from tour_ui import TourMixin
 from timed_start_ui import TimedStartMixin
@@ -43,7 +44,7 @@ from settings_window import SettingsWindowMixin
 from video_ui import VideoMixin
 
 
-class ModernMacroRecorder(TourMixin, KeysOverlayMixin, MacroFoldersMixin, MilestonesMixin, TimedStartMixin, CheckMixin, RecordWindowMixin, StuckMixin, ExtrasMixin, ProfilesMixin, PictureWatchMixin, SettingsPagesMixin, PictureActionsMixin, AutomationMixin, DiscordMixin, RemoteMixin, ResultsMixin, SettingsWindowMixin, MacroEditorMixin, EditWindowMixin, VideoMixin, core.MacroRecorder):
+class ModernMacroRecorder(TourMixin, KeysOverlayMixin, MacroRecordsMixin, MacroFoldersMixin, MilestonesMixin, TimedStartMixin, CheckMixin, RecordWindowMixin, StuckMixin, ExtrasMixin, ProfilesMixin, PictureWatchMixin, SettingsPagesMixin, PictureActionsMixin, AutomationMixin, DiscordMixin, RemoteMixin, ResultsMixin, SettingsWindowMixin, MacroEditorMixin, EditWindowMixin, VideoMixin, core.MacroRecorder):
     def __init__(self, root, preview=False):
         self.preview = preview
         self.sub_note = "Record something, or open a macro"
@@ -381,18 +382,29 @@ class ModernMacroRecorder(TourMixin, KeysOverlayMixin, MacroFoldersMixin, Milest
             bd._crop_all()
 
     def _keep_window_size(self, win, key, default=None):
-        if IS_MAC:  # (2.13 Mac fix: windows keep one size on a Mac)
-            return
         """Remember the size you drag a window to (settings[key] = "WxH"); it opens at that size next time
         (made smaller when it doesn't fit the screen). Its usual size is the size of its parts."""
-        saved = self.settings.get(key)
-        try:
-            w, h = (int(v) for v in str(saved).split("x"))
-        except (TypeError, ValueError):
-            w = h = 0
-        if w > 0 and h > 0:
-            w = max(200, min(w, win.winfo_screenwidth() - 20))
-            h = max(150, min(h, win.winfo_screenheight() - 60))
+        if IS_MAC:  # (2.13 Mac fix: windows keep one size on a Mac)
+            return
+        def usual_size():
+            return default() if default else f"{win.winfo_reqwidth()}x{win.winfo_reqheight()}"
+
+        def whole(text):
+            try:
+                a, b = (int(v) for v in str(text).split("x"))
+                return a, b
+            except (TypeError, ValueError):
+                return 0, 0
+
+        win.update_idletasks()
+        w, h = whole(self.settings.get(key))
+        bw, bh = whole(self.settings.get(key + "_base"))  # (the usual size it was dragged from; none = older version)
+        uw, uh = whole(usual_size())
+        grew = bw > 0 and (uw > bw + 8 or uh > bh + 8)  # (the contents grew: the old size would cut them)
+        if w > 0 and h > 0 and not grew:
+            # (the limit is every screen together, so a size made on a second screen is kept)
+            w = max(200, min(w, win.winfo_vrootwidth() - 20))
+            h = max(150, min(h, win.winfo_vrootheight() - 60))
             win.geometry(f"{w}x{h}")
         state = {"job": None}
 
@@ -404,13 +416,15 @@ class ModernMacroRecorder(TourMixin, KeysOverlayMixin, MacroFoldersMixin, Milest
                 size = f"{win.winfo_width()}x{win.winfo_height()}"
             except tk.TclError:
                 return
-            usual = default() if default else f"{win.winfo_reqwidth()}x{win.winfo_reqheight()}"
+            usual = usual_size()
             want = None if size == usual else size  # (its usual size isn't kept: it may change with a version)
-            if self.settings.get(key) != want:
+            if (self.settings.get(key), self.settings.get(key + "_base")) != (want, usual if want else None):
                 if want is None:
                     self.settings.pop(key, None)
+                    self.settings.pop(key + "_base", None)
                 else:
                     self.settings[key] = want
+                    self.settings[key + "_base"] = usual
                 core.save_settings(self.settings)
 
         def changed(event):
@@ -425,6 +439,7 @@ class ModernMacroRecorder(TourMixin, KeysOverlayMixin, MacroFoldersMixin, Milest
         """Settings > General > "Reset window sizes": the main window and Settings get their usual size."""
         for key, win in (("main_size", self.root), ("settings_size", self.settings_win)):
             self.settings.pop(key, None)
+            self.settings.pop(key + "_base", None)
             if win is not None:
                 win.geometry("")
         if self.settings_win is not None and getattr(self, "settings_default_size", None):
@@ -671,13 +686,16 @@ class ModernMacroRecorder(TourMixin, KeysOverlayMixin, MacroFoldersMixin, Milest
         Returns False when the user cancels."""
         exe = (self.macro_program or {}).get("exe")
         if not exe or not IS_WIN or not self.switch_prog_var.get() or self.target_var.get() != SCREEN_TARGET:
+            core.diag.info(f"Switch to game: skipped (exe {exe or 'none'}, switch {self.switch_prog_var.get()})")
             return True
         fg = window_tools.foreground()
         if fg is None or window_tools.pid_of(fg) != os.getpid():
+            core.diag.info("Switch to game: Play came from another window, playing there")
             return True  # Play was pressed from the game (or another window): play there
         wins = window_tools.windows_of(exe)
         name = self._program_name()
         if not wins:
+            core.diag.info(f"Switch to game: {exe} is not open, asking")
             self.game_asked = True  # (Check my macro doesn't tell it again)
             return messagebox.askyesno(
                 "Macro Recorder", f"This macro was recorded in {name} ({exe}), which isn't open.\n\n"
@@ -813,6 +831,10 @@ class ModernMacroRecorder(TourMixin, KeysOverlayMixin, MacroFoldersMixin, Milest
     def _recovery_tick(self, kind, seconds_left):
         self._call_ui(lambda: self._sound("recover_disconnect" if kind == "disconnect" else "recover_close"))
 
+    def _results_changed(self):
+        if not getattr(self, "test_play", None):  # (a late result: the streak and milestones are looked at again)
+            self._call_ui(self.check_milestones)
+
     def _run_finished(self, count, how):
         super()._run_finished(count, how)
         if not getattr(self, "test_play", None):  # (Preview 4: a milestone may have been reached)
@@ -843,6 +865,7 @@ class ModernMacroRecorder(TourMixin, KeysOverlayMixin, MacroFoldersMixin, Milest
         self.overlay_job = None
         if self.playing or self.recording:
             self._keys_start()  # (Preview 4: keys on screen)
+            self.tour_stop_if_busy()  # (2.13 review: the tour never stays over a game)
         if not (self.playing or self.recording or self.record_countdown_left > 0):
             return
         if not self.overlay_var.get():
@@ -1244,6 +1267,8 @@ class ModernMacroRecorder(TourMixin, KeysOverlayMixin, MacroFoldersMixin, Milest
         kept = [p for p in lib if os.path.isfile(p) or not os.path.isdir(os.path.dirname(p))]
         if len(kept) != len(lib):
             diag.info(f"Took {len(lib) - len(kept)} deleted macro file(s) off the saved macros list")
+            for gone in [p for p in lib if p not in kept]:
+                self.macro_gone(gone)
             lib[:] = kept
             core.save_settings(self.settings)
 
@@ -1267,6 +1292,7 @@ class ModernMacroRecorder(TourMixin, KeysOverlayMixin, MacroFoldersMixin, Milest
 
     def _show_macro_list(self, busy=False):
         self._forget_deleted_macros()
+        self.prune_meta()
         lib = self.row_macros()  # (Preview 4: only one folder's, when one is chosen)
         i = self._row_index(lib, self.current_file)
         folder = self.row_folder()
@@ -1560,6 +1586,7 @@ def main(preview=False):
         root.after(4000, app.startup_action)
     root.after(3000, app.schedule_start)  # (2.12: the remembered alarm and timer)
     root.after(5000, app.tour_when_ready)  # (Preview 4: the guided tour, once)
+    root.after(8000, app.tour_first_tick)  # (each window's tour starts by itself the first time it opens)
     if IS_MAC:
         def open_documents(*paths):
             if paths:

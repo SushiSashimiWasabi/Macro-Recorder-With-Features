@@ -518,6 +518,7 @@ class ExtrasMixin:
                        highlightcolor=ACCENT)
         tk.Label(parent, text="Search", bg=BG, fg=MUTED, font=F_SMALL).pack(side="left")
         box.pack(side="left", padx=(6, 0), ipady=3)
+        link(parent, "Take a tour", lambda: self.start_tour("settings"), bg=BG).pack(side="left", padx=(14, 0))
         self.search_box = box
         self.search_list = None
         self.search_var.trace_add("write", lambda *a: self._search_show())

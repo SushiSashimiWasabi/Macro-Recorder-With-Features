@@ -164,6 +164,7 @@ class EditWindowMixin:
         top.pack(fill="x", padx=14, pady=(12, 6))
         summary = tk.StringVar()
         tk.Label(top, textvariable=summary, bg=BG, fg=MUTED, font=F_BASE, anchor="w").pack(side="left")
+        link(top, "Tour", lambda: self.start_tour("events"), bg=BG).pack(side="right")
 
         table = tk.Frame(win, bg=BG)
         table.pack(fill="both", expand=True, padx=14)
@@ -639,6 +640,9 @@ class EditWindowMixin:
         ttk.Button(bottom, text="Cancel", command=win.destroy).pack(side="right", padx=6)
         fill()
         win.tree, win.add_action, win.record_here, win.apply = tree, add_action, record_here, apply  # (for tests)
+        win.tour = {"summary": top, "table": table, "tools0": tools0, "tools_many": tools_many, "tools": tools,
+                    "bottom": bottom}  # (the parts the Tour link points at)
+        self.events_win = win
         win.ops = {"remove": remove_selected, "copy": copy_rows, "cut": cut_rows, "paste": paste_rows,
                    "duplicate": duplicate_rows, "move": move_rows, "move_by": move_by,
                    "undo": lambda: jump(undo_stack, redo_stack), "redo": lambda: jump(redo_stack, undo_stack),

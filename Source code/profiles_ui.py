@@ -17,7 +17,7 @@ import stats
 from ui_common import *  # noqa: F401,F403
 
 # never part of a profile
-SKIP_KEYS = {"profiles", "profile_active", "macro_library", "stats_all", "milestones", "tour_done", "macro_meta", "macro_folders", "macro_row_folder", "last_seen_version", "last_game_exe",
+SKIP_KEYS = {"profiles", "profile_active", "macro_library", "stats_all", "milestones", "tour_done", "tours_seen", "macro_meta", "macro_folders", "macro_row_folder", "last_seen_version", "last_game_exe",
              "builtin_failed_added", "check_updates", "app_icon_file", "app_logo_file", "app_logo_same",
              "video_history", "video_link", "first_start_done", "warn_big_pictures",
              "video_playlist_note", "check_ignore", "counter_values"}

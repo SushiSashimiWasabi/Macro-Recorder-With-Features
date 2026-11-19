@@ -174,6 +174,7 @@ class SettingsPagesMixin:
         if self.bg_per_page_var.get():  # each page may have its own background
             self._settings_bg_controls().apply()
         self.settings_backdrop.repaint()
+        self.tour_to_front()  # (the focus change above raises Settings over a running tour's box)
 
     def _open_page_name(self):
         try:

@@ -425,6 +425,19 @@ class PictureActionsMixin:
         r = row("Open this", "the game's link, or a file")
         ttk.Button(r, text="File…", command=lambda: pick_open()).pack(side="right")
         entry(r, open_var, 34).pack_configure(padx=(0, 6))
+        follow_var = tk.BooleanVar(value=opts["follow"])
+        r = row("If that file is gone after an update", "use the newest one in its place")
+        Switch(r, follow_var).pack(side="right")
+        missing = tk.Label(body, bg=BG, fg=AMBER, font=F_SMALL, anchor="w", justify="left", wraplength=470)
+        missing.pack(fill="x")
+
+        def show_missing(*_):  # (a game file that is gone says so right here, in orange)
+            path = open_var.get().strip()
+            note = self._game_open_target(dict(opts, open=path, follow=bool(follow_var.get())))[1] if path else ""
+            missing.config(text=note)
+        open_var.trace_add("write", show_missing)
+        follow_var.trace_add("write", show_missing)
+        show_missing()
 
         def pick_open():
             path = filedialog.askopenfilename(parent=win)
@@ -467,7 +480,8 @@ class PictureActionsMixin:
                 except ValueError:
                     return default
             new = {"action": action, "on": opts["on"], "open": open_var.get().strip(), "macro": macro,
-                   "tries": max(1, min(20, whole(tries_var, 3))), "settle": max(0, min(600, whole(settle_var, 20)))}
+                   "tries": max(1, min(20, whole(tries_var, 3))), "settle": max(0, min(600, whole(settle_var, 20))),
+                   "follow": bool(follow_var.get())}
             if action == "wait" and not new["open"] and not macro and new["on"]:
                 self.settings.pop("game_closed", None)
             else:
@@ -482,7 +496,8 @@ class PictureActionsMixin:
         ttk.Button(bottom, text="Cancel", width=8, command=win.destroy).pack(side="right", padx=6)
         dark_title_bar(win)
         win.focus_force()
-        win.save, win.vars = save, {"action": action_var, "open": open_var, "macro": macro_var, "macros": macros}
+        win.save, win.vars = save, {"action": action_var, "open": open_var, "macro": macro_var, "macros": macros,
+                                   "follow": follow_var, "missing": missing}
         return win
 
     def _show_closed_choice(self):

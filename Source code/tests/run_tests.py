@@ -30,6 +30,7 @@ src = os.path.dirname(here)
 # these open windows (Edit, Settings, Picture watch, dashboards...): one at a time
 WINDOW_TESTS = {"test_automation.py", "test_chains.py", "test_editor.py", "test_pictures.py", "test_preview1.py",
                 "test_preview2.py", "test_preview3.py", "test_preview3_edges.py", "test_preview3_actions.py", "test_preview4.py",
+                "test_review213.py",
                 "test_security.py", "test_remote.py", "test_settings_undo.py", "test_stage3.py", "test_stage4.py",
                 "test_windows.py"}
 AT_ONCE = 4  # how many of the other tests run side by side
@@ -39,7 +40,7 @@ GROUPS = {
     "basic": ["test_steps.py", "test_playback.py", "test_editor.py", "test_windows.py", "test_settings_undo.py",
               "test_stage3.py", "test_stage4.py", "test_automation.py", "test_chains.py", "test_pictures.py",
               "test_results.py", "test_real_screen.py", "test_preview1.py", "test_preview2.py",
-              "test_updater_folder.py", "test_preview4.py"],
+              "test_updater_folder.py", "test_preview4.py", "test_review213.py"],
     "security": ["test_files.py", "test_security.py"],
     "timing": ["test_preview3.py"],
     "discord": ["test_remote.py"],

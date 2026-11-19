@@ -42,6 +42,16 @@ class MacroFoldersMixin:
             store = self.settings["macro_meta"] = {}
         return store
 
+    def prune_meta(self):
+        """Folder and tags of macros that are gone (not in the list and no file) are forgotten."""
+        store = self._meta_store()
+        keep = {self._meta_key(p) for p in self.macro_list()}
+        gone = [k for k in store if k not in keep and not os.path.exists(k)]
+        for k in gone:
+            del store[k]
+        if gone:
+            core.save_settings(self.settings)
+
     def macro_meta(self, path):
         """{"folder": "" or a name, "tags": [..]} of a saved macro."""
         m = self._meta_store().get(self._meta_key(path))
@@ -78,8 +88,10 @@ class MacroFoldersMixin:
         return next((n for n in self.macro_folders() if n.lower() == name.lower()), name)
 
     def set_macro_folder(self, paths, folder):
-        """Put macros in a folder ("" = no folder)."""
+        """Put macros in a folder ("" = no folder). False when the folder can't be made (nothing changes)."""
         folder = self.make_folder(folder) if folder else ""
+        if folder is None:
+            return False
         for path in paths:
             meta = self.macro_meta(path)
             meta["folder"] = folder or ""

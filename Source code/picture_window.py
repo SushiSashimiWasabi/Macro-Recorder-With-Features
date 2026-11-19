@@ -542,6 +542,7 @@ class PictureWatchWindow:
         self.btn_undo = ttk.Button(top, text="Undo", width=8, command=self.undo)
         for b in (self.btn_apply, self.btn_reset, self.btn_redo, self.btn_undo):
             b.pack(side="right", padx=(8, 0))
+        link(top, "Tour", lambda: app.start_tour("picture"), bg=BG).pack(side="right", padx=(8, 0))
         tk.Frame(win, bg=BORDER, height=1).pack(fill="x")
 
         body = tk.Frame(win, bg=BG)

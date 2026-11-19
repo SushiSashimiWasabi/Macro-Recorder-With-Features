@@ -76,7 +76,18 @@ class CheckMixin:
                 f"The rejoin macro of \"If the game closes\" (Settings > Playback), \"{_name(closed['macro'])}\", "
                 "isn't there any more. Only the game is opened again.")
         # maybe problems
+        if closed["action"] == "reopen" and window_tools.IS_WIN:
+            _target, gone_note = self._game_open_target(closed)
+            if gone_note:
+                add("closedopen", MAYBE, gone_note + ". Choose the game file again in Settings > Playback > "
+                                         "If the game closes > Change…")
         exe = (self.macro_program or {}).get("exe")
+        if not exe and window_tools.IS_WIN and self.events \
+                and (self.switch_prog_var.get() or self.settings.get("pause_when_away", True)):
+            add("nogame", MAYBE, "This macro doesn't know which program it belongs to, so Play can't switch to the game, "
+                                 "and \"Pause when the macro's window isn't in front\" watches whichever window is in "
+                                 "front. Pick the game in Edit (Game window > Change…). Try Show without playing "
+                                 "first: clicks may land differently.")
         if exe and window_tools.IS_WIN and not window_tools.windows_of(exe):
             add("game", MAYBE, f"This macro was recorded in {self._program_name()} ({exe}), which doesn't "
                                "seem to be open.")
@@ -271,7 +282,7 @@ class CheckMixin:
                      font=F_SMALL, anchor="w").pack(fill="x")
             tk.Label(row, text=p["text"], bg=BG, fg=MUTED if off else TEXT, font=F_BASE, anchor="w",
                      justify="left", wraplength=440).pack(fill="x")
-            if p["id"] == "game" and IS_WIN:  # (Preview 4: Edit can pick another window for the macro)
+            if p["id"] in ("game", "nogame") and IS_WIN:  # (Preview 4: Edit can pick another window for the macro)
                 link(row, "Pick another window in Edit (Game window > Change…)",
                      lambda: (win.destroy(), self.open_editor()), bg=BG).pack(anchor="w")
             if self.current_file:

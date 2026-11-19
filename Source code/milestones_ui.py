@@ -36,8 +36,10 @@ def clean_milestone(m):
     if name:
         out["name"] = name
     reached = m.get("reached")
-    if isinstance(reached, str) and len(reached) == 10:
-        out["reached"] = reached
+    try:
+        out["reached"] = datetime.date.fromisoformat(reached).isoformat()  # (a made-up date would crash the window)
+    except (TypeError, ValueError):
+        pass
     return out
 
 
@@ -90,23 +92,27 @@ class MilestonesMixin:
                     pass
 
     def _note_streak(self):
-        """After each run: wins in a row over every session (a loss ends it, an unknown run doesn't)."""
+        """Wins in a row over every session (a loss ends it, an unknown run doesn't). Worked out again from
+        the session's runs each time, starting from what it was when the session began, so noting the same
+        runs twice, or an Unknown run that gets its result late, never skews it."""
         a = self.settings.get("stats_all")
         if not isinstance(a, dict):
             a = self.settings["stats_all"] = {}
         sess = self.session
-        status = sess.runs[-1][0] if sess.runs else None
-        if status == stats.WIN:
-            a["streak_now"] = int(a.get("streak_now", 0)) + 1
-        elif status == stats.LOSS:
-            a["streak_now"] = 0
-        a["best_streak"] = max(int(a.get("best_streak", 0)), int(a.get("streak_now", 0)))
+        now, best = int(getattr(sess, "streak_before", 0)), int(getattr(sess, "best_streak_before", 0))
+        for status, _seconds in sess.runs:
+            if status == stats.WIN:
+                now += 1
+            elif status == stats.LOSS:
+                now = 0
+            best = max(best, now)
+        a["streak_now"], a["best_streak"] = now, max(best, int(getattr(sess, "best_streak_before", 0)))
 
     def check_milestones(self):
         """After each run (on the window's thread): tell about every milestone just reached."""
         if getattr(self, "session", None) is not None and self.session.runs:
             self._note_streak()
-        ms = self.milestones()
+        self.milestones()  # (cleans the saved list)
         totals = self.milestone_totals()
         reached = []
         for m in self.settings["milestones"]:
@@ -125,7 +131,7 @@ class MilestonesMixin:
                                 if self.settings.get("milestones_ping") else "",
                                 {"title": "🏆 Milestone reached", "description": name, "color": 0xF1C40F}, None)
         self._show_milestones()
-        return reached if ms is not None else []
+        return reached
 
     # ------------------------------------------------------------ Settings > Results
 

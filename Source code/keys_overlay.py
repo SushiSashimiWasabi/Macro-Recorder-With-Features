@@ -3,12 +3,13 @@ being played or recorded ("W", "Shift + E", "Left click"), for videos and for ch
 
 Settings > Playback > "Show keys on screen" (setting keys_on_screen, off at first; keys_corner). The box lets
 clicks through and never takes the keyboard. It shows in screen recordings, and Picture watch / colour
-checks don't see it (its place is blacked out of their screenshots: image_watch.IGNORE_RECTS)."""
+checks don't see it (its place is blacked out of their screenshots: own_windows)."""
 import collections
 import time
 import tkinter as tk
 
 import macro_steps as workflow
+import own_windows
 from ui_common import *  # noqa: F401,F403
 
 CORNERS = {"bottom_right": "Bottom right", "bottom_left": "Bottom left", "top_right": "Top right",
@@ -75,7 +76,10 @@ class KeysOverlay:
     def tick(self):
         """The window's thread, a few times a second: take what came in, drop old lines, show the rest."""
         while self.pending:
-            text = event_text(self.pending.popleft(), self.held)
+            try:
+                text = event_text(self.pending.popleft(), self.held)
+            except Exception:  # (an odd event from an imported file: skip it, keep the box going)
+                text = None
             if text:
                 self.lines.append((text, time.monotonic()))
         now = time.monotonic()
@@ -106,15 +110,8 @@ class KeysOverlay:
 
     def _ignore(self, rect):
         """Picture watch and colour checks don't look at the box."""
-        try:
-            import image_watch
-        except Exception:
-            return
-        if self.rect in image_watch.IGNORE_RECTS:
-            image_watch.IGNORE_RECTS.remove(self.rect)
         self.rect = rect
-        if rect is not None:
-            image_watch.IGNORE_RECTS.append(rect)
+        own_windows.set_rect("keys", rect)
 
     def _click_through(self):
         if self.made_through or not IS_WIN:

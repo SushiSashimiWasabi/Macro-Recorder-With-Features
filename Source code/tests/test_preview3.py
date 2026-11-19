@@ -27,6 +27,14 @@ import sounds  # noqa: E402
 import timed_start_ui  # noqa: E402
 import window_tools  # noqa: E402
 
+def core_text(folder):
+    """macro_recorder.py and the core_*.py files the core class is built from (it was split in 2.13)."""
+    import glob
+
+    parts = [os.path.join(folder, "macro_recorder.py")] + sorted(glob.glob(os.path.join(folder, "core_*.py")))
+    return "".join(open(p, encoding="utf-8").read() for p in parts)
+
+
 results = []
 
 
@@ -161,7 +169,7 @@ app._run_passes = real_passes
 del app._play_clock
 app._recovery_event = real_event
 check("stuck guard: never in test plays", "None if test else self._stuck_watcher()" in
-      open(os.path.join(src, "macro_recorder.py"), encoding="utf-8").read())
+      core_text(src))
 check("stuck guard: Discord gets its own card", "A run seems stuck" in open(os.path.join(src, "discord_ui.py"),
                                                                            encoding="utf-8").read())
 win = app.open_stuck()
@@ -536,7 +544,7 @@ app.play_paused_at = None
 color_check.seen = real_seen
 check("counting: never while paused", app.counters.get("Drops") is None, app.counters)
 check("counting: never in test or watch-only plays", "self.count_list = [] if test else self._count_pictures()" in
-      open(os.path.join(src, "macro_recorder.py"), encoding="utf-8").read())
+      core_text(src))
 log_text = open(core.diag.log_path(), encoding="utf-8").read() if core.diag.log_path() else ""
 check("counting: each count is in the log", "counter \"Drops\" +1" in log_text)
 
@@ -662,7 +670,7 @@ check("guard: a missing picture says so", not ok and "RETRY is missing" in text,
 app.result_pictures, app.watch_pictures = real_results, real_watch
 app.watch_var.set(False)
 check("guard: RETRY showing resets the guard (like a result)", 'if pic.get("builtin") == "retry":' in
-      open(os.path.join(src, "macro_recorder.py"), encoding="utf-8").read())
+      core_text(src))
 clock = {"t": 5000.0}
 app._play_clock = lambda: clock["t"]
 app.settings["stuck_guard"] = {"on": True, "minutes": 1, "action": "restart", "tries": 3}

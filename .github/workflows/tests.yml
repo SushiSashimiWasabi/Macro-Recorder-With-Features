@@ -3,7 +3,7 @@
 # run is the one the README's "Tests" badge shows). When only docs changed they're skipped. By hand: Actions > Tests > Run workflow, then pick a group or name one test file.
 #
 # Mac: the tests also run on a Mac (Apple Silicon and Intel) for a version tag (v2.12...) or when
-# "Also run on a Mac" is ticked by hand. (Mac minutes cost 10x on a private repo, so not every push.)
+# "Also run on a Mac" is ticked by hand, and on every push to the public repo's branch preview-tests (Mac minutes are free there).
 #
 # Checks that need the owner's real PC (a second screen...) print "SKIP (PC only)" here; the summary counts them.
 name: Tests
