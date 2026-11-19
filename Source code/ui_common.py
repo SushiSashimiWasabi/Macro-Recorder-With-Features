@@ -436,6 +436,23 @@ class ScrollArea(tk.Frame):
             pass
 
 
+class PlainArea(tk.Frame):
+    """(2.13 Mac fix) Stands in for ScrollArea where scrolling can't be used: just a frame (inner = itself).
+    On a Mac, the Settings pages' scroll areas froze the app while a macro played (Tk's canvas with a page
+    inside it, in a window that isn't on screen, kept the window busy forever; found with tests/mac_probe.py)."""
+
+    def __init__(self, parent, bg, natural=True, on_scroll=None):
+        super().__init__(parent, bg=bg)
+        self.inner = self
+        self.vbar = self.hbar = None
+
+    def wheel(self, event):
+        return None
+
+    def see(self, widget):
+        pass
+
+
 def wheel_scrolls(window, area_of):
     """(Preview 4) The mouse wheel scrolls the scroll area under the pointer. area_of(): the area."""
     def on_wheel(event):

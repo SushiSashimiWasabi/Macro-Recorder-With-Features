@@ -29,6 +29,14 @@ def check(name, cond, info=""):
     print(("PASS " if cond else "FAIL ") + name + (f"  [{info}]" if info else ""))
 
 
+def not_on_mac(name):
+    """(2.13) Settings has no page scrolling on a Mac (it froze the app there): those checks are skipped."""
+    if sys.platform != "darwin":
+        return False
+    print("SKIP (Windows only) " + name)
+    return True
+
+
 root = tk.Tk()
 root.withdraw()
 app = modern_ui.ModernMacroRecorder(root)
@@ -119,14 +127,14 @@ app.open_settings()
 sw = app.settings_win
 sw.geometry("+60+60")
 pump(15)
-check("Settings: can be resized", sw.resizable() == (True, True))
-check("Settings: not taller than the screen", sw.winfo_height() <= sw.winfo_screenheight() - 60, sw.winfo_height())
+not_on_mac("Settings: can be resized") or check("Settings: can be resized", sw.resizable() == (True, True))
+not_on_mac("Settings: not taller than the screen") or check("Settings: not taller than the screen", sw.winfo_height() <= sw.winfo_screenheight() - 60, sw.winfo_height())
 tall = app.tab_areas["Playback"]
 app.tabs.select(tall)
 pump(5)
 sw.geometry(f"{sw.winfo_width()}x300")
 pump(15)
-check("Settings: a page taller than the window scrolls", tall.vbar.winfo_ismapped())
+not_on_mac("Settings: a page taller than the window scrolls") or check("Settings: a page taller than the window scrolls", tall.vbar.winfo_ismapped())
 app.search_var.set("pause")
 pump(5)
 check("search: the list shows", app.search_list is not None and app.search_list.winfo_exists())
@@ -156,7 +164,7 @@ page, widget, label = next(f for f in app.search_settings("Remember YouTube sign
 app.search_found = [(page, widget, label)]
 app._search_go(0)
 pump(10)
-check("search: jumping to a setting deep in a page scrolls it into view",
+not_on_mac("search: jumping scrolls into view") or check("search: jumping to a setting deep in a page scrolls it into view",
       app.tab_areas[page].canvas.winfo_rooty() - 5 <= widget.winfo_rooty()
       <= app.tab_areas[page].canvas.winfo_rooty() + app.tab_areas[page].canvas.winfo_height(), page)
 app.reset_window_sizes()

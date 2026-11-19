@@ -79,5 +79,5 @@ check("refresh with nothing changed: no card redraw", not counts, len(counts))
 
 root.destroy()
 failed = [n for n, ok in results if not ok]
-print(f"\n{len(results) - len(failed)}/{len(results)} passed")
+print(f"\n{len(results) - len(failed)} of {len(results)} passed")  # (the form run_tests.py reads)
 sys.exit(1 if failed else 0)

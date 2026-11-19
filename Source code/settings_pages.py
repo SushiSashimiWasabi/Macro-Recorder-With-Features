@@ -13,7 +13,9 @@ class SettingsPagesMixin:
         win.withdraw()
         self.settings_win = win
         win.title("Settings - Macro Recorder")
-        win.resizable(True, True)  # (Preview 4: drag the corner; each page scrolls when it's smaller)
+        # (Preview 4: drag the corner; each page scrolls when it's smaller. 2.13 Mac fix: not on a Mac, where the
+        # pages' scroll areas froze the app while playing; Settings there stays as in 2.12, one fixed size)
+        win.resizable(not IS_MAC, not IS_MAC)
         win.attributes("-topmost", True)
         win.protocol("WM_DELETE_WINDOW", self.close_settings_x)
         self.title_bar = None  # (an own title bar was tried and rolled back: Windows' own is used)
@@ -31,8 +33,8 @@ class SettingsPagesMixin:
         self.tab_frames = {}
         self.tab_areas = {}  # (Preview 4) each page sits in its own scroll area
         for name in SETTINGS_PAGES:
-            area = ScrollArea(self.tabs, BG, natural=False,
-                              on_scroll=lambda: self._scrolled(getattr(self, "settings_backdrop", None)))
+            area = (PlainArea if IS_MAC else ScrollArea)(
+                self.tabs, BG, natural=False, on_scroll=lambda: self._scrolled(getattr(self, "settings_backdrop", None)))
             f = ttk.Frame(area.inner, padding=(18, 14))
             f.pack(fill="both", expand=True)
             self.tabs.add(area, text=name)
@@ -111,6 +113,12 @@ class SettingsPagesMixin:
         for part in getattr(self, "advanced_parts", []):
             part.toggle(True)
         win.update_idletasks()
+        if IS_MAC:  # (2.13 Mac fix: no scrolling there, so as in 2.12: the biggest page, Advanced parts open)
+            self.tabs.configure(width=max(f.winfo_reqwidth() for f in self.tab_frames.values()),
+                                height=max(f.winfo_reqheight() for f in self.tab_frames.values()) + 40)
+            for part in getattr(self, "advanced_parts", []):
+                part.toggle(False)
+            return
         width = max(f.winfo_reqwidth() for f in self.tab_frames.values()) + 20
         for part in getattr(self, "advanced_parts", []):
             part.toggle(False)
