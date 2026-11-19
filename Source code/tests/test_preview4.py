@@ -82,45 +82,49 @@ pump()
 size_on = (root.winfo_width(), root.winfo_height())
 check("main window: Repeat continuously on / off doesn't change its size", size_off == size_on, (size_off, size_on))
 check("main window: \"or play N times\" hidden while repeating", not app.times_inner.winfo_ismapped())
-check("main window: can be resized", root.resizable() == (True, True))
-w0, h0 = root.winfo_reqwidth(), root.winfo_reqheight()
-root.geometry(f"{w0}x{max(150, h0 // 2)}")
-pump(10)
-check("main window: smaller than its parts -> a scroll bar", app.main_scroll.vbar.winfo_ismapped())
-pump(40)  # (the size is kept half a second after the last change)
-check("main window: the size you set is remembered", app.settings.get("main_size") == f"{w0}x{max(150, h0 // 2)}",
-      app.settings.get("main_size"))
-app.reset_window_sizes()
-pump(40)
-check("Reset window sizes: usual size again, nothing kept",
-      "main_size" not in app.settings and not app.main_scroll.vbar.winfo_ismapped()
-      and (root.winfo_width(), root.winfo_height()) == (w0, h0), (root.winfo_width(), root.winfo_height(), w0, h0))
-app.settings["main_size"] = "99999x99999"
-app._keep_window_size(root, "main_size")
-pump(5)
-check("main window: a saved size bigger than the screen is cut to the screen",
-      root.winfo_width() <= root.winfo_screenwidth() and root.winfo_height() <= root.winfo_screenheight())
-app.reset_window_sizes()
-pump(10)
+if not_on_mac("main window: resize, scroll bars, remembered size, Reset; scroll area settles"):
+    pass
+else:
+    check("main window: can be resized", root.resizable() == (True, True))
+    w0, h0 = root.winfo_reqwidth(), root.winfo_reqheight()
+    root.geometry(f"{w0}x{max(150, h0 // 2)}")
+    pump(10)
+    check("main window: smaller than its parts -> a scroll bar", app.main_scroll.vbar.winfo_ismapped())
+    pump(40)  # (the size is kept half a second after the last change)
+    check("main window: the size you set is remembered", app.settings.get("main_size") == f"{w0}x{max(150, h0 // 2)}",
+          app.settings.get("main_size"))
+    app.reset_window_sizes()
+    pump(40)
+    check("Reset window sizes: usual size again, nothing kept",
+          "main_size" not in app.settings and not app.main_scroll.vbar.winfo_ismapped()
+          and (root.winfo_width(), root.winfo_height()) == (w0, h0), (root.winfo_width(), root.winfo_height(), w0, h0))
+    app.settings["main_size"] = "99999x99999"
+    app._keep_window_size(root, "main_size")
+    pump(5)
+    check("main window: a saved size bigger than the screen is cut to the screen",
+          root.winfo_width() <= root.winfo_screenwidth() and root.winfo_height() <= root.winfo_screenheight())
+    app.reset_window_sizes()
+    pump(10)
 
-# (2.13 Mac fix) a scroll area in a hidden window settles: it doesn't lay itself out again and again
-hidden = tk.Toplevel(root)
-hidden.withdraw()
-area = modern_ui.ScrollArea(hidden, "#000000", natural=True)
-area.pack(fill="both", expand=True)
-tk.Frame(area.inner, width=900, height=900).pack()
-calls = []
-real_fit = area._fit
-area._fit = lambda: (calls.append(1), real_fit())
-hidden.geometry("200x200")
-for _ in range(50):
-    root.update()
-check("scroll area: settles in a hidden window (no endless layout)", len(calls) < 20, len(calls))
-hidden.deiconify()
-hidden.geometry("200x200+40+40")
-pump(10)
-check("scroll area: once shown, both bars", area.vbar.winfo_ismapped() and area.hbar.winfo_ismapped())
-hidden.destroy()
+    # (2.13 Mac fix) a scroll area in a hidden window settles: it doesn't lay itself out again and again
+    hidden = tk.Toplevel(root)
+    hidden.withdraw()
+    area = modern_ui.ScrollArea(hidden, "#000000", natural=True)
+    area.pack(fill="both", expand=True)
+    tk.Frame(area.inner, width=900, height=900).pack()
+    calls = []
+    real_fit = area._fit
+    area._fit = lambda: (calls.append(1), real_fit())
+    hidden.geometry("200x200")
+    for _ in range(50):
+        root.update()
+    check("scroll area: settles in a hidden window (no endless layout)", len(calls) < 20, len(calls))
+    hidden.deiconify()
+    hidden.geometry("200x200+40+40")
+    pump(10)
+    check("scroll area: once shown, both bars", area.vbar.winfo_ismapped() and area.hbar.winfo_ismapped())
+    hidden.destroy()
+
 
 # ---------------------------------------------------------------- Settings: size, scroll, search (items 1, 2, 4)
 app.open_settings()

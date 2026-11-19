@@ -301,8 +301,9 @@ class SettingsPagesMixin:
                          command=lambda: (self._save_settings(), self._refresh()))
         self._switch_row(f, "Keep window on top", self.ontop_var,
                          command=lambda: (self._save_settings(), self._apply_on_top()))
-        row = self._row(f, "Window sizes", "drag a window's corner to resize it; its size is kept")
-        ttk.Button(row, text="Reset window sizes", command=self.reset_window_sizes).pack(side="right")
+        if not IS_MAC:  # (2.13: windows keep one size on a Mac)
+            row = self._row(f, "Window sizes", "drag a window's corner to resize it; its size is kept")
+            ttk.Button(row, text="Reset window sizes", command=self.reset_window_sizes).pack(side="right")
         self._build_icon_logo_rows(f)
         if IS_WIN:
             self._section(f, "FILES")

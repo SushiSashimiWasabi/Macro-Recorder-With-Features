@@ -62,7 +62,9 @@ class ModernMacroRecorder(TourMixin, KeysOverlayMixin, MacroFoldersMixin, Milest
         root = self.root
         s = self.settings
         root.title("Macro Recorder (preview)" if self.preview else "Macro Recorder")
-        root.resizable(True, True)  # (Preview 4: drag the corner; scroll bars when it's smaller)
+        # (Preview 4: drag the corner; scroll bars when it's smaller. 2.13 Mac fix: not on a Mac, where a resized
+        # window kept resizing itself; there it keeps one size, as in 2.12)
+        root.resizable(not IS_MAC, not IS_MAC)
         root.attributes("-topmost", bool(s.get("always_on_top", True)))
         themes.set_globals(s.get("accent", "Blue"))  # (Preview 4: the chosen accent colour, before anything is made)
         apply_theme(root)
@@ -171,7 +173,8 @@ class ModernMacroRecorder(TourMixin, KeysOverlayMixin, MacroFoldersMixin, Milest
 
         # (Preview 4) everything sits in a scroll area: the window keeps its size by itself, can be made
         # bigger or smaller by dragging its corner, and gets scroll bars when it's smaller than its parts
-        self.main_scroll = ScrollArea(root, BG, natural=True, on_scroll=lambda: self._scrolled(self.backdrop))
+        self.main_scroll = (PlainArea if IS_MAC else ScrollArea)(root, BG, natural=True,
+                                                                on_scroll=lambda: self._scrolled(self.backdrop))
         self.main_scroll.pack(fill="both", expand=True)
         wheel_scrolls(root, lambda: self.main_scroll)
         outer = self.main_scroll.inner
@@ -378,6 +381,8 @@ class ModernMacroRecorder(TourMixin, KeysOverlayMixin, MacroFoldersMixin, Milest
             bd._crop_all()
 
     def _keep_window_size(self, win, key, default=None):
+        if IS_MAC:  # (2.13 Mac fix: windows keep one size on a Mac)
+            return
         """Remember the size you drag a window to (settings[key] = "WxH"); it opens at that size next time
         (made smaller when it doesn't fit the screen). Its usual size is the size of its parts."""
         saved = self.settings.get(key)
