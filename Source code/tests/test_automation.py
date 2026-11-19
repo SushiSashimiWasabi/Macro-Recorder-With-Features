@@ -161,8 +161,10 @@ gaps = [round((times[i + 1] - times[i]) * 1000) for i in range(len(times) - 1)]
 # computer can add some lateness on top, never earliness (a gap after a late click can look short: that's fine)
 off = [round(((times[i] - times[0]) - 0.1 * i) * 1000) for i in range(len(times))]
 slack = 120 if os.environ.get("CI") else 60
+# (2.13) on GitHub's slow Intel Mac the FIRST click can be late too, so the others look early by that much
+early = 60 + (60 if sys.platform == "darwin" else 0)
 check("random timing: the waits differ a little (each within 30 ms of its time, plus lateness)",
-      len(set(gaps)) > 3 and all(-60 <= o <= 60 + slack for o in off), off)
+      len(set(gaps)) > 3 and all(-early <= o <= 60 + slack for o in off), off)
 app.macro_vary = {"mode": "off"}
 check("random timing: a macro can turn it off for itself", app._vary_now() is None)
 app.macro_vary = {"mode": "own", "ms": 5, "px": 0}
