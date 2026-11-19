@@ -38,7 +38,7 @@ jobs:
   groups:
     name: ${{ matrix.group }}
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 10  # (Kong, 19 Nov 2026: a test job never runs longer than 10 minutes)
     strategy:
       fail-fast: false
       matrix:
@@ -126,7 +126,7 @@ jobs:
     # (2.13) also every push to the test branch preview-tests (tests run in the public repo, where Mac minutes are free)
     if: startsWith(github.ref, 'refs/tags/v') || inputs.mac == true || github.ref == 'refs/heads/preview-tests'
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45  # (2.13: a hung test now ends after 150 s with where it was stuck; room for a few)
+    timeout-minutes: 10  # (Kong: 10 minutes at most; Mac queue time doesn't count. A hung test ends after 150 s)
     strategy:
       fail-fast: false
       matrix:

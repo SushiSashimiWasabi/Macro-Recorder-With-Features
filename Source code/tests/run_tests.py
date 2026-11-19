@@ -61,7 +61,7 @@ def group_of(name):
 COVDATA = os.path.join(os.path.dirname(src), "covdata")  # (coverage files, one per test file)
 
 
-HANG_AFTER = 150 if sys.platform == "darwin" else 600  # seconds before a test counts as hung
+HANG_AFTER = 150  # seconds before a test counts as hung (the slowest takes ~45 s; jobs stop at 10 min)
 
 
 def run(path, coverage=False):
@@ -124,6 +124,10 @@ def report(path, proc, took):
                 in_trace = False  # (the "SomeError: ..." line ends it)
         if not why:
             why.append(f"exit code {proc.returncode}, no result line")
+        if os.environ.get("GITHUB_ACTIONS"):
+            # (2.13) also as a note on the run's page, which anyone can read without signing in
+            text = " | ".join(why[:8])[:1500].replace("%", "%25").replace("\r", "").replace("\n", " ")
+            print(f"::error title={name} failed::{text}", flush=True)
     return ok, passed, count, skipped, why
 
 
