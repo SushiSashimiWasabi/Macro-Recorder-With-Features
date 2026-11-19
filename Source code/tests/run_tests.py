@@ -200,17 +200,25 @@ def main():
     one_by_one = "--one-by-one" in argv
     side_by_side = [] if one_by_one else [p for p in paths if os.path.basename(p) not in WINDOW_TESTS]
     alone = [p for p in paths if p not in side_by_side]
-    finished = []
-    if side_by_side:
-        with ThreadPoolExecutor(AT_ONCE) as pool:
-            finished += list(pool.map(lambda p: run(p, coverage), side_by_side))
-    finished += [run(p, coverage) for p in alone]
     failed, rows = [], []
-    for path, proc, took in sorted(finished, key=lambda r: r[0]):
+
+    def done(result):
+        # (2.13) each test is told the moment it ends (on GitHub also as a note on the run's page), so a run that
+        # is stopped part way still shows which tests finished and which one hung
+        path, proc, took = result
         ok, passed, count, skipped, why = report(path, proc, took)
         rows.append((os.path.basename(path), ok, passed, count, skipped, took, why))
         if not ok:
             failed.append(os.path.basename(path))
+    if side_by_side:
+        from concurrent.futures import as_completed
+        with ThreadPoolExecutor(AT_ONCE) as pool:
+            for fut in as_completed([pool.submit(run, p, coverage) for p in side_by_side]):
+                done(fut.result())
+    for p in alone:
+        print(f"     ... {os.path.basename(p)}", flush=True)
+        done(run(p, coverage))
+    rows.sort(key=lambda r: r[0])
     total_pass, total = sum(r[2] for r in rows), sum(r[3] for r in rows)
     print(f"\n{total_pass} of {total} checks passed in {time.time() - began:.0f} s"
           + (f"; failed: {', '.join(failed)}" if failed else ""))
