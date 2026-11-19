@@ -107,7 +107,9 @@ def away_later():
 
 threading.Thread(target=away_later, daemon=True).start()
 took = run_play(events)
-windows_only("away pause: playback waited for the game") or check("away pause: playback waited for the game", took > 2.4, f"{took:.2f} s")
+# (2.13) the macro alone takes 1.2 s; with the pause it takes about 2.3-2.7 s (the game is away 1.5 s, and the
+# pause starts after a short grace time). Over 2.0 s shows it waited; 2.4 was so tight that GitHub missed it by 0.01 s
+windows_only("away pause: playback waited for the game") or check("away pause: playback waited for the game", took > 2.0, f"{took:.2f} s")
 check("away pause: both key events still sent", len(sent) == 2, sent)
 check("away pause: no stop reason", app.stop_reason is None, app.stop_reason)
 
