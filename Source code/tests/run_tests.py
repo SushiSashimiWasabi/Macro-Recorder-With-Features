@@ -77,9 +77,7 @@ def run(path, coverage=False):
     if not coverage:
         # (2.13) a test that hangs prints where every thread is stuck and ends, before the runner gives up on it
         # (Macs: sooner, so the whole run fits in GitHub's 30 minutes and every test still reports)
-        args = ["-c", "import faulthandler, runpy, sys; faulthandler.dump_traceback_later(%d, exit=True); "
-                      "sys.argv = sys.argv[1:]; runpy.run_path(sys.argv[0], run_name='__main__')" % HANG_AFTER,
-                path, src]
+        args = [os.path.join(here, "_hang_watch.py"), str(HANG_AFTER), path, src]
     try:
         proc = subprocess.run(cmd + args, capture_output=True, text=True, encoding="utf-8", errors="replace",
                               timeout=900, env=env)
@@ -137,7 +135,8 @@ def report(path, proc, took):
                     cur.append(w.strip())
                 blocks.append(cur)
                 main_block = next((b for b in blocks if any("<module>" in w for w in b)), blocks[-1])
-                note = [why[0]] + [w for w in main_block if "frozen runpy" not in w and "<string>" not in w]
+                note = [why[0]] + [w for w in out.splitlines() if w.startswith("Callbacks:")] + \
+                    [w for w in main_block if "frozen runpy" not in w and "_hang_watch" not in w]
             text = " | ".join(note[:14])[:2500].replace("%", "%25").replace("\r", "").replace("\n", " ")
             print(f"::error title={name} failed::{text}", flush=True)
     return ok, passed, count, skipped, why
