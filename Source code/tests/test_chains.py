@@ -341,7 +341,7 @@ check("game closed: rejoin macro played, then the run started over", pressed_vks
 check("game closed: lost, then back; one reconnect, one run", recovery == ["lost", "back"]
       and app.session.reconnects == 1 and len(runs) == 1, (recovery, app.session.reconnects, runs))
 
-# the same with "Pause if the game isn't in front" on (as Kong has it): the game closing is noticed
+# the same with "Pause if the game isn't in front" on (as the owner has it): the game closing is noticed
 # while playback is paused, and the rejoin macro must still play (its clock was frozen)
 app.settings["pause_when_away"] = True
 app.away_var.set(True)
@@ -431,7 +431,7 @@ check("game closed window: the row says it", "rejoin" in app.closed_summary() an
       app.closed_summary())
 app.close_settings() if hasattr(app, "close_settings") else None
 
-# ---- fixes after Kong's test (15 Nov)
+# ---- fixes after the owner's test (15 Nov)
 # the open macro can be chosen for a picture (a rejoin macro that was just recorded and saved)
 app.current_file = b_path
 win = app.edit_picture_action(0)
@@ -487,7 +487,7 @@ check("picture watch: a disconnect box showing at the start fires, a Retry butto
       fired == {"recover": True, "restart": False}, fired)
 
 # a disconnect picture only counts in the middle of the screen and when it matches well
-# (scores measured on Kong's 2560x1440 screen: the real box 0.985 in the middle; game screens 0.79-0.86
+# (scores measured on a 2560x1440 screen: the real box 0.985 in the middle; game screens 0.79-0.86
 # elsewhere; the check is done as if the screen were that size)
 app.screen_w, app.screen_h = 2560, 1440
 dc = {"action": "recover"}
@@ -509,7 +509,7 @@ check("built-in Disconnected: added with the disconnect action",
       {k: v for k, v in pic.items() if k != "img"})
 box = os.path.join(src, "tests", "data", "disconnected_screen_part.png")
 if os.path.isfile(box):
-    part = image_watch.load_image(box)  # Kong's real box, pasted where Roblox puts it on a 2560x1440 screen
+    part = image_watch.load_image(box)  # the real box, pasted where Roblox puts it on a 2560x1440 screen
     screen = np.full((1440, 2560, 3), 60, np.uint8)
     y, x = 720 - part.shape[0] // 2, 1280 - part.shape[1] // 2
     screen[y:y + part.shape[0], x:x + part.shape[1]] = part

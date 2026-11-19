@@ -49,7 +49,7 @@ def windows_only(name):
 
 
 def known_bug(name, bug_shows, info=""):
-    """A bug found by the hunt, not fixed yet (waiting for Kong's OK)."""
+    """A bug found by the hunt, not fixed yet (waiting for the owner's OK)."""
     known.append(name)
     results.append((name, bool(bug_shows)))
     print(("PASS KNOWN BUG " if bug_shows else "FAIL FIXED (make it a normal check) ") + name

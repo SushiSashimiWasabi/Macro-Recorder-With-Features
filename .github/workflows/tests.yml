@@ -5,7 +5,7 @@
 # Mac: the tests also run on a Mac (Apple Silicon and Intel) for a version tag (v2.12...) or when
 # "Also run on a Mac" is ticked by hand. (Mac minutes cost 10x on a private repo, so not every push.)
 #
-# Checks that need Kong's real PC (a second screen...) print "SKIP (PC only)" here; the summary counts them.
+# Checks that need the owner's real PC (a second screen...) print "SKIP (PC only)" here; the summary counts them.
 name: Tests
 
 on:
@@ -38,7 +38,7 @@ jobs:
   groups:
     name: ${{ matrix.group }}
     runs-on: windows-latest
-    timeout-minutes: 10  # (Kong, 19 Nov 2026: a test job never runs longer than 10 minutes)
+    timeout-minutes: 10  # (19 Nov 2026: a test job never runs longer than 10 minutes)
     strategy:
       fail-fast: false
       matrix:
@@ -126,7 +126,7 @@ jobs:
     # (2.13) also every push to the test branch preview-tests (tests run in the public repo, where Mac minutes are free)
     if: startsWith(github.ref, 'refs/tags/v') || inputs.mac == true || github.ref == 'refs/heads/preview-tests'
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 10  # (Kong: 10 minutes at most; Mac queue time doesn't count. A hung test ends after 150 s)
+    timeout-minutes: 10  # (10 minutes at most; Mac queue time doesn't count. A hung test ends after 150 s)
     strategy:
       fail-fast: false
       matrix:

@@ -97,7 +97,7 @@ def remote_log_text(text):
     # a whole path, spaces too: folders up to their \ (or /), then the last part up to a space
     text = re.sub(r"(?:(?<![A-Za-z])[A-Za-z]:|\\\\[^\\/\s\"']+)[\\/](?:[^\\/\n\"'<>|]*[\\/])*[^\s\"'<>|]*", "[a file]", text)
     # Mac / Linux: the home folder (shown as ~) and everything in it, whole, spaces too: folders up to their /,
-    # then the last part up to a space ("/Users/kong/My Macros/x.macro")
+    # then the last part up to a space ("/Users/someone/My Macros/x.macro")
     # (also ~\... : a Windows home folder was already shortened to ~ above)
     text = re.sub(r"(?:(?<![\w~])~|/Users/[^/\s\"']+|/home/[^/\s\"']+)"
                   r"(?:[/\\][^/\\\n\"'<>|]*(?=[/\\]))*(?:[/\\][^\s\"'<>|]*)?", "[a file]", text)

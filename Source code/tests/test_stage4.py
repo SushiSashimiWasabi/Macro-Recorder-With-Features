@@ -324,10 +324,10 @@ app.settings.update(discord_enabled=True, discord_webhook=hook)
 pinged = []
 app.notifier.send = lambda text, **k: pinged.append(text)
 check("ping me: needs what to wait for", "ping you once when a divine fragment drops"
-      in app.remote_pingme(("fragment", None, "42"), "Kong"), app.remote_pingme(("x", None, "42"), "Kong"))
+      in app.remote_pingme(("fragment", None, "42"), "Player"), app.remote_pingme(("x", None, "42"), "Player"))
 app.remote_pings[:] = [{"uid": "42", "when": "fragment"}]
-app.remote_pingme((None, 2, "42"), "Kong")
-app.remote_pingme(("stop", None, "42"), "Kong")
+app.remote_pingme((None, 2, "42"), "Player")
+app.remote_pingme(("stop", None, "42"), "Player")
 app.session = stats.Session("Farm run")
 app.session.add(stats.WIN, 10, 0)
 extras_ui.ExtrasMixin._run_finished(app, 1, "end") if False else app._run_finished(1, "end")
@@ -344,7 +344,7 @@ app._pings_on_stop("Stopped by you after 2 runs.")
 app._pings_on_stop("again")
 check("ping me: pinged once when it stops", len(pinged) == 1 and "<@42>" in pinged[0], pinged)
 app.settings["discord_enabled"] = False
-check("ping me: says so when Discord is off", "Turn that on" in app.remote_pingme(("stop", None, "42"), "Kong"))
+check("ping me: says so when Discord is off", "Turn that on" in app.remote_pingme(("stop", None, "42"), "Player"))
 
 # ---- Settings search, the first-start guide, the dashboard and the chart (opened, used, closed)
 app.open_settings()

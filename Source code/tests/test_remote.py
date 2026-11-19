@@ -248,7 +248,7 @@ def cmd(name, value=None, user="111", kind=2):
     elif value is not None:
         data["values"] = [value]
     return {"id": "1", "token": "tok", "application_id": "42", "type": kind, "data": data,
-            "member": {"user": {"id": user, "username": "kong", "global_name": "Kong"}}}
+            "member": {"user": {"id": user, "username": "player", "global_name": "Player"}}}
 
 
 out = run(cmd("start"))
@@ -275,7 +275,7 @@ for _ in range(30):
     root.update()
     time.sleep(0.01)
 check("the right code pairs the account", "Paired" in out[0][1]["content"]
-      and app._remote_users() == [{"id": "111", "name": "Kong"}] and out[0][1]["flags"] == R.ONLY_YOU, out)
+      and app._remote_users() == [{"id": "111", "name": "Player"}] and out[0][1]["flags"] == R.ONLY_YOU, out)
 check("each code works once", app.remote_code != code and run(cmd("pair", code, user="222"))[0][1]["content"]
       .startswith("That isn't") and not app._remote_allowed("222"))
 
@@ -396,7 +396,7 @@ def walk(w):
 
 
 walk(app.remote_win)
-check("the window lists the allowed account and the setup steps", "Kong" in texts and "ID 111" in texts
+check("the window lists the allowed account and the setup steps", "Player" in texts and "ID 111" in texts
       and any("Reset Token" in t for t in texts) and any("Connect" == t for t in texts))
 app.remote_var.set(True)
 app.remote_token_var.set("not a token")

@@ -421,7 +421,7 @@ check("clicks: the screenshot isn't saved anywhere",
 cw.destroy()
 ed.win.destroy()
 
-# ------------------------------------------------------------ round 2 (Kong's test of preview 2)
+# ------------------------------------------------------------ round 2 (the owner's test of preview 2)
 import raw_mouse  # noqa: E402
 
 # 1. a test from Edit starts even when the main window has no macro, and is never silent
@@ -691,7 +691,7 @@ same = ed.to_macro_size([{"type": "click", "x": 10, "y": 20, "button": "left", "
 check("Edit recording: same size stays as it is", (same[0]["x"], same[0]["y"]) == (10, 20))
 ed.win.destroy()
 
-# ------------------------------------------------------------ the freeze (Kong 16 Nov): the box is always on screen
+# ------------------------------------------------------------ the freeze (16 Nov): the box is always on screen
 real_fg, real_pid = window_tools.foreground, window_tools.pid_of
 window_tools.foreground = lambda: 12345  # (this app is in front: the box is asked)
 window_tools.pid_of = lambda h: os.getpid()

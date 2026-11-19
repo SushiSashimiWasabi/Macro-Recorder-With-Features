@@ -2,7 +2,7 @@
 guard, colour checks, counting, Picture watch copy/drag, the late result fix, the phone remote).
 
 Known bugs found by this hunt are checked with known_bug(): it passes while the bug is still there (so the
-suite stays green until Kong OKs the fix) and prints "KNOWN BUG". When a fix lands it prints "FIXED" and
+suite stays green until the owner OKs the fix) and prints "KNOWN BUG". When a fix lands it prints "FIXED" and
 fails, so the check can then be turned into a normal one.
 
 No real input is sent to any game, no real Discord, no real message box, a throwaway settings folder.
@@ -43,7 +43,7 @@ def check(name, cond, info=""):
 
 
 def known_bug(name, bug_shows, info=""):
-    """A bug found by the hunt, not fixed yet (waiting for Kong's OK)."""
+    """A bug found by the hunt, not fixed yet (waiting for the owner's OK)."""
     known.append(name)
     results.append((name, bool(bug_shows)))
     print(("PASS KNOWN BUG " if bug_shows else "FAIL FIXED (make it a normal check) ") + name
@@ -165,7 +165,7 @@ box = color_check.screens_box()
 check("colour: a huge area is cut to the real screens", w <= box[2] - box[0] and hh <= box[3] - box[1],
       f"{w} x {hh}, screens {box}")
 image_watch.grab_part = real_grab
-# Kong's second screen is at -1920, 0: a spot there is read from that screen
+# the owner's second screen is at -1920, 0: a spot there is read from that screen
 if os.environ.get("CI"):
     print("SKIP (PC only) colour: a spot on the left screen (negative x) can be read (needs a second screen)")
 else:
@@ -282,12 +282,12 @@ app.counters = {("ตัวนับ" * 50 + str(i)): i for i in range(40)}
 lines = "\n".join(app._remote_settings_lines())
 check("/status lines: very long Thai names stay short (Discord's 2000 letter limit)", len(lines) < 1500, len(lines))
 app.counters = {}
-leak = remote_ui.remote_log_text(r"Saved D:\Claude Code\Macro_Recorder\saved macro file\Farm.macro")
-check("/log: a path with spaces is hidden whole", "Macro_Recorder" not in leak and "Farm" not in leak
+leak = remote_ui.remote_log_text(r"Saved C:\Games\Macro Recorder\saved macro file\Farm.macro")
+check("/log: a path with spaces is hidden whole", "Macro Recorder" not in leak and "Farm" not in leak
       and leak.startswith("Saved [a file]"), leak)
 check("/log: links and words around paths stay", remote_ui.remote_log_text("see https://x.com/a and C:/a b/c.txt ok")
       == "see https://x.com/a and [a file] ok")
-for _p in ("Opened /Users/kong/My Macros/Farm.macro now", "Opened ~/My Stuff/a b/Farm.macro now",
+for _p in ("Opened /Users/someone/My Macros/Farm.macro now", "Opened ~/My Stuff/a b/Farm.macro now",
            "Opened /home/bob/Data dir/Farm.macro now", "Opened ~\\My Macros\\Farm.macro now"):
     _clean = remote_ui.remote_log_text(_p)
     if _clean != "Opened [a file] now":

@@ -136,7 +136,7 @@ class RecordWindowMixin:
         more = tk.Frame(body, bg=BG)
         profile_var = tk.StringVar(value=NO_LINK)
         if self.record_into is None and hasattr(self, "profiles"):
-            more.pack(fill="x", pady=(10, 0))  # (shown at once: Kong 16 Nov)
+            more.pack(fill="x", pady=(10, 0))  # (shown at once: 16 Nov)
             row = tk.Frame(more, bg=BG)
             row.pack(fill="x", pady=(4, 0))
             tk.Label(row, text="Link the new macro to the profile", bg=BG, fg=TEXT, font=F_BASE).pack(side="left")

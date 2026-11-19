@@ -9,7 +9,7 @@ GitHub runs these on every push (see .github/workflows/tests.yml), each group as
 before it builds and publishes a new version, so a version that breaks something never reaches anyone.
 The tests send no real mouse or keyboard input and use throwaway settings folders.
 
-On GitHub's computers (the CI variable is set) checks that need Kong's real PC (a second screen and
+On GitHub's computers (the CI variable is set) checks that need the owner's real PC (a second screen and
 such) print "SKIP (PC only)" instead of running; they're counted in the summary.
 
     --coverage        measure how much of the app's code the tests ran (needs: pip install coverage)
@@ -96,7 +96,7 @@ def report(path, proc, took):
     m = re.search(r"(\d+) of (\d+) passed", out)
     passed, count = (int(m.group(1)), int(m.group(2))) if m else (0, 0)
     ok = proc.returncode == 0 and m is not None and passed == count
-    # (2.12) skipped checks: "SKIP (PC only)" (needs Kong's real PC) and "SKIP (Windows only)" (on a Mac)
+    # (2.12) skipped checks: "SKIP (PC only)" (needs the owner's real PC) and "SKIP (Windows only)" (on a Mac)
     skipped = sum(1 for line in out.splitlines() if line.startswith("SKIP ("))
     print(f"{'OK  ' if ok else 'FAIL'} {name}: {passed} of {count} passed ({took:.0f} s)"
           + (f", {skipped} skipped (PC / Windows only)" if skipped else ""), flush=True)

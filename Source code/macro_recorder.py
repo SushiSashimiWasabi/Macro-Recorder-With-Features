@@ -207,11 +207,11 @@ def load_settings():
 
 BUILTIN_PICTURE = "retry_default.png"  # comes with the app (bundled into the .exe)
 BUILTIN_PICTURE_SCREEN_H = 1080
-# the word "Disconnected" from Roblox's Disconnected box (Kong's 2560x1440 screen). Only the word: the
+# the word "Disconnected" from Roblox's Disconnected box (a 2560x1440 screen). Only the word: the
 # whole box matched only on its bright parts scored up to 0.86 on ordinary game screens, the word 0.62
 BUILTIN_DISCONNECT = "disconnected_default.png"
 BUILTIN_DISCONNECT_SCREEN_H = 1440
-# AOT:R's gold "MISSION COMPLETED" title (Kong's picture), the built-in "mission completed" picture
+# AOT:R's gold "MISSION COMPLETED" title (the owner's picture), the built-in "mission completed" picture
 BUILTIN_WIN_PICTURE = "completed_default.png"
 BUILTIN_WIN_PICTURE_SCREEN_H = 1440
 # and its gold "MISSION FAILED" title, the built-in "mission failed" picture (also taken at 1440p)

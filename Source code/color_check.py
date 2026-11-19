@@ -93,7 +93,7 @@ _screens = None
 
 
 def screens_box():
-    """(left, top, right, bottom) of all screens together, in main-screen pixels (Kong's left screen
+    """(left, top, right, bottom) of all screens together, in main-screen pixels (the owner's left screen
     is at -1920). Areas are cut to this, so a file can't ask for a giant screenshot."""
     global _screens
     if _screens is None:

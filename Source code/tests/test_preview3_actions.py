@@ -3,7 +3,7 @@ message, sound, Set speed, game to the front, Label / Go to, screenshot, Wait a 
 new options of the old ones (key combos, click offset / where found / random, glide, AND / OR, counter /
 program / time conditions, Repeat until, Retry if it fails, Stop with a reason, Note on the timer).
 
-Kong's own use is played end to end: read the copied number -> Total = Total + Copied -> type {Total} into
+The owner's own use is played end to end: read the copied number -> Total = Total + Copied -> type {Total} into
 Notepad (paste) -> Go to the start. Everything uses stand-ins: nothing is typed or clicked for real, the
 clipboard and the windows are pretend, no real Discord, a throwaway settings folder."""
 import json
@@ -99,7 +99,7 @@ def log_text():
     return open(path, encoding="utf-8").read() if path else ""
 
 
-# ------------------------------------------------------------ the copied number, maths and typing: Kong's loop
+# ------------------------------------------------------------ the copied number, maths and typing: the owner's loop
 clip = {"text": "12", "writes": []}
 step_more.read_clipboard_text = lambda: clip["text"]
 step_more.write_clipboard_text = lambda t: (clip["writes"].append(t), True)[1]
@@ -107,28 +107,28 @@ fronted = []
 window_tools.windows_of = lambda exe: [4242] if exe and exe.lower() == "notepad.exe" else []
 window_tools.force_to_front = lambda hwnd: (fronted.append(hwnd), True)[1]
 window_tools.title_of = lambda hwnd: "Untitled - Notepad"
-kong = [step("label", name="Start"),
+loop = [step("label", name="Start"),
         step("read_clipboard", counter="Copied"),
         step("maths", counter="Total", a={"counter": "Total"}, op="+", b={"counter": "Copied"}),
         step("type", text="{Total}", how="paste", enter=True, window={"exe": "notepad.exe", "title": "Notepad"}),
         step("goto", label="Start", limit=3)]
-play(kong)
+play(loop)
 typed = [w for w in clip["writes"] if w != "12"]
-check("Kong's loop: copied 12, Total goes 12, 24, 36, 48 and each is pasted into Notepad",
+check("The owner's loop: copied 12, Total goes 12, 24, 36, 48 and each is pasted into Notepad",
       typed == ["12", "24", "36", "48"] or [w for w in clip["writes"][::2]] == ["12", "24", "36", "48"],
       clip["writes"])
-check("Kong's loop: Notepad was brought to the front each time (and the window before it came back)",
+check("The owner's loop: Notepad was brought to the front each time (and the window before it came back)",
       fronted.count(4242) == 4, fronted)
-check("Kong's loop: pasted with Ctrl+V, then Enter", any(e.get("key", {}).get("char") == "v" for e in sent)
+check("The owner's loop: pasted with Ctrl+V, then Enter", any(e.get("key", {}).get("char") == "v" for e in sent)
       and any(e.get("key", {}).get("special") == "enter" for e in sent))
-check("Kong's loop: what you had copied is put back after pasting", clip["writes"][1::2] == ["12"] * 4,
+check("The owner's loop: what you had copied is put back after pasting", clip["writes"][1::2] == ["12"] * 4,
       clip["writes"])
-check("Kong's loop: Go to stops at its limit (3 jumps a run) and says why",
+check("The owner's loop: Go to stops at its limit (3 jumps a run) and says why",
       app.stop_reason and "jumped 3 times" in app.stop_reason, app.stop_reason)
-check("Kong's loop: the timer shows the sum like 'Total: 36+12=48'", app.timer_text == "Total: 36+12=48",
+check("The owner's loop: the timer shows the sum like 'Total: 36+12=48'", app.timer_text == "Total: 36+12=48",
       app.timer_text)
 lt = log_text()
-check("Kong's loop: the copied text is never written to the log", "Read the copied number into \"Copied\"" in lt
+check("The owner's loop: the copied text is never written to the log", "Read the copied number into \"Copied\"" in lt
       and "copied number into \"Copied\": 12" not in lt)
 
 # ------------------------------------------------------------ Do maths
@@ -356,7 +356,7 @@ check("files: a Discord step never keeps a webhook link, text is limited", "webh
 g = {"kind": "goto", "label": None, "limit": -5}
 step_more.clean_step(g)
 check("files: Go to's limit is at least 1", g["limit"] == 1 and g["label"] == "Start")
-t = {"kind": "type", "text": "hi", "window": {"exe": "C:\\Users\\Kong\\notepad.exe", "title": "x" * 500}}
+t = {"kind": "type", "text": "hi", "window": {"exe": "C:\\Users\\Someone\\notepad.exe", "title": "x" * 500}}
 step_more.clean_step(t)
 check("files: Type's window keeps the program's file name only (no path)", t["window"]["exe"] == "notepad.exe"
       and len(t["window"]["title"]) == 60)
@@ -428,7 +428,7 @@ check("Settings > Discord: a channel ID is kept", app.settings.get("discord_macr
 found = app.search_settings("webhook") if hasattr(app, "tab_frames") else None
 holder.destroy()
 
-# ------------------------------------------------------------ (Kong's round 3 report) Else, time boxes, dark option buttons
+# ------------------------------------------------------------ (the owner's round 3 report) Else, time boxes, dark option buttons
 from ui_common import TimeBox, parse_time_text  # noqa: E402
 
 app.set_steps([step("wait", seconds=0.01)])
@@ -439,7 +439,7 @@ ed.steps[:] = [step("if", condition={"type": "time", "from": "00:00", "to": "23:
 workflow.ensure_ids(ed.steps)
 the_if = ed.steps[0]
 ed._fill_steps(select=the_if["id"])
-ed.add("key")  # (goes inside the If and stays chosen, like in Kong's test)
+ed.add("key")  # (goes inside the If and stays chosen, like in the owner's test)
 inner = the_if["actions"][0]
 ed._fill_steps(select=inner["id"])
 ed.add("else")
