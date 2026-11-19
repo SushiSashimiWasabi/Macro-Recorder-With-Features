@@ -29,7 +29,7 @@ here = os.path.dirname(os.path.abspath(__file__))
 src = os.path.dirname(here)
 # these open windows (Edit, Settings, Picture watch, dashboards...): one at a time
 WINDOW_TESTS = {"test_automation.py", "test_chains.py", "test_editor.py", "test_pictures.py", "test_preview1.py",
-                "test_preview2.py", "test_preview3.py", "test_preview3_edges.py", "test_preview3_actions.py",
+                "test_preview2.py", "test_preview3.py", "test_preview3_edges.py", "test_preview3_actions.py", "test_preview4.py",
                 "test_security.py", "test_remote.py", "test_settings_undo.py", "test_stage3.py", "test_stage4.py",
                 "test_windows.py"}
 AT_ONCE = 4  # how many of the other tests run side by side
@@ -39,7 +39,7 @@ GROUPS = {
     "basic": ["test_steps.py", "test_playback.py", "test_editor.py", "test_windows.py", "test_settings_undo.py",
               "test_stage3.py", "test_stage4.py", "test_automation.py", "test_chains.py", "test_pictures.py",
               "test_results.py", "test_real_screen.py", "test_preview1.py", "test_preview2.py",
-              "test_updater_folder.py"],
+              "test_updater_folder.py", "test_preview4.py"],
     "security": ["test_files.py", "test_security.py"],
     "timing": ["test_preview3.py"],
     "discord": ["test_remote.py"],
@@ -61,6 +61,9 @@ def group_of(name):
 COVDATA = os.path.join(os.path.dirname(src), "covdata")  # (coverage files, one per test file)
 
 
+HANG_AFTER = 150  # seconds before a test counts as hung (the slowest takes ~45 s; jobs stop at 10 min)
+
+
 def run(path, coverage=False):
     started = time.time()
     cmd = [sys.executable, "-X", "utf8"]
@@ -70,8 +73,20 @@ def run(path, coverage=False):
         os.makedirs(COVDATA, exist_ok=True)
         env = dict(os.environ, COVERAGE_FILE=os.path.join(COVDATA, ".coverage"))
         cmd += ["-m", "coverage", "run", "-p", f"--source={src}", "--omit=*/tests/*"]
-    proc = subprocess.run(cmd + [path, src], capture_output=True, text=True, encoding="utf-8", errors="replace",
-                          timeout=900, env=env)
+    args = [path, src]
+    if not coverage:
+        # (2.13) a test that hangs prints where every thread is stuck and ends, before the runner gives up on it
+        # (Macs: sooner, so the whole run fits in GitHub's 30 minutes and every test still reports)
+        args = [os.path.join(here, "_hang_watch.py"), str(HANG_AFTER), path, src]
+    try:
+        proc = subprocess.run(cmd + args, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              timeout=900, env=env)
+    except subprocess.TimeoutExpired as exc:
+        # (2.13) a test that hangs is a FAIL with what it printed so far, not a crash of the whole run
+        def text(b):
+            return b.decode("utf-8", "replace") if isinstance(b, bytes) else (b or "")
+        proc = subprocess.CompletedProcess(exc.cmd, 1, text(exc.stdout),
+                                           text(exc.stderr) + "\nFAIL the test hung: stopped after 900 s (Error)")
     return path, proc, time.time() - started
 
 
@@ -88,8 +103,16 @@ def report(path, proc, took):
     why = []
     if not ok:
         in_trace = False
+        hung = False
         for line in out.splitlines():
             # every FAIL line, and every traceback in full (where it happened, not only its last line)
+            if line.startswith("Timeout ("):  # (2.13) it hung: where every thread was, to the end
+                hung = True
+                line = "FAIL the test hung. " + line
+            if hung:
+                print("     " + line)
+                why.append(line.rstrip())
+                continue
             if line.startswith("Traceback"):
                 in_trace = True
             if in_trace or line.startswith("FAIL") or "Error" in line:
@@ -99,6 +122,23 @@ def report(path, proc, took):
                 in_trace = False  # (the "SomeError: ..." line ends it)
         if not why:
             why.append(f"exit code {proc.returncode}, no result line")
+        if os.environ.get("GITHUB_ACTIONS"):
+            # (2.13) also as a note on the run's page, which anyone can read without signing in. A hung test:
+            # the test's own thread (the one that runs <module>), most recent call first, is what matters
+            note = why
+            if hung:
+                blocks, cur = [], []
+                for w in why[1:]:
+                    if w.startswith(("Thread 0x", "Current thread")) and cur:
+                        blocks.append(cur)
+                        cur = []
+                    cur.append(w.strip())
+                blocks.append(cur)
+                main_block = next((b for b in blocks if any("<module>" in w for w in b)), blocks[-1])
+                note = [why[0]] + [w for w in out.splitlines() if w.startswith("Callbacks:")] + \
+                    [w for w in main_block if "frozen runpy" not in w and "_hang_watch" not in w]
+            text = " | ".join(note[:14])[:2500].replace("%", "%25").replace("\r", "").replace("\n", " ")
+            print(f"::error title={name} failed::{text}", flush=True)
     return ok, passed, count, skipped, why
 
 
@@ -171,17 +211,25 @@ def main():
     one_by_one = "--one-by-one" in argv
     side_by_side = [] if one_by_one else [p for p in paths if os.path.basename(p) not in WINDOW_TESTS]
     alone = [p for p in paths if p not in side_by_side]
-    finished = []
-    if side_by_side:
-        with ThreadPoolExecutor(AT_ONCE) as pool:
-            finished += list(pool.map(lambda p: run(p, coverage), side_by_side))
-    finished += [run(p, coverage) for p in alone]
     failed, rows = [], []
-    for path, proc, took in sorted(finished, key=lambda r: r[0]):
+
+    def done(result):
+        # (2.13) each test is told the moment it ends (on GitHub also as a note on the run's page), so a run that
+        # is stopped part way still shows which tests finished and which one hung
+        path, proc, took = result
         ok, passed, count, skipped, why = report(path, proc, took)
         rows.append((os.path.basename(path), ok, passed, count, skipped, took, why))
         if not ok:
             failed.append(os.path.basename(path))
+    if side_by_side:
+        from concurrent.futures import as_completed
+        with ThreadPoolExecutor(AT_ONCE) as pool:
+            for fut in as_completed([pool.submit(run, p, coverage) for p in side_by_side]):
+                done(fut.result())
+    for p in alone:
+        print(f"     ... {os.path.basename(p)}", flush=True)
+        done(run(p, coverage))
+    rows.sort(key=lambda r: r[0])
     total_pass, total = sum(r[2] for r in rows), sum(r[3] for r in rows)
     print(f"\n{total_pass} of {total} checks passed in {time.time() - began:.0f} s"
           + (f"; failed: {', '.join(failed)}" if failed else ""))
