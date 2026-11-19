@@ -9,8 +9,7 @@ import time
 
 here = os.path.dirname(os.path.abspath(__file__))
 src = os.path.dirname(here)
-VARIANTS = ["all_new_parts", "no_scroll_area", "no_milestones", "no_window_size", "no_search_close",
-            "no_backdrop_root", "no_front_button", "none_of_them"]
+VARIANTS = ["all_new_parts", "no_scroll_area", "no_scroll_main", "no_scroll_settings", "all_visible"]
 
 
 def one(variant):
@@ -20,8 +19,9 @@ def one(variant):
     core.settings_path = lambda: os.path.join(tmp, "settings.json")
     import tkinter as tk
     import ui_common
-    off = set(VARIANTS[1:-1]) if variant == "none_of_them" else {variant}
-    if "no_scroll_area" in off:
+    off = {variant}
+    real_area = ui_common.ScrollArea
+    if off & {"no_scroll_area", "no_scroll_main", "no_scroll_settings"}:
         class Plain(tk.Frame):
             def __init__(self, parent, bg, natural=True, on_scroll=None):
                 super().__init__(parent, bg=bg)
@@ -35,10 +35,15 @@ def one(variant):
                 pass
         ui_common.ScrollArea = Plain
     import modern_ui
-    if "no_scroll_area" in off:
+    import settings_pages
+    if "no_scroll_area" in off or "no_scroll_main" in off:
         modern_ui.ScrollArea = ui_common.ScrollArea
-        import settings_pages
+    else:
+        modern_ui.ScrollArea = real_area
+    if "no_scroll_area" in off or "no_scroll_settings" in off:
         settings_pages.ScrollArea = ui_common.ScrollArea
+    else:
+        settings_pages.ScrollArea = real_area
     if "no_window_size" in off:
         modern_ui.ModernMacroRecorder._keep_window_size = lambda self, *a, **k: None
     if "no_milestones" in off:
@@ -59,6 +64,8 @@ def one(variant):
     app.kb_listener.stop()
     app.mouse_listener.stop()
     root.withdraw()
+    if variant == "all_visible":  # (as people use it: the main window on screen)
+        root.deiconify()
     app._replay_event = lambda *a: None
     app.settings.update(pause_when_away=False, watch_enabled=False, results_enabled=False, drops_enabled=False)
     a = workflow.new_action("wait")
