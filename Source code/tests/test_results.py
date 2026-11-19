@@ -133,9 +133,30 @@ app.discord_runs_var.set(True)
 app.discord_shot_var.set(False)
 app.discord_ping_var.set("<@42>")
 app.discord_stop_var.set(True)
+looks = []
+real_result = app._run_result
+
+
+def timed_result(*a, **k):
+    t = time.time()
+    r = real_result(*a, **k)
+    looks.append(f"{t - t_play:.1f}+{time.time() - t:.1f}s={r}")
+    return r
+
+
+app._run_result = timed_result
+t_play = time.time()
 took = run_play(evs, repeats=3)
+app._run_result = real_result
 statuses = [st for st, _ in app.session.runs]
-check("results: run 1 won, run 2 lost, run 3 unknown", statuses == ["win", "loss", "unknown"], statuses)
+# (2.13) when it's wrong, when each run started and how long each took tells why (a slow computer?)
+timeline = (f"took {took:.1f} s, runs started at " + ", ".join(f"{t - t_play:.1f}" for t in phase["run_starts"])
+            + " s, run lengths " + ", ".join(f"{s:.1f}" for _st, s in app.session.runs) + " s, end looks "
+            + ", ".join(looks))
+if os.environ.get("GITHUB_ACTIONS"):
+    print(f"::notice title=results timeline ({sys.platform})::{statuses}; {timeline}", flush=True)
+check("results: run 1 won, run 2 lost, run 3 unknown", statuses == ["win", "loss", "unknown"],
+      f"{statuses}; {timeline}")
 v = app.session.values()
 check("results: completed/failed counts", (v["completed"], v["failed"]) == ("1/3", "1/3"), v)
 check("results: win rate of decided runs", v["winrate"] == "50.00%", v["winrate"])
