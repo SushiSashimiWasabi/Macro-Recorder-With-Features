@@ -89,10 +89,14 @@ for y in range(10, 30, 6):
     loss_pic[y:y + 3, 15:185] = 255
 loss_pic[10:30, 95:100] = 255
 blank = np.full((app.screen_h, app.screen_w, 3), 25, np.uint8)
+# (2.13) the fake banner sits far from the top-left corner: the app blacks out its own window's place on every
+# screenshot, and a hidden test window on a Mac still has a place there (2.13's window is a bit wider, so it
+# covered a banner at 600-800 px and the Mac run missed it)
+by, bx = app.screen_h - 200, app.screen_w - 400
 with_win = blank.copy()
-with_win[400:440, 600:800] = win_pic
+with_win[by:by + 40, bx:bx + 200] = win_pic
 with_loss = blank.copy()
-with_loss[400:440, 600:800] = loss_pic
+with_loss[by:by + 40, bx:bx + 200] = loss_pic
 app.result_pictures = [{"img": win_pic, "file": "w.png", "screen_h": app.screen_h, "kind": "win"},
                        {"img": loss_pic, "file": "l.png", "screen_h": app.screen_h, "kind": "loss"}]
 phase = {"run_starts": []}
@@ -101,12 +105,13 @@ orig_finish = app._finish_run
 
 def screen_now(sct=None, region=None):
     if not phase["run_starts"]:
-        return blank
+        return blank.copy()
     n = len(phase["run_starts"])
     since = time.time() - phase["run_starts"][-1]
     if since < 0.8:
-        return blank
-    return {1: with_win, 2: with_loss}.get(n, blank)
+        return blank.copy()
+    # (a copy: blacking out the app's place mustn't change the fake screen for the next look)
+    return {1: with_win, 2: with_loss}.get(n, blank).copy()
 
 
 image_watch.grab_screen = screen_now
