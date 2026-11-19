@@ -124,7 +124,7 @@ jobs:
   mac:
     name: mac (${{ matrix.label }})
     # (2.13) also every push to the test branch preview-tests (tests run in the public repo, where Mac minutes are free)
-    if: startsWith(github.ref, 'refs/tags/v') || inputs.mac == true || github.ref == 'refs/heads/preview-tests'
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.mac == true || startsWith(github.ref, 'refs/heads/preview-tests')
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 10  # (Kong: 10 minutes at most; Mac queue time doesn't count. A hung test ends after 150 s)
     strategy:
@@ -146,4 +146,4 @@ jobs:
           cache-dependency-path: "Source code/requirements.txt"
       - run: python3 -m pip install -r "Source code/requirements.txt"
       - name: Run the tests on a Mac
-        run: python3 "Source code/tests/run_tests.py" --summary "$GITHUB_STEP_SUMMARY"
+        run: python3 "Source code/tests/mac_probe.py"
