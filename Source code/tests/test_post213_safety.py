@@ -106,6 +106,30 @@ finally:
     discord_notify.grab_how, discord_notify.grab_area, window_tools.hide_own_windows_from_capture = real
 check("screenshots: never two at the same moment", peak[0] == 1, peak[0])
 
+# ---- a broken number in settings.json ("Infinity", NaN, text) gives the default, never a crash (Play reads the
+# all-time results with it; int(Infinity) used to raise OverflowError there and Play didn't start)
+for bad in (float("inf"), float("-inf"), float("nan"), "lots", None, [1]):
+    try:
+        got = core.int_setting({"streak_now": bad}, "streak_now", 0, 0, 10 ** 9)
+    except Exception as exc:  # noqa: BLE001
+        got = exc
+    check(f"int_setting: {bad!r} gives the default", got == 0, got)
+check("int_setting: a good number still comes through", core.int_setting({"n": "12"}, "n", 0, 0, 99) == 12)
+play_src = open(os.path.join(src, "core_playback.py"), encoding="utf-8").read()
+check("Play reads the all-time results through int_setting (no bare int())",
+      'int(alltime.get(' not in play_src and play_src.count('core.int_setting(alltime, ') == 3)
+
+# (batch 2) the rules module keeps its own list of "then" choices: it must match the one the window shows
+import auto_stop  # noqa: E402
+
+check("Stop by itself: the rules know every 'then' choice", set(auto_stop.THEN) == set(core.AUTO_STOP_THEN)
+      and set(auto_stop.THEN_TEXT) == set(core.AUTO_STOP_THEN))
+# (batch 3) the group rules keep their own copy of the group ids
+import picture_groups  # noqa: E402
+
+check("Picture watch: the rules use the core's group ids", (picture_groups.GENERAL, picture_groups.AOTR, picture_groups.MINE)
+      == (core.GROUP_GENERAL, core.GROUP_AOTR, core.GROUP_MINE))
+
 passed = sum(1 for _n, ok in results if ok)
 print(f"\n{passed} of {len(results)} passed")
 sys.exit(0 if passed == len(results) else 1)

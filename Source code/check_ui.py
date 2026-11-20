@@ -10,32 +10,13 @@ import os
 import tkinter as tk
 from tkinter import ttk
 
+import macro_checks
 import macro_recorder as core
-import macro_steps as workflow
 import macro_versions
 import window_tools
+from macro_checks import MAYBE, SURE, screen_far_off  # noqa: F401  (tests use check_ui.SURE / screen_far_off)
+from macro_checks import macro_name as _name
 from ui_common import *  # noqa: F401,F403
-
-SURE, MAYBE = "sure", "maybe"
-
-
-def _name(path):
-    return os.path.splitext(os.path.basename(path or ""))[0] or "?"
-
-
-def screen_far_off(made_for, play_on):
-    """True when the screen a macro was recorded on is so different from this one that scaling can't
-    make up for it: another shape (16:9 against 4:3), or less than half / more than 2.5 times as big.
-    16:9 against 16:10, or 1080p against 1440p, is fine."""
-    try:
-        (w1, h1), (w2, h2) = made_for, play_on
-        if min(w1, h1, w2, h2) <= 0:
-            return False
-        shape = (w1 / h1) / (w2 / h2)
-        size = h2 / h1
-    except (TypeError, ValueError, ZeroDivisionError):
-        return False
-    return not (0.83 <= shape <= 1.2) or not (0.5 <= size <= 2.5)
 
 
 class CheckMixin:
@@ -55,7 +36,10 @@ class CheckMixin:
             steps = self.macro_steps() if (self.events or self.actions) else []
         except Exception:
             steps = []
-        self._check_steps(steps, add, set(), 0)
+        for problem in macro_checks.step_problems(
+                steps, self._find_macro_file, lambda found: self._read_macro_file(found)["steps"],
+                window_tools.windows_of if window_tools.IS_WIN else None, core.MAX_MACRO_DEPTH):
+            add(*problem)
         # Picture watch: the pictures on for this macro, and the macros they play
         for n, pic in enumerate(self._active_watch_pictures(), start=1):
             path = getattr(pic, "path", None)
@@ -98,69 +82,6 @@ class CheckMixin:
                                  "Clicks may land in the wrong places.")
         return problems
 
-    def _check_steps(self, steps, add, visited, depth):
-        """Missing macros of "Play another macro" steps and missing pictures of picture steps, also
-        inside the macros those steps play."""
-        if depth > core.MAX_MACRO_DEPTH:
-            return
-        for a, _lst, _i, _parent in workflow.walk(steps):
-            if a.get("off"):
-                continue
-            kind = a.get("kind")
-            holder = a.get("condition", {}) if kind in ("if", "retry") else a if kind == "wait_picture" else None
-            if holder is not None and not holder.get("png") and not holder.get("color_on"):
-                what = {"if": "An \"If\"", "retry": "A \"Retry\""}.get(kind, "A \"Wait for a picture\"")
-                add(f"steppic:{a.get('id')}", SURE, f"{what} step has no picture, so it never sees one. "
-                                                    "Choose one in Edit.")
-            self._check_more_step(a, _lst, _i, steps, add)
-            if kind != "play_macro":
-                continue
-            for key, what in (("file", "a \"Play another macro\" step plays"),
-                              ("on_fail", "a \"Play another macro\" step plays when it fails")):
-                path = a.get(key)
-                if not path:
-                    continue
-                found = self._find_macro_file(path)
-                if not found:
-                    add(f"chain:{_name(path).lower()}", SURE,
-                        f"The macro \"{_name(path)}\" that {what} isn't there any more. That part is skipped.")
-                    continue
-                fkey = self._macro_key(found)
-                if fkey in visited:
-                    continue
-                visited.add(fkey)
-                try:
-                    inner = self._read_macro_file(found)["steps"]
-                except Exception:
-                    continue  # (a broken file is told when it plays)
-                self._check_steps(inner, add, visited, depth + 1)
-
-    def _check_more_step(self, a, lst, i, steps, add):
-        """(2.12) The new steps: a Go to without its Label, a macro a step plays that isn't there, an Else
-        that doesn't come right after an If, a program window that isn't open now."""
-        import step_more
-
-        kind = a.get("kind")
-        if kind == "goto":
-            labels = {b.get("name") for b, _l, _i, _p in workflow.walk(steps) if b.get("kind") == "label"
-                      and not b.get("off")}
-            if a.get("label") not in labels:
-                add(f"goto:{a.get('id')}", SURE, f"\"Go to {a.get('label')}\" has no Label \"{a.get('label')}\" to "
-                                                  "jump to: the macro would stop there. Add the Label in Edit.")
-        if kind == "else":
-            if not step_more.else_has_if(lst, i):
-                add(f"else:{a.get('id')}", SURE, "An Else doesn't come right after an If, so it never runs. "
-                                                  "Move it under an If in Edit.")
-        for key in step_more.MACRO_KEYS:
-            path = a.get(key)
-            if path and not self._find_macro_file(path):
-                add(f"then:{_name(path).lower()}", SURE, f"The macro \"{_name(path)}\" that a step plays isn't there "
-                                                         "any more. That part is skipped.")
-        window = a.get("window") if kind == "type" else None
-        if window and window.get("exe") and window_tools.IS_WIN and not window_tools.windows_of(window["exe"]):
-            add(f"window:{window['exe'].lower()}", MAYBE, f"\"Type text\" types into {window['exe']}, which isn't "
-                                                          "open now. Open it before playing (else nothing is typed).")
-
     def _fits_game_window(self):
         """Clicks are fitted to the game's window (then the screen's size doesn't matter)."""
         if self.settings.get("fit_to", "window") != "window":
@@ -177,9 +98,7 @@ class CheckMixin:
         return macro_versions._key(self.current_file) if self.current_file else ""
 
     def check_ignored(self, key=None):
-        store = self.settings.get("check_ignore")
-        ids = store.get(key if key is not None else self._check_key()) if isinstance(store, dict) else None
-        return set(i for i in ids if isinstance(i, str)) if isinstance(ids, list) else set()
+        return macro_checks.ignored(self.settings.get("check_ignore"), key if key is not None else self._check_key())
 
     def set_check_ignored(self, pid, ignore, key=None):
         key = key if key is not None else self._check_key()
@@ -188,19 +107,12 @@ class CheckMixin:
         store = self.settings.get("check_ignore")
         if not isinstance(store, dict):
             store = self.settings["check_ignore"] = {}
-        ids = self.check_ignored(key)
-        (ids.add if ignore else ids.discard)(pid)
-        if ids:
-            store[key] = sorted(ids)
-        else:
-            store.pop(key, None)
+        macro_checks.set_ignored(store, key, pid, ignore)
         core.save_settings(self.settings)
 
     def rename_check_ignored(self, old_key, new_key):
         """A macro renamed in the app keeps its turned-off warnings."""
-        store = self.settings.get("check_ignore")
-        if isinstance(store, dict) and old_key in store and old_key != new_key:
-            store[new_key] = store.pop(old_key)
+        macro_checks.rename_ignored(self.settings.get("check_ignore"), old_key, new_key)
 
     # ------------------------------------------------------------ on Play
 

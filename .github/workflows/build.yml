@@ -90,8 +90,8 @@ jobs:
 
   mac:
     needs: [release]
-    # also runs when there's no release step (not on main); only in the public repo
-    if: ${{ !cancelled() && github.repository == 'SushiSashimiWasabi/Macro-Recorder-With-Features' }}
+    # also runs when there's no release step (not on main); only in the public repo; "[skip mac]" in the commit skips it
+    if: ${{ !cancelled() && github.repository == 'SushiSashimiWasabi/Macro-Recorder-With-Features' && !contains(github.event.head_commit.message, '[skip mac]') }}
     strategy:
       fail-fast: false
       matrix:

@@ -2,9 +2,27 @@
 results, with the streak, win rate and times. Also fills in the {placeholders} of the Discord
 message you can edit in Settings > Discord."""
 
+import math
 import time
 
 WIN, LOSS, UNKNOWN = "win", "loss", "unknown"
+
+
+def saved_number(value):
+    """A number from the settings file: a broken, endless or too big value counts as 0 (it used to stop the adding)."""
+    try:
+        n = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    return n if math.isfinite(n) else 0.0
+
+
+def add_to_all_time(a, session, now):
+    """Adds a session's runs to the all-time results `a` (the settings' "stats_all" dict, changed in place)."""
+    for key, n in (("runs", len(session.runs)), ("wins", session.count(WIN)), ("losses", session.count(LOSS)),
+                   ("unknown", session.count(UNKNOWN)), ("fragments", sum(session.fragments)),
+                   ("seconds", int(now - session.started))):
+        a[key] = int(saved_number(a.get(key, 0))) + n
 STATUS_TEXT = {WIN: "Victory", LOSS: "Defeat", UNKNOWN: "Unknown"}
 
 DEFAULT_TITLE = "{macro} · Run #{run}"

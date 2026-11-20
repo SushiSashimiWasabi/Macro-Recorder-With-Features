@@ -16,33 +16,9 @@ import run_history
 import stats
 from ui_common import *  # noqa: F401,F403
 
-# never part of a profile
-SKIP_KEYS = {"profiles", "profile_active", "macro_library", "stats_all", "milestones", "tour_done", "tours_seen", "macro_meta", "macro_folders", "macro_row_folder", "last_seen_version", "last_game_exe",
-             "builtin_failed_added", "check_updates", "app_icon_file", "app_logo_file", "app_logo_same",
-             "video_history", "video_link", "first_start_done", "warn_big_pictures",
-             "video_playlist_note", "check_ignore", "counter_values",
-             "trusted_steps"}  # (the macros you OK'd belong to this PC, never to a profile)
-SKIP_PREFIXES = ("remote_", "video_rect")
-SKIP_ENDINGS = ("_geometry",)
-NO_PROFILE = "(none)"
-# background options that belong to this PC, not to a profile: the saved pictures and how GIFs play
-BG_SHARED_KEYS = {"background_library", "background_animate", "background_animate_focused",
-                  "background_fps", "background_pause_others"}
-
-
-def is_background_key(key):
-    """Which background each window shows, and its darkness, fit and part (in a profile since 2.9)."""
-    return key.startswith(("background_", "settings_background")) and key not in BG_SHARED_KEYS
-
-
-def in_profile(key):
-    if key.startswith(("background", "settings_background")):
-        return is_background_key(key)
-    return not (key in SKIP_KEYS or key.startswith(SKIP_PREFIXES) or key.endswith(SKIP_ENDINGS))
-
-
-def profile_part(settings):
-    return {k: copy.deepcopy(v) for k, v in settings.items() if in_profile(k)}
+from profile_rules import SKIP_KEYS, in_profile, is_background_key, profile_part  # noqa: F401  (old names)
+import profile_rules
+import remote_rules
 
 
 class ProfilesMixin:
@@ -79,22 +55,16 @@ class ProfilesMixin:
 
     def profiles_using_background(self, name):
         """Names of the profiles other than the one in use that show the background picture name."""
-        active = self.profile_active()
-        return [p for p, part in self.profiles().items() if p != active and isinstance(part, dict) and any(
-            is_background_key(k) and k.endswith("_picture") and v == name for k, v in part.items())]
+        return profile_rules.using_background(self.profiles(), self.profile_active(), name)
 
     def forget_background_everywhere(self, name):
         """A removed background picture: no profile shows it anymore."""
-        for part in self.profiles().values():
-            if isinstance(part, dict):
-                for k in list(part):
-                    if is_background_key(k) and k.endswith("_picture") and part[k] == name:
-                        part[k] = ""
+        profile_rules.forget_background(self.profiles(), name)
 
     def save_profile(self, name):
         """A new profile from the settings as they are now (or the same name written over)."""
-        name = " ".join(str(name).split())[:40]
-        if not name or name == NO_PROFILE:
+        name = profile_rules.clean_name(name)
+        if not name:
             return None
         self._save_settings()
         self.profiles()[name] = profile_part(self.settings)
@@ -113,11 +83,7 @@ class ProfilesMixin:
         self._keep_active_profile()
         if self.profile_active() is None:
             # no profile was in use: the settings as they are now are kept as one, so nothing is lost
-            keep = "My settings"
-            n = 2
-            while keep in self.profiles():
-                keep = f"My settings {n}"
-                n += 1
+            keep = profile_rules.free_name("My settings", self.profiles())
             self.profiles()[keep] = profile_part(self.settings)
             core.diag.info(f"Kept the settings in use as the profile \"{keep}\"")
         if hasattr(self, "sort_profile_pictures"):
@@ -161,8 +127,8 @@ class ProfilesMixin:
             self._show_automation()
 
     def rename_profile(self, old, new):
-        new = " ".join(str(new).split())[:40]
-        if old not in self.profiles() or not new or new in self.profiles() or new == NO_PROFILE:
+        new = profile_rules.clean_name(new)
+        if old not in self.profiles() or not new or new in self.profiles():
             return False
         self.profiles()[new] = self.profiles().pop(old)
         if self.settings.get("profile_active") == old:
@@ -176,12 +142,7 @@ class ProfilesMixin:
     def _pictures_in_use(self):
         """Pictures another profile watches for must stay on disk too."""
         watch, own = super()._pictures_in_use()
-        for part in self.profiles().values():
-            for key in ("watch_pictures", "result_pictures"):
-                for e in part.get(key) or []:
-                    if isinstance(e, dict):
-                        watch |= {e.get(k) for k in ("file", "confirm_file") if e.get(k)}
-        return watch, own
+        return watch | profile_rules.watched_pictures(self.profiles()), own
 
     def load(self, path=None, quiet=False):
         ok = super().load(path, quiet=quiet)
@@ -360,8 +321,7 @@ class ProfilesMixin:
         if not wanted:
             return ("Profiles: " + ", ".join(sorted(names, key=str.lower)) + f". In use: {self.profile_active() or 'none'}."
                     if names else "No profiles yet. Make one on the PC: Settings > General > Profile.")
-        match = next((n for n in names if n.lower() == str(wanted).lower()), None) \
-            or next((n for n in names if str(wanted).lower() in n.lower()), None)
+        match = remote_rules.pick_name(names, wanted)
         if not match:
             return f"There's no profile called \"{wanted}\"."
         if not self.switch_profile(match):

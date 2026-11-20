@@ -2,6 +2,7 @@
 
 Part of the core MacroRecorder class (split out of macro_recorder.py in 2.13): its methods are
 unchanged; a name that lives in macro_recorder itself is written core.name."""
+import auto_stop
 import diag
 import os
 import run_history
@@ -69,42 +70,11 @@ class CoreGuardsMixin:
     def _auto_stop_settings(self):
         """Settings > Playback > "Stop by itself": {"on", "runs", "fragments", "minutes", "at"
         ("HH:MM"), "finish_run", "then" (nothing | close | sleep | shutdown), "warn"}; 0 / "" = not used."""
-        saved = self.settings.get("auto_stop")
-        saved = saved if isinstance(saved, dict) else {}
-        at = str(saved.get("at") or "").strip()
-        try:
-            hh, mm = at.split(":")
-            at = f"{int(hh) % 24:02}:{int(mm) % 60:02}"
-        except ValueError:
-            at = ""
-        try:
-            minutes = max(0.0, min(100000.0, float(saved.get("minutes") or 0)))
-        except (TypeError, ValueError):
-            minutes = 0.0
-        then = saved.get("then") if saved.get("then") in core.AUTO_STOP_THEN else "nothing"
-        return {"on": bool(saved.get("on", False)), "runs": core.int_setting(saved, "runs", 0, 0, 1000000),
-                "fragments": core.int_setting(saved, "fragments", 0, 0, 1000000), "minutes": minutes, "at": at,
-                "finish_run": bool(saved.get("finish_run", True)), "then": then,
-                "warn": bool(saved.get("warn", True))}
+        return auto_stop.clean_settings(self.settings.get("auto_stop"))
 
     def _prepare_auto_stop(self):
         """What "Stop by itself" means for the playback that starts now (None = it's off)."""
-        auto = self._auto_stop_settings()
-        if not auto["on"] or not (auto["runs"] or auto["fragments"] or auto["minutes"] or auto["at"]):
-            return None
-        now = time.time()
-        deadlines = []
-        if auto["minutes"]:
-            deadlines.append(now + auto["minutes"] * 60)
-        if auto["at"]:
-            hh, mm = (int(v) for v in auto["at"].split(":"))
-            lt = time.localtime(now)
-            at = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, hh, mm, 0, 0, 0, -1))
-            deadlines.append(at if at > now + 1 else at + 86400)
-        auto["deadline"] = min(deadlines) if deadlines else None
-        auto["cancelled"] = False
-        auto["due"] = None
-        return auto
+        return auto_stop.plan(self._auto_stop_settings(), time.time())
 
     def cancel_auto_stop(self):
         """Keep going: "Stop by itself" is off for the playback that's running. True if it was on."""
@@ -139,12 +109,7 @@ class CoreGuardsMixin:
         auto = getattr(self, "auto_stop", None)
         if not auto or auto["cancelled"]:
             return False
-        reason = auto["due"]
-        fragments = sum(self.session.fragments)
-        if auto["runs"] and state["count"] >= auto["runs"]:
-            reason = f"{auto['runs']} runs were played"
-        elif auto["fragments"] and fragments >= auto["fragments"]:
-            reason = f"{fragments} divine fragment{'s' if fragments != 1 else ''} dropped"
+        reason = auto_stop.stop_reason(auto, state["count"], sum(self.session.fragments))
         if not reason:
             return False
         self.auto_stopped = reason

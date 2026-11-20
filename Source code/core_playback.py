@@ -118,9 +118,10 @@ class CorePlaybackMixin:
                     diag.error("Couldn't read the macro of \"If a run gets stuck\"", exc)
         alltime = self.settings.get("stats_all") if isinstance(self.settings.get("stats_all"), dict) else {}
         if not test or getattr(self, "session", None) is None:  # (a test keeps the last real session on show)
-            self.session = stats.Session(self._macro_name(), fragments_before=int(alltime.get("fragments", 0)),
-                                         streak_before=int(alltime.get("streak_now", 0)),
-                                         best_streak_before=int(alltime.get("best_streak", 0)))
+            self.session = stats.Session(self._macro_name(),
+                                         fragments_before=core.int_setting(alltime, "fragments", 0, 0, 10 ** 9),
+                                         streak_before=core.int_setting(alltime, "streak_now", 0, 0, 10 ** 9),
+                                         best_streak_before=core.int_setting(alltime, "best_streak", 0, 0, 10 ** 9))
         if watch is not None:
             watch["limit_count"] = core.int_setting(self.settings, "watch_limit_count", 10, 0, 1000)
             watch["limit_seconds"] = core.int_setting(self.settings, "watch_limit_seconds", 60, 1, 3600)

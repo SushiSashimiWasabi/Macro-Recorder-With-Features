@@ -388,7 +388,7 @@ def picture_thumb(pic, max_w, max_h):
 def int_setting(settings, name, default, low, high):
     try:
         return max(low, min(high, int(settings.get(name, default))))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # (OverflowError: "Infinity" in the file)
         return default
 
 

@@ -6,29 +6,11 @@ settings["macro_folders"] (folders, also empty ones). The .macro files never mov
 import os
 import tkinter as tk
 
+import folder_rules
 import macro_recorder as core
 from ui_common import ACCENT, PANEL, TEXT
 
-MAX_TAGS = 10
-MAX_FOLDERS = 50
-
-
-def clean_name(text, size=30):
-    """A folder or tag name: one line, no control characters, not too long ('' when nothing's left)."""
-    text = "".join(c for c in str(text or "") if c.isprintable())
-    return " ".join(text.split())[:size].strip()
-
-
-def clean_tags(text):
-    """'AOT:R, rejoin #farm' -> ['aot:r', 'rejoin', 'farm'] (no doubles, at most MAX_TAGS)."""
-    if isinstance(text, (list, tuple)):
-        text = ",".join(str(t) for t in text)
-    out = []
-    for part in str(text or "").replace("#", ",").split(","):
-        tag = clean_name(part, 20).lower()
-        if tag and tag not in out:
-            out.append(tag)
-    return out[:MAX_TAGS]
+from folder_rules import clean_name, clean_tags
 
 
 class MacroFoldersMixin:
@@ -54,9 +36,7 @@ class MacroFoldersMixin:
 
     def macro_meta(self, path):
         """{"folder": "" or a name, "tags": [..]} of a saved macro."""
-        m = self._meta_store().get(self._meta_key(path))
-        m = m if isinstance(m, dict) else {}
-        return {"folder": clean_name(m.get("folder")), "tags": clean_tags(m.get("tags"))}
+        return folder_rules.clean_meta(self._meta_store().get(self._meta_key(path)))
 
     def _put_meta(self, path, meta):
         store = self._meta_store()
@@ -69,23 +49,16 @@ class MacroFoldersMixin:
 
     def macro_folders(self):
         """Every folder: the ones made (also empty) and the ones macros are in, A to Z."""
-        made = self.settings.get("macro_folders")
-        names = {clean_name(n) for n in made} if isinstance(made, list) else set()
-        names |= {self.macro_meta(p)["folder"] for p in self.macro_list()}
-        return sorted((n for n in names if n), key=str.lower)
+        return folder_rules.folders(self.settings.get("macro_folders"), self._folders_in_use())
+
+    def _folders_in_use(self):
+        return {self.macro_meta(p)["folder"] for p in self.macro_list()}
 
     def make_folder(self, name):
-        name = clean_name(name)
-        if not name:
-            return None
-        made = self.settings.get("macro_folders")
-        made = [clean_name(n) for n in made] if isinstance(made, list) else []
-        if name.lower() not in (n.lower() for n in made + self.macro_folders()):
-            if len(made) >= MAX_FOLDERS:
-                return None
-            made.append(name)
-        self.settings["macro_folders"] = made
-        return next((n for n in self.macro_folders() if n.lower() == name.lower()), name)
+        made, shown = folder_rules.add_folder(self.settings.get("macro_folders"), name, self._folders_in_use())
+        if shown is not None:
+            self.settings["macro_folders"] = made
+        return shown
 
     def set_macro_folder(self, paths, folder):
         """Put macros in a folder ("" = no folder). False when the folder can't be made (nothing changes)."""
@@ -114,9 +87,7 @@ class MacroFoldersMixin:
             if meta["folder"] == old:
                 meta["folder"] = new
                 self._put_meta(path, meta)
-        made = self.settings.get("macro_folders")
-        made = [n for n in made if clean_name(n) != old] if isinstance(made, list) else []
-        self.settings["macro_folders"] = made + [new]
+        self.settings["macro_folders"] = folder_rules.renamed(self.settings.get("macro_folders"), old, new)
         if self.settings.get("macro_row_folder") == old:
             self.settings["macro_row_folder"] = new
         core.save_settings(self.settings)
@@ -130,8 +101,7 @@ class MacroFoldersMixin:
             if meta["folder"] == name:
                 meta["folder"] = ""
                 self._put_meta(path, meta)
-        made = self.settings.get("macro_folders")
-        self.settings["macro_folders"] = [n for n in made if clean_name(n) != name] if isinstance(made, list) else []
+        self.settings["macro_folders"] = folder_rules.removed(self.settings.get("macro_folders"), name)
         if self.settings.get("macro_row_folder") == name:
             self.settings["macro_row_folder"] = ""
         core.save_settings(self.settings)
@@ -146,15 +116,7 @@ class MacroFoldersMixin:
 
     def macro_matches(self, path, query):
         """The Edit filter: every word is in the name, the folder or a tag ("#farm" = only tags)."""
-        meta = self.macro_meta(path)
-        name = os.path.splitext(os.path.basename(path or ""))[0].lower()
-        for word in str(query or "").lower().split():
-            if word.startswith("#"):
-                if not any(word[1:] in t for t in meta["tags"]):
-                    return False
-            elif word not in name and word not in meta["folder"].lower() and not any(word in t for t in meta["tags"]):
-                return False
-        return True
+        return folder_rules.matches(os.path.splitext(os.path.basename(path or ""))[0], self.macro_meta(path), query)
 
     # ------------------------------------------------------------ the main window's ◀ ▶ row
 

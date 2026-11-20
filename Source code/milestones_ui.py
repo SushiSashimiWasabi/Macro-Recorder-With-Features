@@ -10,45 +10,9 @@ import tkinter as tk
 from tkinter import ttk
 
 import macro_recorder as core
-import stats
+import milestones as rules
+from milestones import DEFAULT_MILESTONES, KINDS, MAX_MILESTONES, clean_milestone, milestone_name  # noqa: F401
 from ui_common import *  # noqa: F401,F403
-
-KINDS = {"runs": "Runs", "wins": "Wins", "fragments": "Divine fragments", "streak": "Wins in a row",
-         "hours": "Hours played"}
-DEFAULT_MILESTONES = [{"kind": "runs", "at": 1000}, {"kind": "fragments", "at": 50}, {"kind": "streak", "at": 500},
-                      {"kind": "hours", "at": 500}]
-MAX_MILESTONES = 30
-MAX_AT = 1_000_000_000
-
-
-def clean_milestone(m):
-    """One milestone from the settings file, checked (None when it makes no sense)."""
-    if not isinstance(m, dict) or m.get("kind") not in KINDS:
-        return None
-    try:
-        at = int(m.get("at"))
-    except (TypeError, ValueError, OverflowError):
-        return None
-    if not 1 <= at <= MAX_AT:
-        return None
-    out = {"kind": m["kind"], "at": at}
-    name = " ".join(str(m.get("name") or "").split())[:40]
-    if name:
-        out["name"] = name
-    reached = m.get("reached")
-    try:
-        out["reached"] = datetime.date.fromisoformat(reached).isoformat()  # (a made-up date would crash the window)
-    except (TypeError, ValueError):
-        pass
-    return out
-
-
-def milestone_name(m):
-    if m.get("name"):
-        return m["name"]
-    n = f"{m['at']:,}"
-    return {"runs": f"{n} runs", "wins": f"{n} wins", "fragments": f"{n} divine fragments",
-            "streak": f"{n} wins in a row", "hours": f"{n} hours played"}[m["kind"]]
 
 
 class MilestonesMixin:
@@ -66,30 +30,12 @@ class MilestonesMixin:
 
     def milestone_totals(self):
         """All-time totals now: what the saved all-time results hold plus the session that's playing."""
-        a = self.settings.get("stats_all") if isinstance(self.settings.get("stats_all"), dict) else {}
-        sess = getattr(self, "session", None)
-        counted = sess is not None and sess.runs and not getattr(sess, "added", False)
-        totals = {"runs": int(a.get("runs", 0)), "wins": int(a.get("wins", 0)),
-                  "fragments": int(a.get("fragments", 0)), "streak": int(a.get("best_streak", 0)),
-                  "hours": float(a.get("seconds", 0)) / 3600}
-        if counted:
-            totals["runs"] += len(sess.runs)
-            totals["wins"] += sess.count(stats.WIN)
-            totals["fragments"] += sum(sess.fragments)
-            totals["hours"] += max(0.0, time.time() - sess.started) / 3600
-        return totals
+        return rules.totals(self.settings.get("stats_all"), getattr(self, "session", None), time.time())
 
     def _mark_reached_quietly(self):
         """Milestones you had already passed when they were made count as reached, without a sound."""
-        totals = self.milestone_totals()
-        today = datetime.date.today().isoformat()
-        for m in self.settings.get("milestones", []):
-            if isinstance(m, dict) and m.get("kind") in KINDS and not m.get("reached"):
-                try:
-                    if totals[m["kind"]] >= int(m.get("at", 0)):
-                        m["reached"] = today
-                except (TypeError, ValueError):
-                    pass
+        rules.mark_reached(self.settings.get("milestones", []), self.milestone_totals(),
+                           datetime.date.today().isoformat())
 
     def _note_streak(self):
         """Wins in a row over every session (a loss ends it, an unknown run doesn't). Worked out again from
@@ -99,26 +45,16 @@ class MilestonesMixin:
         if not isinstance(a, dict):
             a = self.settings["stats_all"] = {}
         sess = self.session
-        now, best = int(getattr(sess, "streak_before", 0)), int(getattr(sess, "best_streak_before", 0))
-        for status, _seconds in sess.runs:
-            if status == stats.WIN:
-                now += 1
-            elif status == stats.LOSS:
-                now = 0
-            best = max(best, now)
-        a["streak_now"], a["best_streak"] = now, max(best, int(getattr(sess, "best_streak_before", 0)))
+        a["streak_now"], a["best_streak"] = rules.streak(sess.runs, getattr(sess, "streak_before", 0),
+                                                         getattr(sess, "best_streak_before", 0))
 
     def check_milestones(self):
         """After each run (on the window's thread): tell about every milestone just reached."""
         if getattr(self, "session", None) is not None and self.session.runs:
             self._note_streak()
         self.milestones()  # (cleans the saved list)
-        totals = self.milestone_totals()
-        reached = []
-        for m in self.settings["milestones"]:
-            if not m.get("reached") and totals.get(m["kind"], 0) >= m["at"]:
-                m["reached"] = datetime.date.today().isoformat()
-                reached.append(m)
+        reached = rules.mark_reached(self.settings["milestones"], self.milestone_totals(),
+                                     datetime.date.today().isoformat())
         core.save_settings(self.settings)
         for m in reached:
             name = milestone_name(m)
@@ -272,22 +208,12 @@ class MilestonesMixin:
 
     def add_milestone(self, kind, at, name=""):
         """Your own milestone. Returns (ok, the note to show)."""
-        if kind not in KINDS:
-            return False, "Choose what it counts."
-        try:
-            at = int(str(at).replace(",", "").strip())
-        except ValueError:
-            return False, "Type a whole number, like 250."
-        if not 1 <= at <= MAX_AT:
-            return False, "Type a number from 1 to 1,000,000,000."
         ms = self.milestones()
-        if len(ms) >= MAX_MILESTONES:
-            return False, f"There can be {MAX_MILESTONES} milestones at most. Remove one first."
-        if any(m["kind"] == kind and m["at"] == at for m in ms):
-            return False, "That milestone is already in the list."
+        at, note = rules.check_new(kind, at, ms)
+        if at is None:
+            return False, note
         m = clean_milestone({"kind": kind, "at": at, "name": name})
-        if self.milestone_totals()[kind] >= at:
-            m["reached"] = datetime.date.today().isoformat()  # (already passed: no sound for it)
+        rules.mark_reached([m], self.milestone_totals(), datetime.date.today().isoformat())  # (already passed: no sound)
         ms.append(m)
         ms.sort(key=lambda x: (list(KINDS).index(x["kind"]), x["at"]))
         self.settings["milestones"] = ms

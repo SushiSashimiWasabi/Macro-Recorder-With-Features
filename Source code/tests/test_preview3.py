@@ -170,8 +170,8 @@ del app._play_clock
 app._recovery_event = real_event
 check("stuck guard: never in test plays", "None if test else self._stuck_watcher()" in
       core_text(src))
-check("stuck guard: Discord gets its own card", "A run seems stuck" in open(os.path.join(src, "discord_ui.py"),
-                                                                           encoding="utf-8").read())
+check("stuck guard: Discord gets its own card", "A run seems stuck" in open(os.path.join(src, "discord_rules.py"),
+                                                                           encoding="utf-8").read())  # (batch 3: moved)
 win = app.open_stuck()
 win.vars["minutes"].set("7")
 win.vars["action"].set("Only tell me on Discord")

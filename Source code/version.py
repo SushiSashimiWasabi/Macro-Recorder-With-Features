@@ -1,12 +1,41 @@
 # The app's version. Raising it (and pushing to main) makes GitHub publish a new Release,
 # which every copy of the app offers to install when it starts.
-APP_VERSION = "2.14.0"
+APP_VERSION = "2.14.4"
 
 # Every version, newest first: (version, the day it was finalized, changes). The newest is shown once after an update;
 # Settings > About > What's new shows them all. Each change is one paragraph (shown as a bullet).
 # Version numbers started at 2.1 (the first one that could update itself); the earlier steps have
 # names instead.
 HISTORY = [
+    ("2.14.4", "Finalized 20 November 2026", [
+        "Macro folders: renaming a folder to a name that's already there no longer saves that name twice (each copy "
+        "counted toward the 50-folder limit).",
+        "Behind the scenes: the rules of Picture watch groups, the Discord messages and macro folders moved into their "
+        "own parts of the app, so they can be checked on their own. Nothing looks different.",
+    ]),
+    ("2.14.3", "Finalized 20 November 2026", [
+        "Phone remote: /repeat inf no longer breaks the command (Discord got no answer). It now says how to write it.",
+        "Stop by itself: a broken or endless \"minutes\" number in your saved options no longer becomes \"stop after "
+        "100000 min\" (it counts as not used), and a broken \"Then\" value no longer stops Play from starting (it "
+        "counts as \"Nothing more\").",
+        "Behind the scenes: the rules of the phone remote, Stop by itself, the Discord summary and profiles moved into "
+        "their own parts of the app, so they can be checked on their own. Nothing looks different.",
+    ]),
+    ("2.14.2", "Finalized 20 November 2026", [
+        "A broken number in your saved all-time results no longer stops a session from being added to them (and saved). "
+        "That number now counts as 0.",
+        "Behind the scenes: the rules of Start playing later (the alarm and the timer), Check my macro and the all-time "
+        "results moved into their own parts of the app, so they can be checked on their own. Nothing looks different.",
+    ]),
+    ("2.14.1", "Finalized 20 November 2026", [
+        "A broken number in your saved results (for example after a crash or a hand-edited settings file) no longer "
+        "stops the milestone check after every run, and can no longer stop Play from starting. That number now counts "
+        "as 0.",
+        "A setting saved as \"Infinity\" (countdowns, repeat count, match %, waits) no longer stops the app from "
+        "opening: it goes back to its usual value.",
+        "Behind the scenes: the milestone rules moved into their own part of the app, so they can be checked on their "
+        "own. Nothing looks different.",
+    ]),
     ("2.14.0", "Finalized 20 November 2026", [
         "Safer sharing. A shared profile (.macropack) now carries only play and look options. It can no longer bring a "
         "start-playing-later alarm, start with Windows, Discord links, hotkeys or trusted macros into your app. "

@@ -8,7 +8,6 @@ is not enough to control the PC.
 Part of the dark window: ModernMacroRecorder (modern_ui.py) inherits this class.
 """
 
-import hmac
 import secrets
 import threading
 import webbrowser
@@ -16,6 +15,7 @@ import webbrowser
 from ui_common import *  # noqa: F401,F403  (colours, fonts, widgets, tk, core, the other modules)
 
 import lazy
+import remote_rules
 discord_remote = lazy.module("discord_remote")  # (loaded when the phone remote is first used)
 
 DEVELOPER_PAGE = "https://discord.com/developers/applications"
@@ -29,8 +29,7 @@ def _command(name, description, options=None):
     return cmd
 
 
-REMOTE_SPEED = (0.1, 10.0)  # (2.12) /speed's limits
-REMOTE_REPEAT = 9999
+REMOTE_SPEED = remote_rules.SPEED  # (2.12) /speed's limits
 LOG_LINES = 12
 
 COMMANDS = [
@@ -379,12 +378,9 @@ class RemoteMixin:
     # ------------------------------------------------------------ (2.12) /speed /repeat /log /schedule
 
     def remote_speed(self, value, who):
-        try:
-            speed = round(float(value), 2)
-        except (TypeError, ValueError):
-            return "Give a speed like 1, 1.5 or 0.5."
-        if not (REMOTE_SPEED[0] <= speed <= REMOTE_SPEED[1]):
-            return f"The speed must be between {REMOTE_SPEED[0]:g} and {REMOTE_SPEED[1]:g}."
+        speed, error = remote_rules.parse_speed(value)
+        if error:
+            return error
         self.speed_var.set(f"{speed:g}x")
         self._check_speed(quiet=True)
         self._save_settings()
@@ -393,18 +389,14 @@ class RemoteMixin:
                                           if self.playing else ".")
 
     def remote_repeat(self, value, who):
-        text = str(value or "").strip().lower()
-        if text in ("loop", "forever", "always", "0"):
+        times, error = remote_rules.parse_repeat(value)
+        if error:
+            return error
+        if not times:
             self.loop_var.set(True)
             self._loop_changed()
             done = "loop (until stopped)"
         else:
-            try:
-                times = int(float(text))
-            except ValueError:
-                return "Give a number of times (1 to 9999), or loop."
-            if not 1 <= times <= REMOTE_REPEAT:
-                return f"The number of times must be between 1 and {REMOTE_REPEAT}."
             self.loop_var.set(False)
             self._loop_changed()
             self.repeat_var.set(times)
@@ -418,48 +410,18 @@ class RemoteMixin:
 
     def remote_schedule(self, value, who):
         """/schedule: the alarm and the timer, as in Settings > Playback > Start playing later."""
-        import timed_start_ui
-
         who = short(str(who), 30)
-        opts = value if isinstance(value, dict) else ({"alarm": value} if value else {})
-        if isinstance(value, str) and value.strip().lower() in ("cancel", "off", "stop", "no"):
-            opts = {"cancel": True}
+        opts = remote_rules.schedule_options(value)
         if not opts:
             return self._schedule_text()
-        changes = {}
         if opts.get("cancel"):
-            changes.update(alarm_on=False, timer_on=False)
             self.cancel_timed_start(f"cancelled from Discord by {who}")
-        alarm = opts.get("alarm")
-        if alarm is not None and not isinstance(alarm, str):
-            return "Give the alarm as a time like 21:30 (00:00 to 23:59), or off."
-        if isinstance(alarm, str) and alarm.strip():
-            if alarm.strip().lower() in ("off", "no", "cancel"):
-                changes["alarm_on"] = False
-            else:
-                hhmm = timed_start_ui.clean_hhmm(alarm)
-                if hhmm is None:
-                    return "Give the alarm as a time like 21:30 (00:00 to 23:59), or off."
-                changes.update(alarm_on=True, alarm=hhmm, alarm_last="")
-        if isinstance(opts.get("every_day"), bool):
-            changes["daily"] = opts["every_day"]
-        timer = opts.get("timer")
-        if timer is not None:
-            try:
-                minutes = int(timer)
-            except (TypeError, ValueError):
-                return "Give the timer in minutes (0 = off)."
-            if minutes <= 0:
-                changes["timer_on"] = False
-            else:
-                changes.update(timer_on=True, timer_min=min(1440, minutes), timer_from=time.time())
-        if isinstance(opts.get("repeat"), bool):
-            changes["timer_repeat"] = opts["repeat"]
-        if isinstance(opts.get("open_game"), bool):
-            changes["when"] = "game" if opts["open_game"] else "play"
-            if opts["open_game"] and not (self._schedule()["open"] or self._closed_settings()["open"]):
-                return ("Set what to open first, on the PC: Settings > Playback > Start playing later > Open this "
-                        "(or \"If the game closes\").")
+        changes, error = remote_rules.schedule_changes(opts, time.time())
+        if error:
+            return error
+        if opts.get("open_game") is True and not (self._schedule()["open"] or self._closed_settings()["open"]):
+            return ("Set what to open first, on the PC: Settings > Playback > Start playing later > Open this "
+                    "(or \"If the game closes\").")
         if (changes.get("alarm_on") or changes.get("timer_on")) and not (self.events or self.actions):
             return "No macro is open. Pick one first (`/macro`)."
         sc = self._set_schedule(**changes)
@@ -508,12 +470,11 @@ class RemoteMixin:
     def _remote_open(self, wanted):
         if self.playing or self.recording or self.record_countdown_left > 0:
             return "Stop the macro first, then switch."
-        wanted = str(wanted or "").strip().lower()
-        macros = self._remote_macros()
-        match = [m for m in macros if m[0].lower() == wanted] or [m for m in macros if wanted and wanted in m[0].lower()]
-        if not match:
+        macros = dict(self._remote_macros())
+        name = remote_rules.pick_name(macros, str(wanted or "").strip())
+        if not name:
             return "No saved macro with that name." if macros else "There are no saved macros yet."
-        name, path = match[0]
+        path = macros[name]
         if self.current_file and os.path.normcase(os.path.abspath(self.current_file)) == os.path.normcase(
                 os.path.abspath(path)):
             return f"**{name}** is already open."
@@ -553,17 +514,10 @@ class RemoteMixin:
         if not self.remote_pairing:  # (so nobody can keep guessing codes while you're away)
             return ("Pairing is only open while the Phone remote window is open. On the PC, open Settings > "
                     "Discord > Phone remote…, then type `/pair` with the code shown there.")
-        typed = "".join(c for c in str(code or "") if c.isdigit())
         with self.remote_lock:
-            ok = hmac.compare_digest(typed, self.remote_code)
-            if ok:
-                self.remote_code = self._new_pair_code()  # (each code works once)
-                self.remote_fails = 0
-            else:
-                self.remote_fails += 1
-                if self.remote_fails >= 5:  # no guessing: a new code after five wrong ones
-                    self.remote_code = self._new_pair_code()
-                    self.remote_fails = 0
+            ok, self.remote_fails, renew = remote_rules.check_code(code, self.remote_code, self.remote_fails)
+            if renew:
+                self.remote_code = self._new_pair_code()
         if not ok:
             self._call_ui(lambda: self.remote_code_var.set(self._shown_code()))
             return ("That isn't the code. Look at Settings > Discord > Phone remote… on the PC "

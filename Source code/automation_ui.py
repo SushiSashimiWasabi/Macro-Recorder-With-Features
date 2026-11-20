@@ -7,18 +7,15 @@ import time
 import tkinter as tk
 from tkinter import ttk
 
+import auto_stop
 import macro_recorder as core
 import run_history
 import stats
 from ui_common import *  # noqa: F401,F403
 
-WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+from auto_stop import WEEKDAYS, clock_text  # noqa: E402,F401  (old names)
 VARY_MODES = {"usual": "The usual setting (above)", "off": "Never for this macro", "own": "Its own amounts"}
 PERIODS = {"today": "Today", "7": "Last 7 days", "30": "Last 30 days", "all": "Everything kept"}
-
-
-def clock_text(seconds):
-    return "-" if seconds is None else stats.duration_text(seconds)
 
 
 CHOICE_WORDS = 44  # (letters) a Settings row's summary next to Change… is cut short after this
@@ -139,21 +136,7 @@ class AutomationMixin:
         "cancels the stop for that playback.")
 
     def auto_stop_summary(self):
-        a = self._auto_stop_settings()
-        parts = []
-        if a["runs"]:
-            parts.append(f"{a['runs']} runs")
-        if a["fragments"]:
-            parts.append(f"{a['fragments']} fragments")
-        if a["minutes"]:
-            parts.append(f"{a['minutes']:g} min")
-        if a["at"]:
-            parts.append(f"at {a['at']}")
-        if not a["on"] or not parts:
-            return "Off"
-        then = {"nothing": "", "close": ", then close the game", "sleep": ", then sleep",
-                "shutdown": ", then shut down"}[a["then"]]
-        return ("After " + " or ".join(parts)).replace("After at", "At") + then
+        return auto_stop.settings_text(self._auto_stop_settings())
 
     def open_auto_stop(self):
         a = self._auto_stop_settings()
@@ -171,15 +154,13 @@ class AutomationMixin:
         ]
 
         def save(new):
-            at = new["at"]
-            if at:
-                try:
-                    hh, mm = at.replace(".", ":").split(":")
-                    new["at"] = f"{int(hh) % 24:02}:{int(mm) % 60:02}"
-                except ValueError:
+            if new["at"]:
+                at = auto_stop.wrap_hhmm(new["at"].replace(".", ":"))
+                if at is None:
                     self.boxes.showinfo("Stop by itself", "Write both the hours and the minutes (like 03 : 30), "
                                         "or leave both empty.", parent=win)
                     return False
+                new["at"] = at
             self.settings["auto_stop"] = new
         win = self._form_window("Stop by itself", fields, a, save, intro=None)
         return win
@@ -305,23 +286,10 @@ class AutomationMixin:
     # ------------------------------------------------------------ Discord daily / weekly summary
 
     def _summary_settings(self):
-        saved = self.settings.get("discord_summary")
-        saved = saved if isinstance(saved, dict) else {}
-        at = str(saved.get("at") or "22:00")
-        try:
-            hh, mm = at.split(":")
-            at = f"{int(hh) % 24:02}:{int(mm) % 60:02}"
-        except ValueError:
-            at = "22:00"
-        weekday = saved.get("weekday") if saved.get("weekday") in WEEKDAYS else "Sunday"
-        return {"daily": bool(saved.get("daily", False)), "at": at, "weekly": bool(saved.get("weekly", False)),
-                "weekday": weekday, "last_daily": saved.get("last_daily"), "last_weekly": saved.get("last_weekly")}
+        return auto_stop.clean_summary(self.settings.get("discord_summary"))
 
     def summary_summary(self):
-        s = self._summary_settings()
-        parts = (["every day"] if s["daily"] else []) + ([f"every {s['weekday']}"] if s["weekly"] else [])
-        text = " and ".join(parts) + f" at {s['at']}"
-        return text[0].upper() + text[1:] if parts else "Off"
+        return auto_stop.summary_text(self._summary_settings())
 
     def open_summary_options(self):
         s = self._summary_settings()
@@ -333,18 +301,13 @@ class AutomationMixin:
         ]
 
         def save(new):
-            try:
-                hh, mm = new["at"].replace(".", ":").split(":")
-                new["at"] = f"{int(hh) % 24:02}:{int(mm) % 60:02}"
-            except ValueError:
+            at = auto_stop.wrap_hhmm(new["at"].replace(".", ":"))
+            if at is None:
                 self.boxes.showinfo("Discord summary", "Write the time like 22:00.", parent=win)
                 return False
-            old = self._summary_settings()
-            # (turned on after today's time has passed: the first one comes tomorrow)
-            today = run_history.day_of()
-            passed = time.strftime("%H:%M") >= new["at"]
-            new["last_daily"] = old["last_daily"] if old["daily"] else (today if passed else None)
-            new["last_weekly"] = old["last_weekly"] if old["weekly"] else (today if passed else None)
+            new["at"] = at
+            new["last_daily"], new["last_weekly"] = auto_stop.first_sent(
+                self._summary_settings(), new, run_history.day_of(), time.strftime("%H:%M"))
             self.settings["discord_summary"] = new
         win = self._form_window("Discord summary", fields, s, save,
                                 intro="Sent to your Discord channel while the app is open (Discord must be on). "
@@ -374,32 +337,10 @@ class AutomationMixin:
             d = {"runs": sum(x["runs"] for _d, x in day_list)}
         if not d["runs"]:
             return None
-        s = run_history.summary(rs) if rs else None
-        lines = []
-        if s:
-            rate = f"{s['winrate']:.1f}%" if s["winrate"] is not None else "-"
-            lines += [f"**Runs** {s['runs']}  ·  **Won** {s['wins']}  ·  **Failed** {s['losses']}  ·  "
-                      f"**Unknown** {s['unknown']}",
-                      f"**Win rate** {rate}  ·  **Average run** {clock_text(s['average'])}",
-                      f"**Best run** {clock_text(s['best'])}  ·  **Longest** {clock_text(s['worst'])}",
-                      f"**Divine fragments** {s['fragments']}  ({s['fragments_per_hour']:.2f} an hour)",
-                      f"**Time in runs** {clock_text(s['seconds'])}"]
-            if s["slow"]:
-                lines.append(f"**Unusually slow runs** {s['slow']}")
-        else:
-            lines.append(f"**Runs** {d['runs']}")
-        if reconnects:
-            lines.append(f"**Reconnects** {reconnects}")
-        png = None
-        if kind == "weekly":
-            best = max(day_list, key=lambda kv: kv[1]["runs"])
-            lines.append(f"**Best day this week** {best[0]} with {best[1]['runs']} runs")
-            rec = run_history.records()
-            if rec.get("runs"):
-                lines.append(f"**Record day** {rec['runs'][0]}: {rec['runs'][1]} runs"
-                             + (f"  ·  most fragments {rec['fragments'][0]}: {rec['fragments'][1]}"
-                                if rec.get("fragments") else ""))
-            png = run_history.chart_png(day_list, "Runs each day (green won, red failed)")
+        weekly = kind == "weekly"
+        lines = auto_stop.card_lines(run_history.summary(rs) if rs else None, d["runs"], reconnects,
+                                     day_list if weekly else None, run_history.records() if weekly else None)
+        png = run_history.chart_png(day_list, "Runs each day (green won, red failed)") if weekly else None
         return {"title": title, "description": "\n".join(lines), "color": 0x4F7CFF}, png
 
     def send_summary(self, kind, test=False):
@@ -420,20 +361,14 @@ class AutomationMixin:
     def _summary_tick(self):
         """Every half minute: is it time for the daily or weekly summary?"""
         try:
-            s = self._summary_settings()
             today = run_history.day_of()
-            if (s["daily"] or s["weekly"]) and time.strftime("%H:%M") >= s["at"]:
-                saved = self.settings.get("discord_summary")
-                if s["daily"] and s["last_daily"] != today:
-                    saved["last_daily"] = today
+            for kind in auto_stop.due(self._summary_settings(), today, time.strftime("%H:%M"),
+                                      time.localtime().tm_wday):
+                self.settings["discord_summary"]["last_" + kind] = today
+                if kind == "daily":
                     run_history.save()
-                    self.send_summary("daily")
-                    core.save_settings(self.settings)
-                if s["weekly"] and s["last_weekly"] != today \
-                        and WEEKDAYS[time.localtime().tm_wday] == s["weekday"]:
-                    saved["last_weekly"] = today
-                    self.send_summary("weekly")
-                    core.save_settings(self.settings)
+                self.send_summary(kind)
+                core.save_settings(self.settings)
         except Exception as exc:
             core.diag.error("The Discord summary couldn't be sent", exc)
         self.root.after(30000, self._summary_tick)

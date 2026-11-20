@@ -22,6 +22,9 @@ import time
 
 from ui_common import *  # noqa: F401,F403
 from picture_actions_ui import action_summary, macro_label
+import picture_groups
+import profile_rules
+from picture_groups import default_groups, fixed_group  # noqa: F401  (old names)
 
 GENERAL_ID, AOTR_ID, MINE_ID = core.GROUP_GENERAL, core.GROUP_AOTR, core.GROUP_MINE
 
@@ -62,15 +65,6 @@ WATCH_HELP = (
     "Disconnected box), count a won or lost run (MISSION COMPLETED / FAILED), and more.\n\n"
     "Open Picture watch to add pictures, sort them into groups, turn them on or off, choose what each "
     "one does, and which macros it's used for.")
-
-
-def default_groups():
-    return [{"id": AOTR_ID, "name": "AOT:R", "builtin": True}, {"id": MINE_ID, "name": "My pictures"}]
-
-
-def fixed_group(gid):
-    """General, AOT:R and My pictures can't be removed."""
-    return gid in (GENERAL_ID, AOTR_ID, MINE_ID)
 
 
 def dot_image(color, thumb=None, height=16, thumb_w=0):
@@ -141,20 +135,12 @@ class PictureWatchMixin:
         self._show_picture_summary()
 
     def _picture_groups(self):
-        groups = self.settings.get("picture_groups")
-        return [g for g in groups if isinstance(g, dict) and g.get("id")] if isinstance(groups, list) else []
+        return picture_groups.clean_groups(self.settings.get("picture_groups"))
 
     def picture_summary(self):
         """"AOT:R: 4 of 4 on · My pictures: 1 of 1 on"."""
-        pics = self.watch_pictures + self.result_pictures
-        bits = []
-        for g in self._picture_groups():
-            mine = [p for p in pics if core.picture_group(p) == g["id"]]
-            if g.get("on") is False:
-                bits.append(f"{g.get('name')}: off")
-            elif mine:
-                bits.append(f"{g.get('name')}: {sum(1 for p in mine if core.picture_on(p))} of {len(mine)} on")
-        return " · ".join(bits) or "No pictures yet"
+        return picture_groups.summary_text(self._picture_groups(), [(core.picture_group(p), core.picture_on(p))
+                                                                   for p in self.watch_pictures + self.result_pictures])
 
     def _show_picture_summary(self):
         if getattr(self, "picture_summary_var", None) is not None:
@@ -173,8 +159,7 @@ class PictureWatchMixin:
         if image_watch is None:
             return
         if self._picture_groups():
-            ids = {g["id"] for g in self._picture_groups()}
-            groups = self._picture_groups() + [g for g in default_groups() if g["id"] not in ids]
+            groups = picture_groups.with_defaults(self._picture_groups())
             if len(groups) != len(self._picture_groups()):
                 s["picture_groups"] = groups
                 core.save_settings(s)
@@ -231,25 +216,11 @@ class PictureWatchMixin:
         """Put the pictures of a profile (its settings) that have no group yet into one: built-in ones
         (found by comparing them with the app's own) into AOT:R, others into My pictures. True if
         something changed."""
-        if not isinstance(part, dict) or image_watch is None:
+        if image_watch is None:
             return False
-        changed = False
-        if not isinstance(part.get("picture_groups"), list) and (
-                part.get("watch_pictures") or part.get("result_pictures")):
-            part["picture_groups"] = default_groups()
-            changed = True
-        for key, result in (("watch_pictures", False), ("result_pictures", True)):
-            for e in part.get(key) or []:
-                if not isinstance(e, dict) or e.get("group") or not e.get("file"):
-                    continue
-                if not e.get("builtin"):
-                    found = self._builtin_key_of(os.path.join(core.watch_dir(), e["file"]), result, e.get("kind"))
-                    if found:
-                        e["builtin"] = found
-                        e.setdefault("name", BUILTIN_TITLES[found])
-                e["group"] = AOTR_ID if e.get("builtin") else MINE_ID
-                changed = True
-        return changed
+        return picture_groups.sort_part(
+            part, lambda file, result, kind: self._builtin_key_of(os.path.join(core.watch_dir(), file), result, kind),
+            BUILTIN_TITLES)
 
     def _builtin_key_of(self, path, result, kind=None):
         """Which built-in picture the picture file at path is a copy of (None: none)."""
@@ -1212,17 +1183,8 @@ class PictureWatchWindow:
 
     # ------------------------------------------------------------ groups: New, Duplicate, Remove
 
-    def _unique_group_name(self, base):
-        names = {g.get("name") for g in self.groups}
-        if base not in names:
-            return base
-        n = 2
-        while f"{base} {n}" in names:
-            n += 1
-        return f"{base} {n}"
-
     def new_group(self):
-        g = {"id": f"g{int(time.time() * 1000)}", "name": self._unique_group_name("New group")}
+        g = {"id": f"g{int(time.time() * 1000)}", "name": profile_rules.free_name("New group", {g.get("name") for g in self.groups})}
 
         def do():
             self.groups.append(g)
@@ -1247,7 +1209,7 @@ class PictureWatchWindow:
 
     def _duplicate_group_now(self, g):
         copy_g = {"id": f"g{int(time.time() * 1000)}{len(self.groups)}",
-                  "name": self._unique_group_name(g.get("name", "Group") + " copy")}
+                  "name": profile_rules.free_name(g.get("name", "Group") + " copy", {x.get("name") for x in self.groups})}
         if g.get("on") is False:
             copy_g["on"] = False
         self.groups.insert(self.groups.index(g) + 1, copy_g)
@@ -1507,13 +1469,7 @@ class PictureWatchWindow:
             return
 
         def do():
-            on = core.picture_on(e)
-            e["group"] = gid
-            if e.get("builtin"):
-                # a built-in picture is on in AOT:R and starts off anywhere else
-                core.set_picture_on(e, gid == AOTR_ID)
-            else:
-                core.set_picture_on(e, on)
+            self._regroup(e, gid)
             self.sel_group = gid
         self.change(do)
 
@@ -1528,8 +1484,7 @@ class PictureWatchWindow:
 
     @staticmethod
     def _locked(e):
-        """A built-in picture in the built-in AOT:R group: it can be copied, not moved or removed."""
-        return bool(e.get("builtin")) and e["group"] == AOTR_ID
+        return picture_groups.locked(e)
 
     def _show_many(self, n):
         self._clear_detail()
@@ -1669,7 +1624,7 @@ class PictureWatchWindow:
     def _regroup(e, gid):
         on = core.picture_on(e)
         e["group"] = gid
-        core.set_picture_on(e, gid == AOTR_ID if e.get("builtin") else on)
+        core.set_picture_on(e, picture_groups.on_after_move(e, on, gid))
 
     def _pictures_menu(self, ev):
         row = self.pics_tree.identify_row(ev.y)

@@ -7,6 +7,8 @@ Part of the dark window: ModernMacroRecorder (modern_ui.py) inherits this class.
 import threading
 import time
 
+import discord_rules
+
 from ui_common import *  # noqa: F401,F403  (colours, fonts, widgets, tk, core, the other modules)
 
 
@@ -230,11 +232,7 @@ class DiscordMixin:
         return shot
 
     def _ping_for(self, problem, dropped=False):
-        s = self.settings
-        when = s.get("discord_ping_when", "problems")
-        if when == "always" or (when == "problems" and problem) or (dropped and s.get("discord_ping_fragments")):
-            return str(s.get("discord_ping", "")).strip()
-        return ""
+        return discord_rules.ping_for(self.settings, problem, dropped)
 
     def _run_card(self, status, values):
         s = self.settings
@@ -253,24 +251,19 @@ class DiscordMixin:
         """After each run (on the playback thread): the run's results to Discord."""
         s = self.settings
         dropped = bool(self.session.fragments and self.session.fragments[-1] > 0)
-        if not (s.get("discord_enabled") and (s.get("discord_runs", True)
-                                              or (dropped and s.get("discord_ping_fragments")))):
+        if not discord_rules.run_wanted(s, dropped):
             return
         status = self.session.runs[-1][0] if self.session.runs else stats.UNKNOWN
         values = self.session.values(self._ping_for(status == stats.LOSS, dropped))
         content, card = self._run_card(status, values)
-        # an unknown result or a divine fragment: always a message of its own with a screenshot, so it
-        # can be looked at afterwards (only won and failed runs go into the card that updates)
-        keep = status == stats.UNKNOWN or dropped
-        if s.get("discord_live") and not content.strip() and not keep:
-            # "One card that updates": the same message is changed after each run (a run that pings
-            # still gets a message of its own, or the ping wouldn't reach anyone)
+        how, shot = discord_rules.run_send(s, status, dropped, content)
+        if how == "live":  # "One card that updates": the same message is changed after each run
             card = dict(card, description=card.get("description", "") + "\n*Updated " + time.strftime("%H:%M:%S")
                         + "*")
             self._send_card("", card, None, live=f"runs:{self.session.started}")
             return
         # taken now, before the macro goes on (clicks Retry, starts over)
-        png = self._screenshot() if (s.get("discord_screenshot", True) or keep) else None
+        png = self._screenshot() if shot else None
         self._send_card(content, card, png)
 
     def _discord_summary(self, text, problem=False):
@@ -279,13 +272,7 @@ class DiscordMixin:
         if not s.get("discord_enabled"):
             return
         values = self.session.values(self._ping_for(problem))
-        lines = [text]
-        if self.session.runs and self.result_matchers:
-            lines.append(f"Completed {values['completed']} · Failed {values['failed']} · "
-                         f"Unknown {values['unknown']} · Win rate {values['winrate']}")
-        lines.append(f"Total runtime {values['total']}")
-        card = {"title": f"{values['macro']} · {'Problem' if problem else 'Session ended'}",
-                "description": "\n".join(lines), "color": 0xFF4757 if problem else 0x4F7CFF}
+        card = discord_rules.session_card(values, text, problem, bool(self.session.runs and self.result_matchers))
         png = self._screenshot() if problem and s.get("discord_screenshot", True) else None
         self._send_card(values["ping"], card, png)
 
@@ -296,10 +283,7 @@ class DiscordMixin:
         if not s.get("discord_enabled") or kind not in ("lost", "back", "stuck"):
             return
         values = self.session.values(self._ping_for(kind in ("lost", "stuck")))
-        title = {"lost": "Disconnected", "back": "Back in the game", "stuck": "A run seems stuck"}[kind]
-        card = {"title": f"{values['macro']} · {title}",
-                "description": text + "\nReconnects this session: " + str(self.session.reconnects),
-                "color": 0x2ECC71 if kind == "back" else 0xFFB238}
+        card = discord_rules.recovery_card(kind, values, text, self.session.reconnects)
         png = self._screenshot() if kind in ("lost", "stuck") and s.get("discord_screenshot", True) else None
         self._send_card(values["ping"], card, png)
 

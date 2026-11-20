@@ -220,12 +220,7 @@ class ResultsMixin:
         a = self.settings.get("stats_all")
         if not isinstance(a, dict):
             a = self.settings["stats_all"] = {}
-        a["runs"] = a.get("runs", 0) + len(sess.runs)
-        a["wins"] = a.get("wins", 0) + sess.count(stats.WIN)
-        a["losses"] = a.get("losses", 0) + sess.count(stats.LOSS)
-        a["unknown"] = a.get("unknown", 0) + sess.count(stats.UNKNOWN)
-        a["fragments"] = a.get("fragments", 0) + sum(sess.fragments)
-        a["seconds"] = a.get("seconds", 0) + int(time.time() - sess.started)
+        stats.add_to_all_time(a, sess, time.time())
         sess.added = True  # (Preview 4: milestones then count it from the all-time results only)
         core.save_settings(self.settings)
 

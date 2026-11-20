@@ -18,7 +18,9 @@ import tkinter as tk
 from tkinter import ttk
 
 import macro_recorder as core
+import start_later
 import window_tools
+from start_later import clean_hhmm, parse_when  # noqa: F401  (others import them from here)
 from ui_common import *  # noqa: F401,F403
 
 STARTUP_WHEN = {"nothing": "Do nothing", "play": "Play the open macro",
@@ -29,28 +31,6 @@ STARTUP_FLAG = "--startup"
 
 def _label(path):
     return os.path.splitext(os.path.basename(path or ""))[0]
-
-
-def parse_when(text, now=None):
-    """"21:30" (today, or tomorrow if that's past), "in 15" / "+15" / "15" minutes: the time (seconds
-    since 1970), or None when it isn't one of those."""
-    now = now or time.time()
-    text = str(text or "").strip().lower().replace("in ", "").replace("min", "").strip()
-    if ":" in text:
-        try:
-            h, m = (int(p) for p in text.split(":", 1))
-        except ValueError:
-            return None
-        if not (0 <= h < 24 and 0 <= m < 60):
-            return None
-        t = time.localtime(now)
-        at = time.mktime((t.tm_year, t.tm_mon, t.tm_mday, h, m, 0, 0, 0, -1))
-        return at if at > now + 5 else at + 86400
-    try:
-        minutes = float(text.lstrip("+"))
-    except ValueError:
-        return None
-    return now + minutes * 60 if 0 < minutes <= 24 * 60 else None
 
 
 def single_copy(preview=False, name=None):
@@ -234,33 +214,12 @@ class TimedStartMixin:
 
     # ------------------------------------------------------------ (2.12) the alarm and the timer
 
-    SCHEDULE_DEFAULTS = {"alarm_on": False, "alarm": "07:00", "daily": False, "timer_on": False, "timer_min": 30,
-                         "timer_repeat": False, "timer_from": 0.0, "when": "play", "open": "", "macro": "",
-                         "alarm_last": ""}
-    TIMER_REPEAT_MIN = 5
+    SCHEDULE_DEFAULTS = start_later.SCHEDULE_DEFAULTS
+    TIMER_REPEAT_MIN = start_later.TIMER_REPEAT_MIN
 
     def _schedule(self):
-        """Settings > Playback > Start playing later: the alarm (HH:MM, every day or once) and the timer
-        (N minutes, again and again or once), and what happens when one goes off."""
-        saved = self.settings.get("schedule")
-        saved = saved if isinstance(saved, dict) else {}
-        out = dict(self.SCHEDULE_DEFAULTS)
-        for k in ("alarm_on", "daily", "timer_on", "timer_repeat"):
-            out[k] = saved.get(k) is True
-        alarm = clean_hhmm(saved.get("alarm"))
-        out["alarm"] = alarm or out["alarm"]
-        out["timer_min"] = core.int_setting(saved, "timer_min", 30, 1, 24 * 60)
-        if out["timer_repeat"]:
-            out["timer_min"] = max(self.TIMER_REPEAT_MIN, out["timer_min"])
-        try:
-            out["timer_from"] = float(saved.get("timer_from") or 0)
-        except (TypeError, ValueError):
-            out["timer_from"] = 0.0
-        out["when"] = saved.get("when") if saved.get("when") in ("play", "game") else "play"
-        out["open"] = str(saved.get("open") or "")
-        out["macro"] = str(saved.get("macro") or "")
-        out["alarm_last"] = str(saved.get("alarm_last") or "")
-        return out
+        """Settings > Playback > Start playing later (the rules: start_later.clean_schedule)."""
+        return start_later.clean_schedule(self.settings.get("schedule"))
 
     def _set_schedule(self, **kw):
         sc = dict(self._schedule(), **kw)
@@ -272,35 +231,20 @@ class TimedStartMixin:
     def schedule_start(self):
         """When the app opens: a timer that ran out while it was closed is started again (or turned off),
         then the alarm and the timer are looked at every few seconds."""
-        sc = self._schedule()
-        if sc["timer_on"] and (not sc["timer_from"] or sc["timer_from"] + sc["timer_min"] * 60 < time.time() - 60):
-            if sc["timer_from"]:
-                core.diag.info("Timer: it ran out while the app was closed")
-            if sc["timer_repeat"] or not sc["timer_from"]:
-                self._set_schedule(timer_from=time.time())
-            else:
-                self._set_schedule(timer_on=False)
+        changes, ran_out = start_later.on_open(self._schedule(), time.time())
+        if ran_out:
+            core.diag.info("Timer: it ran out while the app was closed")
+        if changes:
+            self._set_schedule(**changes)
         self._schedule_tick()
-
-    def _alarm_today(self, sc, now):
-        h, m = (int(p) for p in sc["alarm"].split(":"))
-        t = time.localtime(now)
-        return time.mktime((t.tm_year, t.tm_mon, t.tm_mday, h, m, 0, 0, 0, -1)), time.strftime("%Y-%m-%d", t)
 
     def _schedule_due(self, now=None):
         """Which of the alarm and the timer is due now: (alarm, timer)."""
         now = now or time.time()
-        sc = self._schedule()
-        alarm = timer = False
-        if sc["alarm_on"]:
-            at, today = self._alarm_today(sc, now)
-            alarm = sc["alarm_last"] != today and 0 <= now - at < 600  # (missed by more than 10 min: not now)
-        if sc["timer_on"] and sc["timer_from"] > now + 60:
-            # (the PC clock went back: the timer counts from now, not from a time still to come)
+        alarm, timer, clock_back = start_later.due(self._schedule(), now)
+        if clock_back:
             core.diag.info("Timer: the PC clock went back; the timer counts from now")
-            sc = self._set_schedule(timer_from=now)
-        if sc["timer_on"] and sc["timer_from"]:
-            timer = now >= sc["timer_from"] + sc["timer_min"] * 60
+            self._set_schedule(timer_from=now)
         return alarm, timer
 
     def _schedule_tick(self):
@@ -323,22 +267,7 @@ class TimedStartMixin:
         if not (alarm or timer):
             return None
         sc = self._schedule()
-        # the other one within a minute counts as the same start (only one start)
-        if alarm and not timer and sc["timer_on"] and sc["timer_from"]:
-            timer = sc["timer_from"] + sc["timer_min"] * 60 - now < 60
-        if timer and not alarm and sc["alarm_on"]:
-            at, today = self._alarm_today(sc, now)
-            alarm = sc["alarm_last"] != today and abs(at - now) < 60
-        changes = {}
-        if alarm:
-            changes["alarm_last"] = self._alarm_today(sc, now)[1]
-            if not sc["daily"]:
-                changes["alarm_on"] = False  # (once: the time stays filled in)
-        if timer:
-            if sc["timer_repeat"]:
-                changes["timer_from"] = now
-            else:
-                changes["timer_on"] = False
+        alarm, timer, changes = start_later.one_start(sc, alarm, timer, now)
         self._set_schedule(**changes)
         why = "alarm" if alarm else "timer"
         core.diag.info(f"{'Alarm' if alarm else 'Timer'}: time to play" + (" (the alarm and the timer together)"
@@ -630,12 +559,3 @@ class TimedStartMixin:
                                     "timer_on": timer_on, "timer": timer_var, "repeat": repeat, "when": when,
                                     "open": open_var, "macro": macro_var, "countdown": count_var, "give_up": give_var}
         return win
-
-
-def clean_hhmm(text):
-    """"07:30" from "7:30" / "07:30"; None when it isn't a time (00-23 : 00-59)."""
-    try:
-        h, m = (int(p) for p in str(text).strip().split(":", 1))
-    except (ValueError, AttributeError):
-        return None
-    return f"{h:02d}:{m:02d}" if 0 <= h < 24 and 0 <= m < 60 else None
