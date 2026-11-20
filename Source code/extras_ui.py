@@ -34,7 +34,8 @@ SHARE_KEYS = {"accent", "always_on_top", "away_stop_seconds", "drops_enabled", "
               "watch_end_wait", "watch_ignore_bg", "watch_limit_count", "watch_limit_seconds", "watch_match",
               "watch_save_with_macro", "watch_shift_lock", "watch_wait"}
 # what a shared file may put on this PC as a macro (never a program or a shortcut)
-PACK_MACRO_EXTS = (core.FILE_EXT, ".json") + importers.IMPORT_EXTS
+# (no .ahk: a script file Windows would run if it were double-clicked in the folder it lands in)
+PACK_MACRO_EXTS = (core.FILE_EXT, ".json") + tuple(e for e in importers.IMPORT_EXTS if e != ".ahk")
 PING_WHEN_TEXT = {"fragment": "a divine fragment drops", "stop": "the macro stops", "loss": "a run fails",
                   "lost": "it disconnects or the game closes"}
 

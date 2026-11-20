@@ -445,19 +445,26 @@ CTRL_SPECIALS = {"ctrl", "ctrl_l", "ctrl_r"}
 CTRL_VKS = {17, 162, 163}
 
 
+def vk_of(key):
+    """A key's code as Windows reads it: only the low 16 bits count (a bigger number in a file, like 65627,
+    is cut down to 91 = the Windows key when the key is sent), so the checks below look at those."""
+    vk = key.get("vk") if isinstance(key, dict) else getattr(key, "vk", None)
+    return vk & 0xFFFF if isinstance(vk, int) and not isinstance(vk, bool) else vk
+
+
 def is_win_key(key):
     key = key if isinstance(key, dict) else {}
-    return str(key.get("special", "")).lower() in WIN_SPECIALS or key.get("vk") in WIN_VKS
+    return str(key.get("special", "")).lower() in WIN_SPECIALS or vk_of(key) in WIN_VKS
 
 
 def is_ctrl_key(key):
     key = key if isinstance(key, dict) else {}
-    return str(key.get("special", "")).lower() in CTRL_SPECIALS or key.get("vk") in CTRL_VKS
+    return str(key.get("special", "")).lower() in CTRL_SPECIALS or vk_of(key) in CTRL_VKS
 
 
 def is_esc_key(key):
     key = key if isinstance(key, dict) else {}
-    return str(key.get("special", "")).lower() == "esc" or key.get("vk") == 27
+    return str(key.get("special", "")).lower() == "esc" or vk_of(key) == 27
 
 
 def opens_start(events):

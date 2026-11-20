@@ -96,13 +96,14 @@ macro = {"events": [{"type": "key", "key": {"char": "a"}, "pressed": True, "t": 
          "screen": {"width": 1920, "height": 1080}, "profile": "Farm"}
 pack = os.path.join(tmp, "gift.macropack")
 manifest = {"app": "macro_recorder_pack", "version": 1, "main": "Farm.macro",
-            "macros": ["Farm.macro", "Setup.exe", "Read me.lnk"], "pictures": [],
+            "macros": ["Farm.macro", "Setup.exe", "Read me.lnk", "Run me.ahk"], "pictures": [],
             "profile": {"name": "Farm", "settings": dict(bad, speed=3.0)}}
 with zipfile.ZipFile(pack, "w") as z:
     z.writestr("manifest.json", json.dumps(manifest))
     z.writestr("macros/Farm.macro", json.dumps(macro))
     z.writestr("macros/Setup.exe", b"MZ not a real program")
     z.writestr("macros/Read me.lnk", b"not a real shortcut")
+    z.writestr("macros/Run me.ahk", b"Run, calc.exe")  # a script Windows would run when double-clicked
 app.settings.pop("schedule", None)
 app.settings["trusted_steps"] = {}
 active_before = app.profile_active()
@@ -112,7 +113,7 @@ answer["yes"] = True
 main = app.import_pack(pack, folder=out)
 dest = os.path.dirname(main) if main else ""
 check("shared file: its macro opened", main and os.path.isfile(main), (main, asked[-3:]))
-check("shared file: a program or shortcut inside is NOT put on this PC",
+check("shared file: a program, shortcut or script inside is NOT put on this PC",
       dest and sorted(os.listdir(dest)) == ["Farm.macro"], os.listdir(dest) if dest else None)
 check("shared file: opening it does NOT switch your profile", app.profile_active() == active_before,
       (app.profile_active(), active_before))
@@ -137,11 +138,26 @@ os.path.isfile = lambda p: (looked.append(str(p)), real_isfile(p))[1]
 try:
     found = app._find_macro_file("\\\\evil.example\\share\\rejoin.macro")
     found2 = app._find_macro_file("//evil.example/share/rejoin.macro")
+    other_forms = [app._find_macro_file(p) for p in ("\\\\?\\UNC\\evil.example\\share\\x.macro",
+                                                     "\\??\\UNC\\evil.example\\share\\x.macro",
+                                                     "\\evil.example\\share\\x.macro")]
 finally:
     os.path.isfile = real_isfile
 check("a macro naming a file on another computer: that computer is never asked",
       found is None and found2 is None and not any(p.replace("/", "\\").startswith("\\\\") for p in looked),
       looked)
+check("... also written as \\\\?\\UNC\\, \\??\\UNC\\ or with one slash: nothing starting with a slash is looked at",
+      other_forms == [None, None, None] and not any(p.replace("/", "\\").startswith("\\") for p in looked), looked)
+
+# ------------------------------------------------------------ 3b. keys written as bigger key codes
+check("the Windows key is also seen when its code is written as 65627 (cut down to 91 when sent)",
+      step_more.is_win_key({"vk": 65536 + 91}) and step_more.is_win_key({"vk": 92}) and not step_more.is_win_key({"vk": 65}))
+check("Ctrl and Esc too (65698 = 162, 65563 = 27); True is not a key code",
+      step_more.is_ctrl_key({"vk": 65536 + 162}) and step_more.is_esc_key({"vk": 65536 + 27})
+      and not step_more.is_win_key({"vk": True}))
+check("a recording with the big-number Windows key needs your OK",
+      step_more.SENSITIVE_WINKEY in step_more.sensitive_parts(workflow.from_events(
+          [{"type": "key", "key": {"vk": 65536 + 91}, "pressed": True, "t": 0.0}])))
 
 # ------------------------------------------------------------ 5. an AutoHotkey file that loops forever
 for label, text in (("a huge empty loop", "Loop 99999999999\n{\n}\n"),

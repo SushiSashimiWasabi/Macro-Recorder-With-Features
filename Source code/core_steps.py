@@ -289,9 +289,10 @@ class CoreStepsMixin:
             return True
         ctrls = {keyboard.Key.ctrl, keyboard.Key.ctrl_l, keyboard.Key.ctrl_r}
 
-        def ctrl_down(k):  # (a file can write Ctrl as a plain key code: look at the code too)
-            vk = getattr(k, "vk", None) or getattr(getattr(k, "value", None), "vk", None)
-            return k in ctrls or vk in step_more.CTRL_VKS
+        def ctrl_down(k):  # (a file can write Ctrl as a plain key code: look at the code too; on Windows only,
+            # a Mac's own key codes mean other keys)
+            vk = step_more.vk_of(k) or step_more.vk_of(getattr(k, "value", None))
+            return k in ctrls or (core.IS_WIN and vk in step_more.CTRL_VKS)
 
         return step_more.is_esc_key(ev.get("key")) and any(ctrl_down(k) for k in held_keys)
 
