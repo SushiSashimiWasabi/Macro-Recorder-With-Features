@@ -1,12 +1,27 @@
 # The app's version. Raising it (and pushing to main) makes GitHub publish a new Release,
 # which every copy of the app offers to install when it starts.
-APP_VERSION = "2.13.1"
+APP_VERSION = "2.14.0"
 
 # Every version, newest first: (version, the day it was finalized, changes). The newest is shown once after an update;
 # Settings > About > What's new shows them all. Each change is one paragraph (shown as a bullet).
 # Version numbers started at 2.1 (the first one that could update itself); the earlier steps have
 # names instead.
 HISTORY = [
+    ("2.14.0", "Finalized 20 November 2026", [
+        "Safer sharing. A shared profile (.macropack) now carries only play and look options. It can no longer bring a "
+        "start-playing-later alarm, start with Windows, Discord links, hotkeys or trusted macros into your app. "
+        "Opening a shared macro no longer switches your profile by itself.",
+        "A shared macro that sends a Discord screenshot, or presses the Windows key (or Ctrl+Esc), now asks once "
+        "before it runs. Say No and it plays without them. Your own macros with a Discord screenshot step ask once too; "
+        "starts you are not there for (Discord, timed) send without the screenshot until you say Yes once.",
+        "Playing now pauses at once when another window comes in front, even before the next key press. "
+        "Recording keeps keys typed into one program only (the window you chose, or the first one you clicked or typed "
+        "into) and says in the log how many it left out.",
+        "A macro link to a network share (\\\\server\\share) uses only the file name, and an AutoHotkey file with an "
+        "endless loop no longer freezes the app. Shared packs only write macro file types.",
+        "Not done yet: profiles you imported before this version may still hold risky keys (they no longer switch on "
+        "by themselves), and the Mac app is still untested on a real Mac.",
+    ]),
     ("2.13.1", "Finalized 20 November 2026", [
         "Keys on screen no longer hides the game from Picture watch. Before, the box could sit on top of the MISSION "
         "COMPLETED title and the run counted as Unknown. The box is still shown in screen recordings.",

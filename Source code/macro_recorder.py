@@ -880,6 +880,7 @@ def combine_checks(first, second):
 
     def both(held_keys, held_buttons):
         return first(held_keys, held_buttons) or second(held_keys, held_buttons)
+    both.before_key = getattr(first, "before_key", None) or getattr(second, "before_key", None)
     return both
 
 

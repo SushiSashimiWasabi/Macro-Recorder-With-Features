@@ -8,6 +8,7 @@ import tkinter as tk
 import zipfile
 from tkinter import filedialog, ttk
 
+import importers
 import macro_recorder as core
 import macro_steps as workflow
 import profiles_ui
@@ -22,13 +23,25 @@ MAX_PACK_FILE_BYTES = 25 * 1024 * 1024
 # never shared, and never taken from a shared file: they belong to one person or one PC
 PRIVATE_KEYS = {"discord_webhook", "discord_ping", "discord_name", "discord_enabled", "discord_summary",
                 "game_closed", "watch_pictures", "result_pictures", "auto_stop", "picture_groups"}
+# (security, 20 Nov 2026) a shared profile carries ONLY these: how macros play and look. Anything else (the
+# alarm and what it opens, Discord links and where messages go, the screenshot area, the trust list, hotkeys,
+# "Pause when the game isn't in front"...) stays as you have it, also settings added later.
+SHARE_KEYS = {"accent", "always_on_top", "away_stop_seconds", "drops_enabled", "fit_to", "keys_corner",
+              "keys_on_screen", "loop", "mouse_detail", "play_overlay", "ready_seconds", "record_ask_window",
+              "record_camera", "record_mouse_moves", "record_ready_seconds", "recovery_countdown", "repeat_count",
+              "results_enabled", "results_match", "simplify_moves", "sound_volume", "sounds", "speed", "status_bar",
+              "switch_to_program", "vary", "video_click_through", "video_opacity", "watch_click", "watch_enabled",
+              "watch_end_wait", "watch_ignore_bg", "watch_limit_count", "watch_limit_seconds", "watch_match",
+              "watch_save_with_macro", "watch_shift_lock", "watch_wait"}
+# what a shared file may put on this PC as a macro (never a program or a shortcut)
+PACK_MACRO_EXTS = (core.FILE_EXT, ".json") + importers.IMPORT_EXTS
 PING_WHEN_TEXT = {"fragment": "a divine fragment drops", "stop": "the macro stops", "loss": "a run fails",
                   "lost": "it disconnects or the game closes"}
 
 
 def shareable(part):
     # (backgrounds point at picture files on this PC, so they stay out of a shared profile)
-    return {k: v for k, v in part.items() if profiles_ui.in_profile(k) and k not in PRIVATE_KEYS
+    return {k: v for k, v in part.items() if k in SHARE_KEYS and profiles_ui.in_profile(k) and k not in PRIVATE_KEYS
             and not profiles_ui.is_background_key(k)}
 
 
@@ -369,7 +382,8 @@ class ExtrasMixin:
                 manifest = json.loads(z.read("manifest.json").decode("utf-8"))
                 if not isinstance(manifest, dict) or manifest.get("app") != "macro_recorder_pack":
                     raise ValueError("it isn't a shared macro file")
-                macros = [m for m in manifest.get("macros") or [] if isinstance(m, str)]
+                macros = [m for m in manifest.get("macros") or [] if isinstance(m, str)
+                          and safe_name(m).lower().endswith(PACK_MACRO_EXTS)]
                 main = manifest.get("main")
                 if main not in macros or "macros/" + main not in infos:
                     raise ValueError("its main macro is missing")
@@ -430,7 +444,8 @@ class ExtrasMixin:
             name = " ".join(str(profile["name"]).split())[:40]
             if self.boxes.askyesno("Share", f"This macro comes with the settings profile \"{name}\" (speed, "
                                    "countdown, picture watch options and so on).\n\nAdd it to your profiles? "
-                                   "Your own settings stay as they are until you switch to it.", parent=parent):
+                                   "Your own settings stay as they are until you switch to it yourself.",
+                                   parent=parent):
                 took_profile = name
                 n = 2
                 while took_profile in self.profiles():
@@ -445,7 +460,12 @@ class ExtrasMixin:
                 core.save_settings(self.settings)
         took_bg = self._pack_take_backgrounds(backgrounds, bg_bytes, took_profile, parent) if bg_bytes else 0
         self.skip_file_pictures = True
-        if not self.load(placed[main], quiet=True):
+        self.skip_profile_switch = True  # (security: a shared macro never switches your settings by itself)
+        try:
+            loaded = self.load(placed[main], quiet=True)
+        finally:
+            self.skip_profile_switch = False
+        if not loaded:
             self.skip_file_pictures = False
             self.boxes.showerror("Share", "The macros were put in\n" + dest + "\nbut the main one couldn't be "
                                  "opened: " + str(self.load_error or ""), parent=parent)

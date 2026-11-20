@@ -31,7 +31,7 @@ src = os.path.dirname(here)
 WINDOW_TESTS = {"test_automation.py", "test_chains.py", "test_editor.py", "test_pictures.py", "test_preview1.py",
                 "test_preview2.py", "test_preview3.py", "test_preview3_edges.py", "test_preview3_actions.py", "test_preview4.py",
                 "test_review213.py",
-                "test_security.py", "test_remote.py", "test_settings_undo.py", "test_stage3.py", "test_stage4.py",
+                "test_security.py", "test_offense.py", "test_remote.py", "test_settings_undo.py", "test_stage3.py", "test_stage4.py",
                 "test_windows.py"}
 AT_ONCE = 4  # how many of the other tests run side by side
 
@@ -42,7 +42,7 @@ GROUPS = {
               "test_results.py", "test_real_screen.py", "test_preview1.py", "test_preview2.py",
               "test_updater_folder.py", "test_preview4.py", "test_review213.py", "test_counters.py", "test_late_results.py", "test_screenshot_note.py",
               "test_post213_safety.py"],
-    "security": ["test_files.py", "test_security.py"],
+    "security": ["test_files.py", "test_security.py", "test_offense.py"],
     "timing": ["test_preview3.py"],
     "discord": ["test_remote.py"],
     "edges": ["test_preview3_edges.py"],

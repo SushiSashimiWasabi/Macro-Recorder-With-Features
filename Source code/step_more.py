@@ -435,21 +435,71 @@ def no_pings(text):
 
 
 SENSITIVE_CLIPBOARD = "reads the number you copy"
+# (security, 20 Nov 2026) the Windows key (or Ctrl+Esc) opens the Start menu / Run box: with it, recorded keys
+# can start any program. A screenshot sent to Discord shows your screen to whoever owns that link.
+SENSITIVE_WINKEY = "presses the Windows key"
+SENSITIVE_SHOT = "sends screenshots to Discord"
+WIN_SPECIALS = {"cmd", "cmd_l", "cmd_r"}
+WIN_VKS = {91, 92}
+CTRL_SPECIALS = {"ctrl", "ctrl_l", "ctrl_r"}
+CTRL_VKS = {17, 162, 163}
+
+
+def is_win_key(key):
+    key = key if isinstance(key, dict) else {}
+    return str(key.get("special", "")).lower() in WIN_SPECIALS or key.get("vk") in WIN_VKS
+
+
+def is_ctrl_key(key):
+    key = key if isinstance(key, dict) else {}
+    return str(key.get("special", "")).lower() in CTRL_SPECIALS or key.get("vk") in CTRL_VKS
+
+
+def is_esc_key(key):
+    key = key if isinstance(key, dict) else {}
+    return str(key.get("special", "")).lower() == "esc" or key.get("vk") == 27
+
+
+def opens_start(events):
+    """True when these recorded events press the Windows key, or Esc while Ctrl is held."""
+    ctrl = False
+    for ev in events if isinstance(events, list) else []:
+        if not isinstance(ev, dict) or ev.get("type") != "key":
+            continue
+        key, pressed = ev.get("key"), bool(ev.get("pressed"))
+        if is_win_key(key) and pressed:
+            return True
+        if is_ctrl_key(key):
+            ctrl = pressed
+        elif ctrl and pressed and is_esc_key(key):
+            return True
+    return False
 
 
 def sensitive_parts(steps):
     """(2.12) What a macro does outside the game that needs your OK when it comes from someone else:
-    {"types into notepad.exe", "reads the number you copy"}."""
+    {"types into notepad.exe", "reads the number you copy", "presses the Windows key",
+    "sends screenshots to Discord"}."""
     import macro_steps as workflow
 
     out = set()
     for a, _l, _i, _p in workflow.walk(steps or []):
         if a.get("off"):
             continue
-        if a.get("kind") == "type" and isinstance(a.get("window"), dict) and a["window"].get("exe"):
+        kind = a.get("kind")
+        if kind == "type" and isinstance(a.get("window"), dict) and a["window"].get("exe"):
             out.add("types into " + os.path.basename(str(a["window"]["exe"])).lower())
-        if a.get("kind") == "read_clipboard":
+        if kind == "read_clipboard":
             out.add(SENSITIVE_CLIPBOARD)
+        if kind == "recorded" and opens_start(a.get("events")):
+            out.add(SENSITIVE_WINKEY)
+        if kind == "key":
+            mods = a.get("mods") if isinstance(a.get("mods"), list) else []
+            if is_win_key(a.get("key")) or "cmd" in mods or ("ctrl" in mods and is_esc_key(a.get("key"))):
+                out.add(SENSITIVE_WINKEY)
+        if (kind == "discord" and a.get("screenshot") is True) or \
+                (kind == "screenshot" and a.get("to") in ("discord", "both")):
+            out.add(SENSITIVE_SHOT)
     return out
 
 
@@ -745,7 +795,11 @@ class StepMoreMixin:
     def _more_discord(self, a, ctx):
         text = fill(a.get("text", ""), getattr(self, "counters", {}) or {})
         png = None
-        if a.get("screenshot") and hasattr(self, "_screenshot") and not getattr(self, "ghost", False):
+        if a.get("screenshot") and not getattr(self, "allow_sensitive", True):
+            import diag
+
+            diag.info("Discord message: sent without its screenshot (not allowed for this macro)")
+        elif a.get("screenshot") and hasattr(self, "_screenshot") and not getattr(self, "ghost", False):
             try:
                 png = self._screenshot()
             except Exception:
@@ -845,7 +899,9 @@ class StepMoreMixin:
                     diag.info("Take a screenshot: saved in the reports folder")
                 except Exception as exc:
                     diag.error("Couldn't save the screenshot", exc)
-        if to in ("discord", "both"):
+        if to in ("discord", "both") and not getattr(self, "allow_sensitive", True):
+            diag.info("Take a screenshot: not sent to Discord (not allowed for this macro)")
+        elif to in ("discord", "both"):
             self._macro_discord(f"Screenshot · {time.strftime('%H:%M:%S')}", png=img)
         return "ok"
 
@@ -856,6 +912,9 @@ class StepMoreMixin:
             if ctx["bg"] is not None:
                 self._replay_event_bg(ctx["bg"], ev, held_keys)
             else:
+                gone = self._key_guard(ev, ctx.get("away"), held_keys, held_buttons)
+                if gone:
+                    return gone
                 self._replay_event(ev, held_keys, held_buttons)
             if ev.get("pause"):
                 result = self._pause(ev["pause"], ctx)
@@ -1208,7 +1267,8 @@ class StepMoreMixin:
                     except Exception:
                         continue
                     go(inner, fk, depth + 1)
-        go(self.actions or [], self._macro_key(self.current_file) if self.current_file else "", 0)
+        # (also a macro that is only a recording: its keys are looked at too)
+        go(self.macro_steps() or [], self._macro_key(self.current_file) if self.current_file else "", 0)
         return out
 
     def _trusted(self):

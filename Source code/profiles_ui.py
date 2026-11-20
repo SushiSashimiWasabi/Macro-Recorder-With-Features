@@ -20,7 +20,8 @@ from ui_common import *  # noqa: F401,F403
 SKIP_KEYS = {"profiles", "profile_active", "macro_library", "stats_all", "milestones", "tour_done", "tours_seen", "macro_meta", "macro_folders", "macro_row_folder", "last_seen_version", "last_game_exe",
              "builtin_failed_added", "check_updates", "app_icon_file", "app_logo_file", "app_logo_same",
              "video_history", "video_link", "first_start_done", "warn_big_pictures",
-             "video_playlist_note", "check_ignore", "counter_values"}
+             "video_playlist_note", "check_ignore", "counter_values",
+             "trusted_steps"}  # (the macros you OK'd belong to this PC, never to a profile)
 SKIP_PREFIXES = ("remote_", "video_rect")
 SKIP_ENDINGS = ("_geometry",)
 NO_PROFILE = "(none)"
@@ -126,7 +127,8 @@ class ProfilesMixin:
                 core.diag.error("Couldn't sort the profile's pictures", exc)
         for key in [k for k in self.settings if in_profile(k)]:
             del self.settings[key]
-        self.settings.update(copy.deepcopy(self.profiles()[name]))
+        # (only profile settings: an older profile may still hold something that belongs to this PC)
+        self.settings.update(copy.deepcopy({k: v for k, v in self.profiles()[name].items() if in_profile(k)}))
         self.settings["profile_active"] = name
         self._apply_settings_everywhere()
         core.save_settings(self.settings)
@@ -184,7 +186,8 @@ class ProfilesMixin:
     def load(self, path=None, quiet=False):
         ok = super().load(path, quiet=quiet)
         linked = getattr(self, "macro_profile", None)
-        if ok and linked and linked in self.profiles() and linked != self.profile_active():
+        if ok and linked and linked in self.profiles() and linked != self.profile_active() \
+                and not getattr(self, "skip_profile_switch", False):
             if self.switch_profile(linked):
                 self.sub_note = f"Macro opened, profile: {linked}"
                 self.show_profile_notice(f"Profile switched to \"{short(linked, 24)}\" (linked to this macro)")

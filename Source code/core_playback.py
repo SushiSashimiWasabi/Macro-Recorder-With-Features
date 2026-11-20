@@ -236,6 +236,10 @@ class CorePlaybackMixin:
         macros were moved or shared together) the folder of the open macro."""
         if not isinstance(path, str) or not path:
             return None
+        if path.replace("/", "\\").startswith("\\\\"):
+            # (security) a file on another computer (\\server\share): just looking at it could send that
+            # computer your Windows login. Only the file name is used, beside the open macro.
+            path = os.path.basename(path.replace("\\", "/"))
         if not os.path.isabs(path):
             # (2.9.1) saved relative to the macro's own folder (see shared_macro_path); never above it
             if ".." in path.replace("\\", "/").split("/") or not self.current_file:

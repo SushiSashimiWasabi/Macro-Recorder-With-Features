@@ -439,14 +439,16 @@ class CoreGuardsMixin:
                 return True
             return False
 
-        def check(held_keys, held_buttons):
+        def check(held_keys, held_buttons, strict=False):
             now = time.perf_counter()
-            if now - state["last_check"] < 0.05 or self._user_paused():
+            if self._user_paused() or (not strict and now - state["last_check"] < 0.05):
                 return False
             state["last_check"] = now
             if game_in_front():
                 state["since"] = None
                 return False
+            if strict:  # (a key is about to go down: no moment of grace, see before_key)
+                state["since"] = now - core.AWAY_GRACE
             if state["since"] is None:
                 state["since"] = now
                 return False
@@ -491,6 +493,9 @@ class CoreGuardsMixin:
             diag.info("Going on: the game is in front again")
             return False
 
+        # (security, 20 Nov 2026) asked right before each key goes down: a macro can't open another window
+        # (the Run box) and type into it during the usual moment of grace
+        check.before_key = lambda held_keys, held_buttons: check(held_keys, held_buttons, strict=True)
         return check
 
     def _away_name(self, games=None):

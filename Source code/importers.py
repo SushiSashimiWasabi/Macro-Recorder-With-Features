@@ -330,6 +330,7 @@ def _jitbit_mouse(events, t, x, y, action, extra, result):
 
 AHK_STEP = 0.01      # AutoHotkey's default key and mouse delay
 MAX_EVENTS = 200000  # stop expanding loops after this many actions
+MAX_LOOP_ROUNDS = 1000000  # (security) loop rounds in all, also rounds that add nothing (else a file could freeze the app)
 
 
 class _AhkConverter:
@@ -338,6 +339,7 @@ class _AhkConverter:
         self.t = 0.0
         self.pos = None
         self.stopped = False
+        self.rounds = 0  # loop rounds so far (MAX_LOOP_ROUNDS)
         self.vars = {}  # number variables (x := 100, Random, ...)
         self.key_step = AHK_STEP  # SetKeyDelay
         self.mouse_step = AHK_STEP  # SetMouseDelay
@@ -461,8 +463,14 @@ def _ahk_run(stmts, conv):
                     count = 1
                     conv.note("A \"Loop\" count couldn't be worked out, so it was played once.")
                 else:
-                    count = max(0, int(value))
+                    try:
+                        count = max(0, int(value))
+                    except (OverflowError, ValueError):  # (an endless number: too often, see below)
+                        count = MAX_LOOP_ROUNDS + 1
             for _ in range(count):
+                conv.rounds += 1
+                if conv.rounds > MAX_LOOP_ROUNDS:
+                    raise ImportError_("This script loops too often to convert.")
                 _ahk_run(stmt[2], conv)
         elif stmt[0] == "block":
             _ahk_run(stmt[1], conv)

@@ -38,6 +38,8 @@ class CoreRecordingMixin:
             self.events = core.drop_stray_clicks(self.events)
             if len(self.events) != n:
                 diag.info(f"Left out {n - len(self.events)} mouse press(es) that were never let go of")
+            if getattr(self, "keys_left_out", 0):
+                diag.info(f"Left out {self.keys_left_out} key press(es) typed into other windows")
             diag.info(f"Recording stopped: {len(self.events)} actions"
                       + (f", program {self.macro_program['exe']}" if self.macro_program else ""))
         else:
@@ -113,6 +115,10 @@ class CoreRecordingMixin:
         self._show_made_for()
         self.paused = False
         self.paused_total = 0.0
+        self.record_exe = self._record_exe_now()
+        self.record_exe_of = {}  # (window -> program, fresh for each recording: Windows reuses window numbers)
+        self.keys_down_recorded = set()
+        self.keys_left_out = 0
         self.start_time = time.perf_counter()
         self.recording = True
         self._add_held_buttons()
@@ -210,6 +216,58 @@ class CoreRecordingMixin:
         except Exception:
             pass
 
+    # windows that never decide what a recording is for (the desktop, the taskbar, the Start menu)
+    RECORD_NOT_TARGET = {"explorer.exe", "searchhost.exe", "startmenuexperiencehost.exe", "shellexperiencehost.exe"}
+
+    def _record_exe_now(self):
+        """(security, 20 Nov 2026) The program this recording is for, when known at the start: the window chosen in
+        "Record in which window?". Else None, and the first real window you click or type into decides
+        (_record_lock); until then every key counts."""
+        w = getattr(self, "record_window", None) or {}
+        return None if w.get("desktop") else w.get("exe") or None
+
+    def _front_exe(self):
+        """(hwnd, program) of the window in front while recording; program None when unknown or this app."""
+        fg = None
+        try:
+            fg = window_tools.foreground()
+            cache = self.__dict__.setdefault("record_exe_of", {})
+            if fg not in cache:
+                if len(cache) > 200:
+                    cache.clear()
+                own = fg and window_tools.pid_of(fg) == os.getpid()
+                cache[fg] = window_tools.exe_of(fg) if fg and not own else None
+            return fg, cache[fg]
+        except Exception:
+            return fg, None
+
+    def _record_lock(self, here):
+        """The first real window you click or type into while recording is the one the recording is for."""
+        if not getattr(self, "record_exe", None) and here and str(here).lower() not in self.RECORD_NOT_TARGET \
+                and not (getattr(self, "record_window", None) or {}).get("desktop"):
+            self.record_exe = here
+            diag.info(f"Recording keys typed into {here} only")
+
+    def _key_for_recording(self, key, pressed):
+        """Keys typed into another window while recording (a password in Discord, a browser) are left out;
+        a key let go of is kept when its press was."""
+        down = self.__dict__.setdefault("keys_down_recorded", set())
+        ident = repr(core.key_to_data(key))
+        if not pressed and ident in down:
+            down.discard(ident)
+            return True
+        _fg, here = self._front_exe()
+        if pressed:
+            self._record_lock(here)
+        exe = getattr(self, "record_exe", None)
+        if exe and here and str(here).lower() != str(exe).lower():
+            if pressed:
+                self.keys_left_out = getattr(self, "keys_left_out", 0) + 1
+            return False
+        if pressed:
+            down.add(ident)
+        return True
+
     def _recorded_program(self):
         if not self.window_samples:
             return None
@@ -256,6 +314,7 @@ class CoreRecordingMixin:
             self._add({"type": "click", "x": x, "y": y, "button": button.name, "pressed": pressed})
             if pressed:
                 self._note_window()
+                self._record_lock(self._front_exe()[1])
 
     def _on_scroll(self, x, y, dx, dy):
         if self._capturing() and not self._on_own_window(x, y):
@@ -312,7 +371,7 @@ class CoreRecordingMixin:
             }[action]
             self._call_ui(handler)
             return
-        if self._capturing():
+        if self._capturing() and self._key_for_recording(key, True):
             self._add({"type": "key", "key": core.key_to_data(key), "pressed": True})
             self._note_window()
 
@@ -320,5 +379,5 @@ class CoreRecordingMixin:
         self._emergency_key(key, False)
         if self._hotkey_action(key) is not None:
             return
-        if self._capturing():
+        if self._capturing() and self._key_for_recording(key, False):
             self._add({"type": "key", "key": core.key_to_data(key), "pressed": False})

@@ -132,6 +132,9 @@ class CoreStepsMixin:
             if bg is not None:
                 self._replay_event_bg(bg, ev, held_keys)
             else:
+                gone = self._key_guard(ev, ctx["away"], held_keys, held_buttons)
+                if gone:
+                    return gone
                 self._replay_event(ev, held_keys, held_buttons)
             if ev.get("pause"):
                 result = self._pause(ev["pause"], ctx)
@@ -250,6 +253,9 @@ class CoreStepsMixin:
             if bg is not None:
                 self._replay_event_bg(bg, ev, held_keys)
             else:
+                gone = self._key_guard(ev, away, held_keys, held_buttons)
+                if gone:
+                    return gone
                 self._replay_event(ev, held_keys, held_buttons)
         return "ok"
 
@@ -273,6 +279,34 @@ class CoreStepsMixin:
     def _run_finished(self, count, how):
         """One run of the macro is over (how: "end" = it played to the end, "picture" = picture watch).
         The dark window sends a Discord message here, if that's set up."""
+
+    @staticmethod
+    def _opens_start(ev, held_keys):
+        """The Windows key, or Esc while Ctrl is held (both open the Start menu)."""
+        import step_more
+
+        if step_more.is_win_key(ev.get("key")):
+            return True
+        ctrls = {keyboard.Key.ctrl, keyboard.Key.ctrl_l, keyboard.Key.ctrl_r}
+
+        def ctrl_down(k):  # (a file can write Ctrl as a plain key code: look at the code too)
+            vk = getattr(k, "vk", None) or getattr(getattr(k, "value", None), "vk", None)
+            return k in ctrls or vk in step_more.CTRL_VKS
+
+        return step_more.is_esc_key(ev.get("key")) and any(ctrl_down(k) for k in held_keys)
+
+    def _key_guard(self, ev, away, held_keys, held_buttons):
+        """(security, 20 Nov 2026) Right before a key goes down: the game must be in front NOW (the usual
+        check allows a moment for windows changing hands, long enough for a macro to type into a box it just
+        opened). Not in front: playback pauses until it is. Returns what the usual check would ("stop",
+        "gameback") or None to go on."""
+        guard = getattr(away, "before_key", None)
+        if guard is None or ev.get("type") != "key" or not ev.get("pressed"):
+            return None
+        gone = guard(held_keys, held_buttons)
+        if gone:
+            return gone if gone == "gameback" else "stop"
+        return None
 
     def _replay_event(self, ev, held_keys, held_buttons):
         if getattr(self, "ghost", False):
@@ -306,6 +340,8 @@ class CoreStepsMixin:
             key = core.data_to_key(ev["key"])
             if key is None:
                 return  # a key this computer doesn't have
+            if ev["pressed"] and not getattr(self, "allow_sensitive", True) and self._opens_start(ev, held_keys):
+                return  # (security: a macro from someone else you said No to doesn't open the Start menu)
             if ev["pressed"]:
                 self.kb_ctrl.press(key)
                 held_keys.add(key)
