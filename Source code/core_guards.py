@@ -413,11 +413,12 @@ class CoreGuardsMixin:
                 state["since"] = None
                 return False
             if strict:  # (a key is about to go down: no moment of grace, see before_key)
+                # (no grace sum here: now - (now - grace) can come out a hair under grace and skip the pause)
                 state["since"] = now - core.AWAY_GRACE
-            if state["since"] is None:
+            elif state["since"] is None:
                 state["since"] = now
                 return False
-            if now - state["since"] < core.AWAY_GRACE:
+            elif now - state["since"] < core.AWAY_GRACE:
                 return False
             # pause: let go of everything, and wait for the game to come back
             self._release_held(None, held_keys, held_buttons)

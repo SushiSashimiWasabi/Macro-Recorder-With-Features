@@ -211,6 +211,18 @@ check("needs your OK: both Ctrl keys down, the right one let go, then Esc",
       step_more.SENSITIVE_WINKEY in step_more.sensitive_parts(workflow.from_events(
           [key({"special": "ctrl_l"}, True), key({"special": "ctrl_r"}, True), key({"special": "ctrl_r"}, False),
            key({"special": "esc"}, True), key({"special": "esc"}, False), key({"special": "ctrl_l"}, False)])))
+check("needs your OK: Ctrl let go of as CTRL_L (playback skips that let-go), then Esc",  # (2.14.6)
+      step_more.SENSITIVE_WINKEY in step_more.sensitive_parts(workflow.from_events(
+          [key({"special": "ctrl_l"}, True), key({"special": "CTRL_L"}, False),
+           key({"special": "esc"}, True), key({"special": "esc"}, False)])))
+check("needs your OK: a let-go written another way than its press counts as still held (the safe side)",
+      step_more.SENSITIVE_WINKEY in step_more.sensitive_parts(workflow.from_events(
+          [key({"vk": 162}, True), key({"special": "ctrl_l"}, False), key({"special": "esc"}, True)])))
+try:  # (a key name written as a list in a made-up file must not break the check)
+    odd = step_more.opens_start([key({"special": ["x"], "vk": 162}, True), key({"special": "esc"}, True)])
+except Exception as exc:
+    odd = repr(exc)
+check("a key name that isn't text: still checked, no crash", odd is True, odd)
 k_down = workflow.new_action("key")
 k_down.update(key={"special": "ctrl_l"}, mode="down")
 k_esc = workflow.new_action("key")
@@ -294,6 +306,23 @@ try:
           said is False and waited >= 0.35, (said, round(waited, 2)))
     both = core.combine_checks(watch, lambda hk, hb: False)
     check("the check survives being combined with the stuck run guard", getattr(both, "before_key", None) is not None)
+
+    # (2.14.6) on a PC that has been on for days the clock is a big number, and now - (now - grace) came out a hair
+    # under grace: the check let the key through at once (failed the GitHub run of 2.14.5)
+    real_pc = time.perf_counter
+    start_pc = real_pc()
+    time.perf_counter = lambda: 100000.0 + (real_pc() - start_pc)
+    try:
+        watch = app._away_watcher(None)
+        front["hwnd"] = 2
+        threading.Timer(0.4, lambda: front.__setitem__("hwnd", 1)).start()
+        t0 = time.time()
+        said = watch.before_key(set(), set())
+        waited = time.time() - t0
+    finally:
+        time.perf_counter = real_pc
+    check("right before a key, with a big clock number: still pauses until the game is back",
+          said is False and waited >= 0.35, (said, round(waited, 2)))
 
     # in playback: nothing is typed while another window is in front
     calls = []

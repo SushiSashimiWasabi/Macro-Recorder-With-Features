@@ -1,12 +1,18 @@
 # The app's version. Raising it (and pushing to main) makes GitHub publish a new Release,
 # which every copy of the app offers to install when it starts.
-APP_VERSION = "2.14.5"
+APP_VERSION = "2.14.6"
 
 # Every version, newest first: (version, the day it was finalized, changes). The newest is shown once after an update;
 # Settings > About > What's new shows them all. Each change is one paragraph (shown as a bullet).
 # Version numbers started at 2.1 (the first one that could update itself); the earlier steps have
 # names instead.
 HISTORY = [
+    ("2.14.6", "Finalized 20 November 2026", [
+        "Safer play: when another window comes in front, the macro now pauses right before its next key, every time. "
+        "Before, on a PC that had been on for a while, it often still waited the usual moment first.",
+        "Safer macros from someone else: a file that lets go of Ctrl with a different spelling can no longer slip past "
+        "the \"presses the Windows key\" question. (2.14.5 was never released; its change is in this version.)",
+    ]),
     ("2.14.5", "Finalized 20 November 2026", [
         "Safer macros from someone else: a macro that holds Ctrl in one action and presses Esc in a later one (Ctrl+Esc "
         "opens the Start menu) now asks first, like one that presses the Windows key. Say No and it plays without "

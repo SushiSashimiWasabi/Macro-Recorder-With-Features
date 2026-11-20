@@ -478,7 +478,9 @@ def opens_start(events):
         if is_win_key(key) and pressed:
             return True
         if is_ctrl_key(key):
-            name = (str(key.get("special", "")).lower(), vk_of(key))
+            # (2.14.6) the key as playback reads it (core.data_to_key): "special" exactly as written, else the code;
+            # a let-go written another way ("CTRL_L") is skipped by playback, so it doesn't count as one here either
+            name = ("special", str(key["special"])) if "special" in key else ("vk", str(vk_of(key)))
             if pressed:
                 held.add(name)
             else:
