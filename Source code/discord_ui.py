@@ -4,12 +4,15 @@ message editor window.
 Part of the dark window: ModernMacroRecorder (modern_ui.py) inherits this class.
 """
 
+import threading
 import time
 
 from ui_common import *  # noqa: F401,F403  (colours, fonts, widgets, tk, core, the other modules)
 
 
 class DiscordMixin:
+    _shot_lock = threading.Lock()
+
     DISCORD_HELP = (
         "Get messages in your own Discord channel while a macro runs, for example on your phone while "
         "you're away.\n\n"
@@ -204,18 +207,27 @@ class DiscordMixin:
         """The screenshot for Discord, taken right now as chosen in Settings > Discord (a picture; the
         sending thread packs it as JPG, so the macro isn't held up). This app's own windows (the main
         window, the timer at the top, the video) are left out of it, so it shows only the game."""
+        return self._screenshot_with_note()[0]
+
+    def _screenshot_with_note(self):
+        """(picture, how it was taken, fell_back): fell_back is True when the game's window was asked for but the
+        main screen was taken instead (the log says why)."""
         target = self.settings.get("discord_capture", "screen")
         exe = ((self.macro_program or {}).get("exe") or getattr(self, "play_game_exe", None)
                or self.settings.get("last_game_exe"))
-        # (only our windows that are in the picture: none there, no wait)
-        hidden = window_tools.hide_own_windows_from_capture(True, discord_notify.grab_area(target, exe))
-        try:
-            if hidden:
-                time.sleep(0.06)  # (Windows needs a moment to take them out of the picture)
-            return discord_notify.grab(target, exe)
-        finally:
-            if hidden:
-                window_tools.hide_own_windows_from_capture(False)
+        with self._shot_lock:  # (one at a time: the first to finish would show our windows again in the other's picture)
+            # (only our windows that are in the picture: none there, no wait)
+            hidden = window_tools.hide_own_windows_from_capture(True, discord_notify.grab_area(target, exe))
+            try:
+                if hidden:
+                    time.sleep(0.06)  # (Windows needs a moment to take them out of the picture)
+                shot = discord_notify.grab_how(target, exe)
+            finally:
+                if hidden:
+                    window_tools.hide_own_windows_from_capture(False)
+        if shot[2]:
+            core.diag.info("Screenshot: " + shot[1])
+        return shot
 
     def _ping_for(self, problem, dropped=False):
         s = self.settings

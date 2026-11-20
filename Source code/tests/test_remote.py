@@ -366,10 +366,16 @@ app.unsaved = False
 # the screenshot
 import numpy as np  # noqa: E402
 
-app._screenshot = lambda: np.zeros((40, 60, 3), np.uint8)
+app._screenshot_with_note = lambda: (np.zeros((40, 60, 3), np.uint8), "main screen", False)
 out = run(cmd("screenshot", kind=3))
 check("screenshot: first 'working on it', then the picture", out[0] == (R.DEFER_REPLY, None)
       and out[1][0] == "edit" and out[1][2][:2] == b"\xff\xd8", [o[0] for o in out])
+check("screenshot: a normal one says only the time", out[1][1]["content"].startswith("Screenshot at ")
+      and "whole screen" not in out[1][1]["content"], out[1][1])
+app._screenshot_with_note = lambda: (np.zeros((40, 60, 3), np.uint8), "game window not found, main screen taken", True)
+out = run(cmd("screenshot", kind=3))
+check("screenshot: when the game window wasn't found the reply says it is the whole screen",
+      "whole screen" in out[1][1]["content"] and out[1][2][:2] == b"\xff\xd8", out[1][1])
 
 # a window's thread that's busy: Discord still gets an answer in time, the result follows
 slow = app._remote_act

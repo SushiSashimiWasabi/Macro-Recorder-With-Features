@@ -190,7 +190,9 @@ class TourMixin:
         try:
             self.tour_first_scan()
         finally:
-            self.root.after(1500, self.tour_first_tick)
+            seen = self.settings.get("tours_seen")
+            if not (isinstance(seen, list) and all(n in seen for n in TOURS if n != "main")):  # (all shown: stop looking)
+                self.root.after(1500, self.tour_first_tick)
 
     def _tour_host(self, which):
         """The window a tour is about (None when it isn't open)."""

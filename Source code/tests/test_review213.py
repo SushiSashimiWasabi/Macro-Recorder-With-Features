@@ -680,6 +680,18 @@ check("game file: nothing like it nearby gives None",
 check("game file: a folder without the file is skipped",
       window_tools.moved_game_file(os.path.join(vers, "version-gone", "Other.exe")) is None)
 
+# a missing file in an ordinary folder must never be swapped for another program that has the same file name
+os.makedirs(os.path.join(tmp, "Games"), exist_ok=True)
+os.makedirs(os.path.join(tmp, "OtherApp"), exist_ok=True)
+open(os.path.join(tmp, "OtherApp", "Game.exe"), "w").close()
+check("game file: a gone file in a folder that isn't a Versions folder is never swapped for another program",
+      window_tools.moved_game_file(os.path.join(tmp, "Games", "Game.exe")) is None,
+      window_tools.moved_game_file(os.path.join(tmp, "Games", "Game.exe")))
+# links and program names are not files: no "it's gone" note for them
+for link in ("roblox-player:1+launchmode:play", "notepad.exe", "roblox://x"):
+    check(f"game open: '{link}' is a link or a program name, not a gone file",
+          app._game_open_target({"open": link, "follow": True}) == (link, ""), app._game_open_target({"open": link, "follow": True}))
+
 app.settings["game_closed"] = {"action": "reopen", "open": gone, "macro": "", "tries": 1, "settle": 0}
 check("game closed: 'use the newest' is on unless turned off", app._closed_settings()["follow"] is True)
 target, note = app._game_open_target(app._closed_settings())
@@ -732,6 +744,13 @@ cw.save()
 pump(3)
 check("game closed window: the switch is saved", app.settings["game_closed"].get("follow") is False
       and app._closed_settings()["follow"] is False, app.settings.get("game_closed"))
+app.settings["game_closed"] = {"action": "reopen", "open": newest, "macro": "", "tries": 1, "settle": 0, "open_wait": 300}
+cw = app.open_game_closed()
+pump(3)
+cw.save()
+pump(3)
+check("game closed window: Save keeps a hand-set 'open_wait'", app.settings["game_closed"].get("open_wait") == 300,
+      app.settings.get("game_closed"))
 app.settings.pop("game_closed", None)
 
 # ---------------------------------------------------------------- every tour starts by itself the first time
@@ -770,6 +789,41 @@ pump(3)
 app.tours_auto = False
 app.tour_first_scan()
 check("tours: switched off outside the real app (tests stay quiet)", app.tour_win is None)
+ticks = []
+real_after = app.root.after
+app.root.after = lambda ms, fn=None, *a: ticks.append(ms) or "id"
+try:
+    app.settings["tours_seen"] = [n for n in tour_ui.TOURS if n != "main"]
+    app.tour_first_tick()
+    check("tours: once every tour was shown the scanner stops (no timer left running)", ticks == [], ticks)
+    app.settings["tours_seen"] = []
+    app.tour_first_tick()
+    check("tours: while one is still to show the scanner keeps looking", len(ticks) == 1, ticks)
+finally:
+    app.root.after = real_after
+    app.tours_auto = False
+    app.settings.pop("tours_seen", None)
+
+# ---------------------------------------------------------------- Discord screenshots say when the game window wasn't found
+import discord_notify  # noqa: E402
+
+logged = []
+real_info, real_how, real_hide = core.diag.info, discord_notify.grab_how, window_tools.hide_own_windows_from_capture
+core.diag.info = lambda msg, *a, **k: logged.append(str(msg))
+window_tools.hide_own_windows_from_capture = lambda *a, **k: False
+try:
+    discord_notify.grab_how = lambda target, exe: ("PIC", "game window not found, main screen taken", True)
+    pic, how, fell = app._screenshot_with_note()
+    check("screenshot: the app gives the picture, how it was taken, and that it fell back",
+          (pic, fell) == ("PIC", True) and "not found" in how, (pic, how, fell))
+    check("screenshot: a fallback is logged (so a report shows it)", any("Screenshot:" in m and "not found" in m for m in logged), logged)
+    check("screenshot: _screenshot() still gives only the picture", app._screenshot() == "PIC")
+    logged.clear()
+    discord_notify.grab_how = lambda target, exe: ("PIC2", "game window (RobloxPlayerBeta.exe, 2560x1369)", False)
+    pic, how, fell = app._screenshot_with_note()
+    check("screenshot: a normal one is not logged here (the remote logs its own)", not fell and not any("Screenshot:" in m for m in logged), logged)
+finally:
+    core.diag.info, discord_notify.grab_how, window_tools.hide_own_windows_from_capture = real_info, real_how, real_hide
 
 # ---------------------------------------------------------------- small things
 import tour_ui  # noqa: E402

@@ -24,6 +24,7 @@ import re
 import threading
 import time
 
+import counters
 import macro_steps as workflow
 
 # ---------------------------------------------------------------- what Edit offers
@@ -622,8 +623,7 @@ class StepMoreMixin:
         return counters[name]
 
     def _set_counter(self, name, value):
-        with self._counter_lock:
-            self.__dict__.setdefault("counters", {})[name] = value
+        counters.set_value(self.__dict__.setdefault("counters", {}), self._counter_lock, name, value)
 
     def _operand_value(self, o):
         if isinstance(o, dict) and "counter" in o:

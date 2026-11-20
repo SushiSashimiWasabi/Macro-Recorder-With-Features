@@ -2,14 +2,14 @@
 being played or recorded ("W", "Shift + E", "Left click"), for videos and for checking a macro.
 
 Settings > Playback > "Show keys on screen" (setting keys_on_screen, off at first; keys_corner). The box lets
-clicks through and never takes the keyboard. It shows in screen recordings, and Picture watch / colour
-checks don't see it (its place is blacked out of their screenshots: own_windows)."""
+clicks through and never takes the keyboard. It shows in screen recordings. Picture watch / colour checks
+see the game through it: its place is NOT blacked out of their screenshots (a banner under a black patch
+read as "unknown", 20 Nov 2026); it is small and holds only text."""
 import collections
 import time
 import tkinter as tk
 
 import macro_steps as workflow
-import own_windows
 from ui_common import *  # noqa: F401,F403
 
 CORNERS = {"bottom_right": "Bottom right", "bottom_left": "Bottom left", "top_right": "Top right",
@@ -109,9 +109,8 @@ class KeysOverlay:
         self._ignore((x, y, x + width, y + height))
 
     def _ignore(self, rect):
-        """Picture watch and colour checks don't look at the box."""
+        """Where the box is now (None: gone). Not given to own_windows: it must not black out the game."""
         self.rect = rect
-        own_windows.set_rect("keys", rect)
 
     def _click_through(self):
         if self.made_through or not IS_WIN:

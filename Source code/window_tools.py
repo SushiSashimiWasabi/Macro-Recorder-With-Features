@@ -154,6 +154,8 @@ def moved_game_file(path):
     if not path or "://" in path or os.path.exists(path):
         return path
     versions = os.path.dirname(os.path.dirname(path))
+    if os.path.basename(versions).lower() != "versions":  # (never swap it for another program with the same file name)
+        return None
     try:
         found = [os.path.join(versions, d, os.path.basename(path)) for d in os.listdir(versions)]
         found = [p for p in found if os.path.isfile(p)]

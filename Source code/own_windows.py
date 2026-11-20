@@ -1,9 +1,10 @@
 """The app's own windows that must not count as "seen" by the macro (2.13 review, candidate C).
 
-The timer at the top, the "Bring it to front" button, the keys-on-screen box and the guided tour all sit
-on top of the screen the macro looks at. Each one tells this module where it is (set_rect, from the Tk
-thread; None when it goes away), and every screenshot Picture watch, Wait for a picture, colour checks and
-the results look at has those places blacked out (blank, from any thread): a plain black area never matches.
+The timer at the top, the "Bring it to front" button and the guided tour sit on top of the screen the macro
+looks at. Each one tells this module where it is (set_rect, from the Tk thread; None when it goes away), and
+every screenshot Picture watch, Wait for a picture, colour checks and the results look at has those places
+blacked out (blank, from any thread): a plain black area never matches. The keys-on-screen box is NOT in this
+list on purpose: a black patch over the game hid the MISSION COMPLETED banner and runs read "unknown" (20 Nov 2026).
 
 The main window has its own rectangle in MacroRecorder._hide_own_window. Discord's screenshot uses Windows'
 "exclude from capture" instead (window_tools.hide_own_windows_from_capture), which is a different job: that

@@ -440,12 +440,13 @@ check("keys: the box shows in its corner", ov.win.winfo_viewable() and ov.label.
       and ov.win.winfo_rootx() > root.winfo_screenwidth() // 2)
 import own_windows  # noqa: E402
 
-check("keys: Picture watch doesn't look at it", ov.rect in own_windows.rects_by_name().values())
+check("keys: Picture watch sees the game through it (a banner under a black patch read as unknown)",
+      ov.rect is not None and ov.rect not in own_windows.rects_by_name().values())
 img = image_watch.np.full((50, 50, 3), 255, image_watch.np.uint8)
 own_windows.set_rect("test", (10, 10, 20, 20))
 own_windows.blank(img)
 own_windows.set_rect("test", None)
-check("keys: its place is black in Picture watch's screenshots", img[15, 15].sum() == 0 and img[5, 5].sum() == 765)
+check("own windows: a registered place is black in Picture watch's screenshots", img[15, 15].sum() == 0 and img[5, 5].sum() == 765)
 ov.hide()
 pump()
 check("keys: hidden after", not ov.win.winfo_viewable() and ov.rect is None)

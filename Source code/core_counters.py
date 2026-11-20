@@ -2,6 +2,7 @@
 
 Part of the core MacroRecorder class (split out of macro_recorder.py in 2.13): its methods are
 unchanged; a name that lives in macro_recorder itself is written core.name."""
+import counters
 import diag
 import macro_steps as workflow
 import os
@@ -12,7 +13,7 @@ import macro_recorder as core
 
 
 class CoreCountersMixin:
-    COUNTER_MAX = 10 ** 9
+    COUNTER_MAX = counters.COUNTER_MAX
 
     COUNT_EVERY = 0.5
 
@@ -101,25 +102,22 @@ class CoreCountersMixin:
     def _count_now(self, p, label):
         name = workflow.clean_counter_name(p.get("counter"))
         amount = workflow.clean_whole(p.get("amount"), 1)
-        counters = self.__dict__.setdefault("counters", {})
-        with self._counter_lock:
-            counters[name] = max(-self.COUNTER_MAX, min(self.COUNTER_MAX, counters.get(name, 0) + amount))
+        now = counters.add(self.__dict__.setdefault("counters", {}), self._counter_lock, name, amount)
         diag.info(f"Picture watch: {label} showed: counter \"{name}\" {'+' if amount >= 0 else ''}{amount} "
-                  f"(now {counters[name]})")
+                  f"(now {now})")
 
     def _counter_step(self, a, ctx):
         kind = a.get("kind")
         name = workflow.clean_counter_name(a.get("counter"))
-        counters = self.__dict__.setdefault("counters", {})
-        with self._counter_lock:
-            now = counters.get(name, 0)
-            if kind == "counter_add":
-                counters[name] = max(-self.COUNTER_MAX, min(self.COUNTER_MAX,
-                                                            now + workflow.clean_whole(a.get("amount"), 1)))
-            elif kind == "counter_set":
-                counters[name] = workflow.clean_whole(a.get("value"), 0)
-        if kind in ("counter_add", "counter_set"):
+        values = self.__dict__.setdefault("counters", {})
+        if kind == "counter_add":
+            counters.add(values, self._counter_lock, name, workflow.clean_whole(a.get("amount"), 1))
             return "ok"
+        if kind == "counter_set":
+            counters.set_value(values, self._counter_lock, name, workflow.clean_whole(a.get("value"), 0))
+            return "ok"
+        with self._counter_lock:
+            now = values.get(name, 0)
         self.last_if_true = now >= workflow.clean_whole(a.get("at_least"), 1)
         if self.last_if_true:  # "if_counter"
             return self._run_steps(a.get("actions", []), ctx)

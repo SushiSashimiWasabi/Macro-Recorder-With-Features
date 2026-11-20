@@ -313,7 +313,7 @@ class CoreGuardsMixin:
         """(what to open, a note). A saved game file that is gone after an update is swapped for the newest one in
         its place when "use the newest" is on (the default); the note says what happened ("" = all fine)."""
         path = opts["open"]
-        if not path or "://" in path or os.path.exists(path):
+        if not os.path.isabs(path) or os.path.exists(path):  # (a link or a program name is not a file that can be gone)
             return path, ""
         found = window_tools.moved_game_file(path) if opts.get("follow", True) else None
         gone = f"The game file you saved ({os.path.basename(os.path.dirname(path))}) isn't there any more"

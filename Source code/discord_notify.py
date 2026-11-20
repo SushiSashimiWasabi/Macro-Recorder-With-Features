@@ -171,6 +171,12 @@ def grab(target=CAPTURE_SCREEN, game_exe=None):
     """The main screen, all screens, the game's window or a chosen program's window, as a picture
     (quick: shrinking and packing it is left for later, off the playback thread). A window that can't
     be found (closed, minimized) falls back to the main screen. None if no screenshot is possible."""
+    return grab_how(target, game_exe)[0]
+
+
+def grab_how(target=CAPTURE_SCREEN, game_exe=None):
+    """(picture, how it was taken, fell_back). fell_back is True when a window was asked for (the game's or a
+    chosen program's) but it wasn't there, or had no usable inside, so the main screen was taken instead."""
     try:
         import numpy as np
 
@@ -180,6 +186,9 @@ def grab(target=CAPTURE_SCREEN, game_exe=None):
         img = None
         target = target or CAPTURE_SCREEN
         exe = game_exe if target == CAPTURE_GAME else (target[8:] if target.startswith("program:") else None)
+        wanted = target == CAPTURE_GAME or target.startswith("program:")
+        label = "game window" if target == CAPTURE_GAME else f"{exe} window"
+        how = "main screen"
         if exe:
             wins = window_tools.windows_of(exe)
             rect = window_tools.client_rect(wins[0]) if wins else None
@@ -188,15 +197,30 @@ def grab(target=CAPTURE_SCREEN, game_exe=None):
                 with image_watch.mss.mss() as sct:
                     shot = sct.grab({"left": x, "top": y, "width": w, "height": h})
                 img = np.ascontiguousarray(np.asarray(shot)[:, :, :3])
+                how = f"{label} ({exe}, {w}x{h})" if target == CAPTURE_GAME else f"{label} ({w}x{h})"
+            elif wins:
+                how = f"{label} has no usable inside (minimized?), main screen taken"
+            else:
+                how = f"{label} not found, main screen taken"
+        elif wanted:
+            how = "no game window known, main screen taken"
         elif target == CAPTURE_ALL:
             with image_watch.mss.mss() as sct:
                 shot = sct.grab(sct.monitors[0])
             img = np.ascontiguousarray(np.asarray(shot)[:, :, :3])
+            how = "all screens"
+        fell_back = wanted and img is None
         if img is None:
             img = image_watch.grab_screen()
-        return img
+        return img, how, fell_back
     except Exception:
-        return None
+        return None, "screenshot failed", False
+
+
+def shot_caption(stamp, fell_back):
+    """The words with a screenshot in a Discord reply (the phone remote)."""
+    text = "Screenshot at " + stamp
+    return text + " (game window not found: this is the whole screen)" if fell_back else text
 
 
 def grab_area(target=CAPTURE_SCREEN, game_exe=None):

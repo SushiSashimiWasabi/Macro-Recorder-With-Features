@@ -612,10 +612,11 @@ class RemoteMixin:
             return
         if name == "screenshot":
             R.respond(it, R.DEFER_REPLY)
-            diag.info("Phone remote: screenshot")
-            picture = discord_notify.encode(self._screenshot(), size=self.settings.get("discord_shot_size", "sharp"))
+            shot, how, fell_back = self._screenshot_with_note()
+            diag.info(f"Phone remote: screenshot ({how})")
+            picture = discord_notify.encode(shot, size=self.settings.get("discord_shot_size", "sharp"))
             if picture:
-                R.edit_reply(it, {"content": "Screenshot at " + time.strftime("%H:%M:%S")}, picture)
+                R.edit_reply(it, {"content": discord_notify.shot_caption(time.strftime("%H:%M:%S"), fell_back)}, picture)
             else:
                 R.edit_reply(it, {"content": "Couldn't take a screenshot."})
             return

@@ -479,7 +479,9 @@ class PictureActionsMixin:
                     return int(float(var.get().strip()))
                 except ValueError:
                     return default
-            new = {"action": action, "on": opts["on"], "open": open_var.get().strip(), "macro": macro,
+            saved = self.settings.get("game_closed")  # (keeps what has no box here, like a hand-set "open_wait")
+            new = {**(saved if isinstance(saved, dict) else {}),
+                   "action": action, "on": opts["on"], "open": open_var.get().strip(), "macro": macro,
                    "tries": max(1, min(20, whole(tries_var, 3))), "settle": max(0, min(600, whole(settle_var, 20))),
                    "follow": bool(follow_var.get())}
             if action == "wait" and not new["open"] and not macro and new["on"]:

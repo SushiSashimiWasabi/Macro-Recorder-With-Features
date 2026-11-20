@@ -3,7 +3,9 @@
 Part of the core MacroRecorder class (split out of macro_recorder.py in 2.13): its methods are
 unchanged; a name that lives in macro_recorder itself is written core.name."""
 import diag
+import late_results
 import os
+import own_windows
 import run_history
 import stats
 import threading
@@ -27,6 +29,7 @@ class CoreResultsMixin:
         results, then tell _run_finished."""
         status = stats.UNKNOWN
         if self.result_matchers:
+            self.last_result_scores = {}
             began_wall, began_clock = getattr(self, "run_began", (time.perf_counter(), self._play_clock()))
             status = self._run_result(began_wall)
             if status == stats.UNKNOWN and any(self._kinds_found().values()):
@@ -37,6 +40,9 @@ class CoreResultsMixin:
                 # after the next run has started
                 self.result_consumed = (status, time.perf_counter())
             seconds = self._play_clock() - began_clock
+            if status == stats.UNKNOWN:  # (so a report says why, not only that it was unknown)
+                need = self.settings.get("results_match", core.RESULTS_MATCH_DEFAULT) / 100.0
+                diag.info(f"Run {count} ended unknown: " + self._unknown_reason(self.last_result_scores, need))
         else:
             seconds = self._play_clock() - getattr(self, "run_began", (0, self._play_clock()))[1]
         if status in (stats.WIN, stats.LOSS):
@@ -63,10 +69,7 @@ class CoreResultsMixin:
         times = [s for st, s in self.session.runs if st in (stats.WIN, stats.LOSS)][-10:]
         if not times:
             times = [r["s"] for r in run_history.runs(name) if r.get("status") in ("win", "loss")][-10:]
-        if not times:
-            return core.LATE_RESULT_SECONDS
-        usual = sorted(times)[len(times) // 2]
-        return max(1.0, min(core.LATE_RESULT_SECONDS, usual / 2))
+        return late_results.window(times, core.LATE_RESULT_SECONDS)
 
     def _give_late_result(self, kind, now=None, late=None):
         """(2.12) A result showed: if the run before ended Unknown less than LATE_RESULT_SECONDS ago,
@@ -74,15 +77,10 @@ class CoreResultsMixin:
         now = time.perf_counter() if now is None else now
         with self._late_lock:
             late = late or getattr(self, "late_result", None)
-            if kind not in (stats.WIN, stats.LOSS) or not late or late.get("given") \
-                    or now - late["ended"] > late.get("window", core.LATE_RESULT_SECONDS):
+            if not late_results.due(late, kind, now, core.LATE_RESULT_SECONDS):
                 return False
             late["given"] = True
-        i = late["index"]
-        runs = self.session.runs
-        if 0 <= i < len(runs) and runs[i][0] == stats.UNKNOWN:
-            runs[i] = (kind, runs[i][1])
-            self.session.streak = self.session.streak + 1 if kind == stats.WIN else 0
+        late_results.apply(self.session, late, kind)
         if late.get("run") is not None:
             run_history.correct(late["run"], kind)
             threading.Thread(target=run_history.save, daemon=True, name="save-runs").start()
@@ -99,13 +97,11 @@ class CoreResultsMixin:
         with self._late_lock:
             late = getattr(self, "late_result", None)
             self.late_result = None
-        if not late or not self.result_matchers or seconds >= late.get("window", core.LATE_RESULT_SECONDS):
+        if not self.result_matchers or not late_results.is_leftover(late, seconds, core.LATE_RESULT_SECONDS):
             return False
         if not late.get("given") and not self._give_late_result(status, late=late):
             return False
-        i = late["index"]
-        if fragments and 0 <= i < len(self.session.fragments):
-            self.session.fragments[i] += int(fragments)
+        if late_results.add_fragments(self.session, late, fragments):
             if late.get("run") is not None:
                 run_history.correct(late["run"], late["run"]["status"], fragments)
         diag.info(f"The short run after run {late['count']} ({seconds:.0f} s) isn't counted: it was only "
@@ -166,6 +162,7 @@ class CoreResultsMixin:
             best = self._result_scores(screen, need, whole=whole)
             if region is not None:
                 self._unfound_kinds_in(screen, region, need, best)
+            self.last_result_scores = dict(best)
             kind = self._best_result(best, need)
             since = st.get(kind, {}).get("since") if kind else None
             # (a picture already showing before this run started belongs to the run before; one given
@@ -175,6 +172,18 @@ class CoreResultsMixin:
         except Exception as exc:
             diag.error("Couldn't check the result picture", exc)
         return stats.UNKNOWN
+
+    def _unknown_reason(self, scores, need):
+        """Why a run's result stayed unknown: the best score of each result picture against what it needs, and which
+        of this app's own windows were blacked out of the screenshot (a banner under one can't match)."""
+        if scores:
+            seen = ", ".join(f"{self.RESULT_TITLES.get(k, k)} {round(v * 100)}%"
+                             for k, v in sorted(scores.items(), key=lambda kv: -kv[1]))
+            text = f"best match {seen} (needs {round(need * 100)}%)"
+        else:
+            text = f"no result picture was matched at the end of the run (needs {round(need * 100)}%)"
+        blanked = ", ".join(f"{name} {rect}" for name, rect in own_windows.rects_by_name().items())
+        return text + "; own windows blacked out of the screenshot: " + (blanked or "none")
 
     def _unfound_kinds_in(self, screen, region, need, best):
         """A kind never found yet (like MISSION FAILED) usually shows where the other one did: look

@@ -675,13 +675,19 @@ def flush_settings():
             w["timer"] = None
         if text is None or w["written"].get(path) == text:
             return  # nothing new
+        tmp = path + ".tmp"
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w", encoding="utf-8") as f:
+            with open(tmp, "w", encoding="utf-8") as f:
                 f.write(text)
+            os.replace(tmp, path)  # (a crash half way leaves the old file whole, never a cut-off one)
             w["written"][path] = text
-        except Exception:
-            pass  # not being able to remember settings shouldn't stop the app
+        except Exception as exc:
+            diag.error("Couldn't save the settings", exc)  # (not being able to remember them shouldn't stop the app)
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 
 
 import atexit  # noqa: E402
