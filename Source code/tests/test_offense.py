@@ -197,9 +197,32 @@ check("needs your OK: a recording that presses Ctrl+Esc",
       step_more.SENSITIVE_WINKEY in step_more.sensitive_parts(workflow.from_events(ctrl_esc)))
 check("needs your OK: the Windows key as a VK number (other recorders' files)",
       step_more.SENSITIVE_WINKEY in step_more.sensitive_parts(workflow.from_events([key({"vk": 91}, True)])))
-check("no OK needed: Esc alone, Ctrl+C",
-      not step_more.sensitive_parts(workflow.from_events([key({"special": "esc"}, True), key({"special": "ctrl"}, True),
-                                                          key({"char": "c"}, True)])))
+check("no OK needed: Esc alone, Ctrl+C",  # (2.14.5: every key let go, as in a real recording)
+      not step_more.sensitive_parts(workflow.from_events([key({"special": "esc"}, True), key({"special": "esc"}, False),
+                                                          key({"special": "ctrl"}, True), key({"char": "c"}, True),
+                                                          key({"char": "c"}, False), key({"special": "ctrl"}, False),
+                                                          key({"special": "esc"}, True)])))
+# (2.14.5, automated security review) Ctrl held across steps, or by one Ctrl key while the other is let go
+held_ctrl = workflow.from_events([key({"special": "ctrl_l"}, True)])
+later_esc = workflow.from_events([key({"special": "esc"}, True), key({"special": "esc"}, False)])
+check("needs your OK: a recording that ends with Ctrl still held (a later step's Esc opens Start)",
+      step_more.SENSITIVE_WINKEY in step_more.sensitive_parts(held_ctrl + later_esc))
+check("needs your OK: both Ctrl keys down, the right one let go, then Esc",
+      step_more.SENSITIVE_WINKEY in step_more.sensitive_parts(workflow.from_events(
+          [key({"special": "ctrl_l"}, True), key({"special": "ctrl_r"}, True), key({"special": "ctrl_r"}, False),
+           key({"special": "esc"}, True), key({"special": "esc"}, False), key({"special": "ctrl_l"}, False)])))
+k_down = workflow.new_action("key")
+k_down.update(key={"special": "ctrl_l"}, mode="down")
+k_esc = workflow.new_action("key")
+k_esc.update(key={"special": "esc"})
+check("needs your OK: a Key action holding Ctrl down (an Esc anywhere later opens Start)",
+      step_more.SENSITIVE_WINKEY in step_more.sensitive_parts([k_down, k_esc]))
+k_mod = workflow.new_action("key")
+k_mod.update(key={"char": "a"}, mods=["ctrl"], mode="down")
+check("needs your OK: a Key action held down with Ctrl", step_more.SENSITIVE_WINKEY in step_more.sensitive_parts([k_mod]))
+k_tap = workflow.new_action("key")
+k_tap.update(key={"special": "ctrl_l"})
+check("no OK needed: Ctrl pressed and let go in its own step, then Esc", not step_more.sensitive_parts([k_tap, k_esc]))
 k = workflow.new_action("key")
 k.update(key={"char": "r"}, mods=["cmd"])
 check("needs your OK: a Key action with the Windows key held", step_more.SENSITIVE_WINKEY in step_more.sensitive_parts([k]))

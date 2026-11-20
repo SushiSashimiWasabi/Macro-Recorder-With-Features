@@ -1,12 +1,17 @@
 # The app's version. Raising it (and pushing to main) makes GitHub publish a new Release,
 # which every copy of the app offers to install when it starts.
-APP_VERSION = "2.14.4"
+APP_VERSION = "2.14.5"
 
 # Every version, newest first: (version, the day it was finalized, changes). The newest is shown once after an update;
 # Settings > About > What's new shows them all. Each change is one paragraph (shown as a bullet).
 # Version numbers started at 2.1 (the first one that could update itself); the earlier steps have
 # names instead.
 HISTORY = [
+    ("2.14.5", "Finalized 20 November 2026", [
+        "Safer macros from someone else: a macro that holds Ctrl in one action and presses Esc in a later one (Ctrl+Esc "
+        "opens the Start menu) now asks first, like one that presses the Windows key. Say No and it plays without "
+        "that Esc. A macro of yours that holds Ctrl may ask once too: say Yes and it won't ask again.",
+    ]),
     ("2.14.4", "Finalized 20 November 2026", [
         "Macro folders: renaming a folder to a name that's already there no longer saves that name twice (each copy "
         "counted toward the 50-folder limit).",

@@ -468,8 +468,9 @@ def is_esc_key(key):
 
 
 def opens_start(events):
-    """True when these recorded events press the Windows key, or Esc while Ctrl is held."""
-    ctrl = False
+    """True when these recorded events press the Windows key, press Esc while any Ctrl key is held, or end with a
+    Ctrl key still held (a later step's Esc would then open the Start menu)."""
+    held = set()  # (each Ctrl key on its own: letting go of the right one doesn't let go of the left one)
     for ev in events if isinstance(events, list) else []:
         if not isinstance(ev, dict) or ev.get("type") != "key":
             continue
@@ -477,10 +478,14 @@ def opens_start(events):
         if is_win_key(key) and pressed:
             return True
         if is_ctrl_key(key):
-            ctrl = pressed
-        elif ctrl and pressed and is_esc_key(key):
+            name = (str(key.get("special", "")).lower(), vk_of(key))
+            if pressed:
+                held.add(name)
+            else:
+                held.discard(name)
+        elif held and pressed and is_esc_key(key):
             return True
-    return False
+    return bool(held)
 
 
 def sensitive_parts(steps):
@@ -502,7 +507,10 @@ def sensitive_parts(steps):
             out.add(SENSITIVE_WINKEY)
         if kind == "key":
             mods = a.get("mods") if isinstance(a.get("mods"), list) else []
-            if is_win_key(a.get("key")) or "cmd" in mods or ("ctrl" in mods and is_esc_key(a.get("key"))):
+            # (a Ctrl kept down by one step and an Esc in a later one: steps can loop or jump, so any Ctrl held
+            # past its own step counts, wherever the Esc is)
+            if is_win_key(a.get("key")) or "cmd" in mods or ("ctrl" in mods and is_esc_key(a.get("key"))) or (
+                    a.get("mode") == "down" and ("ctrl" in mods or is_ctrl_key(a.get("key")))):
                 out.add(SENSITIVE_WINKEY)
         if (kind == "discord" and a.get("screenshot") is True) or \
                 (kind == "screenshot" and a.get("to") in ("discord", "both")):
