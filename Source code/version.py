@@ -1,12 +1,38 @@
 # The app's version. Raising it (and pushing to main) makes GitHub publish a new Release,
 # which every copy of the app offers to install when it starts.
-APP_VERSION = "2.13"
+APP_VERSION = "2.13.1"
 
 # Every version, newest first: (version, the day it was finalized, changes). The newest is shown once after an update;
 # Settings > About > What's new shows them all. Each change is one paragraph (shown as a bullet).
 # Version numbers started at 2.1 (the first one that could update itself); the earlier steps have
 # names instead.
 HISTORY = [
+    ("2.13.1", "Finalized 20 November 2026", [
+        "Keys on screen no longer hides the game from Picture watch. Before, the box could sit on top of the MISSION "
+        "COMPLETED title and the run counted as Unknown. The box is still shown in screen recordings.",
+        "If the game's file you saved in Settings > Playback > If the game closes is gone after a Roblox update, the "
+        "app now opens the newest copy in the same Versions folder (a new switch there, on at first). It says so in "
+        "an orange note, in Check my macro and in the log. Links and program names are never treated as a missing file.",
+        "Check my macro now tells you when a macro has no game window saved (so Play can't switch to the game), with a "
+        "link to Edit > Game window > Change…. Play also writes in the log which way it went.",
+        "Each window's tour (Settings, Edit, Picture watch and the recorded events window) starts by itself the first "
+        "time you open it, once. The tour box stays in front when you switch a Settings page, and it closes when a "
+        "macro starts playing.",
+        "The Discord / phone remote screenshot says when the game's window wasn't found and the whole screen was taken "
+        "instead, and the log says why. Two Discord screenshots never run at the same moment now.",
+        "When a run ends Unknown, the log now says why: the best match of each result picture and which of the app's own "
+        "windows were hidden from the screenshot.",
+        "Settings are saved safely: a crash or power cut while saving can no longer leave a cut-off settings file, and a "
+        "failed save is written to the log.",
+        "Fixes: moving an action out of or into a group no longer splits an If from its Else; an If inside an If could "
+        "let the Else after it run by mistake; the win streak is right again after a late result; a folder that can't be "
+        "made no longer wipes a macro's folder; a made-up milestone date no longer crashes the Milestones window; one odd "
+        "event no longer stops the keys box; a failed screenshot is no longer taken for the picture being gone; a saved "
+        "window size that no longer fits is dropped.",
+        "Behind the scenes: the app's core was split into smaller files and the counter and late-result rules were "
+        "moved into their own parts, each with its own tests (1,287 checks pass on Windows). The Mac version has not "
+        "been tested on a real Mac.",
+    ]),
     ("2.13", "Finalized 19 November 2026", [
         "Windows keep their size: the main window no longer changes size when you switch Repeat continuously, "
         "and Settings has one size for every page, never taller than your screen. Drag a window's corner to make "
